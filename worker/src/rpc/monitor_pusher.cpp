@@ -28,6 +28,8 @@ void MonitorPusher::Start() {
     return;
   }
   running_ = true;
+  // 启动一个后台线程，在当前 MonitorPusher 对象上执行 PushLoop。
+  // PushLoop 会循环调用 PushOnce，所以这里创建线程后，周期 Push 流程就开始了。
   thread_ = std::make_unique<std::thread>(&MonitorPusher::PushLoop, this);
   std::cout << "MonitorPusher started, pushing to " << manager_address_
             << " every " << interval_seconds_ << " seconds" << std::endl;
