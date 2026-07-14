@@ -127,9 +127,9 @@ HostManager::IngestResult HostManager::OnDataReceived(
 
   // 网络速率计算
   double net_in_rate = 0, net_out_rate = 0;
-  if (info.net_info_size() > 0) {
-    net_in_rate = info.net_info(0).rcv_rate() / (1024.0 * 1024.0);
-    net_out_rate = info.net_info(0).send_rate() / (1024.0 * 1024.0);
+  for (const auto& net : info.net_info()) {
+    net_in_rate += net.rcv_rate();
+    net_out_rate += net.send_rate();
   }
 
   // 当前采样
@@ -245,12 +245,12 @@ HostManager::IngestResult HostManager::OnDataReceived(
   
   // 网络详细信息
   std::cout << "\n--- Network ---" << std::endl;
-  std::cout << "  In: " << net_in_rate * 1024 * 1024 << " B/s, "
-            << "Out: " << net_out_rate * 1024 * 1024 << " B/s" << std::endl;
+  std::cout << "  In: " << net_in_rate << " kB/s, "
+            << "Out: " << net_out_rate << " kB/s" << std::endl;
   for (int i = 0; i < info.net_info_size(); ++i) {
     const auto& net = info.net_info(i);
-    std::cout << "  [" << net.name() << "] Recv: " << net.rcv_rate() << " B/s, "
-              << "Send: " << net.send_rate() << " B/s, "
+    std::cout << "  [" << net.name() << "] Recv: " << net.rcv_rate() << " kB/s, "
+              << "Send: " << net.send_rate() << " kB/s, "
               << "Drops: " << net.drop_in() << "/" << net.drop_out() << std::endl;
   }
   
@@ -325,7 +325,7 @@ double HostManager::CalcScore(const monitor::proto::MonitorInfo& info) {
   const double net_weight = 0.05;
 
   const double load_coefficient = 1.5;  // I/O 密集型场景系数
-  const double max_bandwidth = 125000000.0;  // 1Gbps
+  const double max_bandwidth = 125000.0;  // 1Gbps, kB/s
 
   double cpu_percent = 0, load_avg_1 = 0, mem_percent = 0;
   double net_recv_rate = 0, net_send_rate = 0, disk_util = 0;
@@ -342,9 +342,9 @@ double HostManager::CalcScore(const monitor::proto::MonitorInfo& info) {
   if (info.has_mem_info()) {
     mem_percent = info.mem_info().used_percent();
   }
-  if (info.net_info_size() > 0) {
-    net_recv_rate = info.net_info(0).rcv_rate();
-    net_send_rate = info.net_info(0).send_rate();
+  for (const auto& net : info.net_info()) {
+    net_recv_rate += net.rcv_rate();
+    net_send_rate += net.send_rate();
   }
   if (info.disk_info_size() > 0) {
     for (int i = 0; i < info.disk_info_size(); ++i) {
@@ -447,9 +447,9 @@ HostManager::IngestResult HostManager::WriteToMysql(
       avail = info.mem_info().avail();
       mem_used_percent = info.mem_info().used_percent();
     }
-    if (info.net_info_size() > 0) {
-      send_rate = info.net_info(0).send_rate() / 1024.0;
-      rcv_rate = info.net_info(0).rcv_rate() / 1024.0;
+    for (const auto& net : info.net_info()) {
+      send_rate += net.send_rate();
+      rcv_rate += net.rcv_rate();
     }
     if (info.cpu_stat_size() > 0) {
       const auto& cpu = info.cpu_stat(0);

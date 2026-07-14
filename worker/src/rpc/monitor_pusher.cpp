@@ -126,9 +126,9 @@ bool MonitorPusher::PushOnce() {
     for (int i = 0; i < info.net_info_size(); ++i) {
       const auto& net = info.net_info(i);
       std::cout << "[" << net.name() << "]" << std::endl;
-      std::cout << "  Recv: " << net.rcv_rate() << " B/s ("
+      std::cout << "  Recv: " << net.rcv_rate() << " kB/s ("
                 << net.rcv_packets_rate() << " pkt/s)" << std::endl;
-      std::cout << "  Send: " << net.send_rate() << " B/s ("
+      std::cout << "  Send: " << net.send_rate() << " kB/s ("
                 << net.send_packets_rate() << " pkt/s)" << std::endl;
       std::cout << "  Errors(in/out): " << net.err_in() << "/" << net.err_out()
                 << ", Drops(in/out): " << net.drop_in() << "/" << net.drop_out() << std::endl;

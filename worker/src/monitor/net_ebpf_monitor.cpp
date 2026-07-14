@@ -378,7 +378,7 @@ void NetEbpfMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
                               .count();
 
       if (old_duration > 0) {
-        // 计算速率：协议字段要求字节速率使用 kB/s。
+        // 协议字段使用 kB/s。
         const uint64_t rcv_diff = stats.rcv_bytes >= old.rcv_bytes
                                       ? stats.rcv_bytes - old.rcv_bytes
                                       : stats.rcv_bytes;
@@ -393,8 +393,8 @@ void NetEbpfMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
                                           : stats.snd_packets;
 
         const double seconds = old_duration / 1000.0;
-        net_info->set_rcv_rate(rcv_diff / 1024.0 / seconds);
-        net_info->set_send_rate(snd_diff / 1024.0 / seconds);
+        net_info->set_rcv_rate(rcv_diff / 1000.0 / seconds);
+        net_info->set_send_rate(snd_diff / 1000.0 / seconds);
         net_info->set_rcv_packets_rate(rcv_pkt_diff / seconds);
         net_info->set_send_packets_rate(snd_pkt_diff / seconds);
       }

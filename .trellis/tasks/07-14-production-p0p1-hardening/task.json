@@ -22,7 +22,8 @@
     "07-14-p0-secure-transport-secrets",
     "07-14-p0-eliminate-sql-injection",
     "07-14-p1-durable-concurrent-ingestion",
-    "07-14-p1-bound-query-host-resources"
+    "07-14-p1-bound-query-host-resources",
+    "07-14-p1-network-units-interfaces"
   ],
   "parent": null,
   "relatedFiles": [],

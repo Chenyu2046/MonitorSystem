@@ -8,11 +8,13 @@
 
 ## 实施记录（2026-07-14）
 
-本轮已完成 Worker 端的代码改造，未修改 Protobuf、gRPC、Manager 或数据库合同：
+本轮已完成 Worker、Manager 和文档化单位契约的代码改造，未修改
+Protobuf、gRPC 或数据库字段合同：
 
 - `net_stats_map` 已由全局 `BPF_MAP_TYPE_HASH` 切换为 `BPF_MAP_TYPE_PERCPU_HASH`，已有 key 的计数不再使用跨 CPU 原子累加；
 - `NetEbpfMonitor` 通过 `libbpf_num_possible_cpus()` 分配读取缓冲区，并在用户态归并每个 CPU 的累计值；
-- eBPF 路径的字节速率已按 `proto/net_info.proto` 的定义转换为 `kB/s`；
+- eBPF 与 `/proc/net/dev` 路径均以 `delta_bytes / seconds / 1000.0` 产出
+  `kB/s`；Manager 对全部接口求和后用于评分和主表落库；
 - eBPF 初始化失败或连续 3 次读取 Map 失败时，Worker 会委托既有 `NetMonitor` 从 `/proc/net/dev` 继续采集；
 - eBPF 正常路径额外读取 `/proc/net/dev` 的错误/丢弃累计值，避免把未采集字段误写为零；
 - 带 eBPF 的 Worker 构建现在也会编入 `net_monitor.cpp`，为运行时降级提供实现。
@@ -32,7 +34,7 @@
 
 ### 2.2 非目标
 
-- 不改变 gRPC/Protobuf 字段、Manager 入库逻辑或查询 API；
+- 不改变 gRPC/Protobuf 字段、数据库字段或查询 API；
 - 不做按进程、容器、五元组或协议维度的网络归因；
 - 不替换 TC 为 XDP；XDP 是另一种 Hook 位置和适用场景，不能把它当作本次优化的等价替换；
 - 不承诺固定性能数字。所有结论以同一台压测机、同一流量模型下的实测结果为准。
@@ -67,7 +69,9 @@ flowchart LR
 
 1. 当前 `net_stats_map` 是 `BPF_MAP_TYPE_HASH`，value 为每个网卡唯一的一份计数；已有 key 后，每个包都执行四次或两次 `__sync_fetch_and_add`。热点网卡在多核、高 PPS 场景会争用同一 cache line。
 2. `NetEbpfMonitor` 初始化失败时只打印“falling back to /proc/net/dev”，但 `UpdateOnce()` 在 `loaded_ == false` 时直接返回；当前 eBPF 构建产物中并没有真实的运行时回退。
-3. eBPF 路径把“字节差 / 秒”直接写入 `NetInfo`；而 `proto/net_info.proto` 定义字段单位是 `kB/s`，普通 `/proc` 路径也除以 `1024.0`。两个实现的单位目前不一致。
+3. 历史实现将 `/1024.0` 的 KiB/s 写入标为 `kB/s` 的字段，Manager 又只
+   使用首张网卡并二次换算，导致评分和主表速率不可靠。当前两条 Worker
+   路径均使用 `/1000.0`，Manager 聚合所有接口且不再二次换算。
 4. 现有 eBPF 路径不填充错误/丢弃计数；本阶段需明确该字段的降级来源或保持为零，不能把“未采集”误称为“无错误”。
 
 ## 4. 设计决策
@@ -131,7 +135,7 @@ flowchart LR
 2. 为一次 lookup 分配 `possible_cpus * sizeof(net_stats)` 的连续缓冲区；
 3. 每次读取某个 `ifindex` 时，对全部 CPU 槽位的四项计数分别求和；
 4. 缓存的仍是**归并后的总累计值**，以避免将 CPU 数变化泄漏到速率计算；
-5. `delta_bytes / elapsed_seconds / 1024.0` 写入 `send_rate`/`rcv_rate`，严格匹配 `NetInfo` 的 `kB/s` 定义；包速率保持 `packets/s`。
+5. `delta_bytes / elapsed_seconds / 1000.0` 写入 `send_rate`/`rcv_rate`，严格匹配 `NetInfo` 的 `kB/s` 定义；包速率保持 `packets/s`。
 
 `bpf_map_lookup_elem` 的返回缓冲区大小必须按 possible CPU 数计算；不能继续用当前单个 `net_stats` 结构读取 Per-CPU Map。
 
@@ -255,5 +259,6 @@ CPU 降幅 = (baseline_cpu - optimized_cpu) / baseline_cpu * 100%
 
 - 当前目标部署环境的内核版本、libbpf 版本、NIC 速率和是否具备 root/CAP_BPF 权限尚未确认；
 - eBPF 与 `/proc/net/dev` 对账时是否纳入容器/veth 接口，需要在压测开始前固定；
-- Manager 对网络速率历史数据的单位假设需要在实施前做一次端到端核对，避免修正 Worker 单位后影响既有报表解释。
-- 当前 Manager 评分阈值、持久化和控制台日志中仍存在把网络速率按 `B/s` 解释的代码；本轮未改动 Manager，实施前必须完成端到端单位统一或单独立项修复。
+- 部署前历史 `server_performance` 行必须按本次变更时间切分：旧行只含首张
+  网卡且带有二次 `/1024` 换算，不能与新的全接口 `kB/s` 聚合趋势混用；若需
+  连续趋势，应从原始采集数据重算后迁移。

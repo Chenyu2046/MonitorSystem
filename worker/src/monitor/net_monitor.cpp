@@ -78,9 +78,9 @@ void NetMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
             const NetInfo& last = it->second;
             double dt = std::chrono::duration<double>(now - last.timepoint).count();
             if (dt > 0) {
-                rcv_rate = (stat.rcv_bytes - last.rcv_bytes) / 1024.0 / dt; // KB/s
+                rcv_rate = (stat.rcv_bytes - last.rcv_bytes) / 1000.0 / dt; // kB/s
                 rcv_packets_rate = (stat.rcv_packets - last.rcv_packets) / dt;
-                send_rate = (stat.snd_bytes - last.snd_bytes) / 1024.0 / dt; // KB/s
+                send_rate = (stat.snd_bytes - last.snd_bytes) / 1000.0 / dt; // kB/s
                 send_packets_rate = (stat.snd_packets - last.snd_packets) / dt;
             }
         }

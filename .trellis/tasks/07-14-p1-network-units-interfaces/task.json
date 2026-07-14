@@ -1,0 +1,17 @@
+{
+  "id": "p1-network-units-interfaces",
+  "name": "p1-network-units-interfaces",
+  "title": "P1 network units and interfaces",
+  "description": "Unify kB/s handling and aggregate all reported network interfaces.",
+  "status": "completed",
+  "package": "manager",
+  "priority": "P1",
+  "creator": "chenyu",
+  "assignee": "chenyu",
+  "createdAt": "2026-07-14",
+  "completedAt": "2026-07-14",
+  "base_branch": "codex/production-hardening",
+  "parent": "07-14-production-p0p1-hardening",
+  "relatedFiles": ["proto/net_info.proto", "worker/src/monitor/net_monitor.cpp", "worker/src/monitor/net_ebpf_monitor.cpp", "worker/src/rpc/monitor_pusher.cpp", "manager/src/host_manager.cpp"],
+  "notes": "Static network-contract checks and final independent CR passed. Linux eBPF/procfs traffic reconciliation remains deployment-environment verification."
+}
