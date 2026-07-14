@@ -19,7 +19,8 @@
   "pr_url": null,
   "subtasks": [],
   "children": [
-    "07-14-p0-secure-transport-secrets"
+    "07-14-p0-secure-transport-secrets",
+    "07-14-p0-eliminate-sql-injection"
   ],
   "parent": null,
   "relatedFiles": [],

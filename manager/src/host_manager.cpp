@@ -50,6 +50,14 @@ struct DiskDetailSample {
   float util_percent = 0;
 };
 
+std::string EscapeSql(MYSQL* conn, const std::string& value) {
+  std::string escaped(value.size() * 2 + 1, '\0');
+  const unsigned long length = mysql_real_escape_string(
+      conn, escaped.data(), value.data(), static_cast<unsigned long>(value.size()));
+  escaped.resize(length);
+  return escaped;
+}
+
 // 历史数据存储 (host_name -> net_name/cpu_name/disk_name -> sample)
 static std::map<std::string, std::map<std::string, NetDetailSample>> last_net_samples;
 static std::map<std::string, std::map<std::string, SoftIrqSample>> last_softirq_samples;
@@ -405,6 +413,7 @@ void HostManager::WriteToMysql(
     mysql_close(conn);
     return;
   }
+  const std::string escaped_host_name = EscapeSql(conn, host_name);
 
   // 时间戳
   std::time_t t = std::chrono::system_clock::to_time_t(host_score.timestamp);
@@ -481,7 +490,7 @@ void HostManager::WriteToMysql(
         << "load_avg_1_rate, load_avg_3_rate, load_avg_15_rate, "
         << "mem_used_percent_rate, total_rate, free_rate, avail_rate, "
         << "disk_util_percent_rate, send_rate_rate, rcv_rate_rate, timestamp) VALUES ('"
-        << host_name << "',"
+        << escaped_host_name << "',"
         << cpu_percent << "," << usr_percent << "," << system_percent << ","
         << nice_percent << "," << idle_percent << "," << io_wait_percent << ","
         << irq_percent << "," << soft_irq_percent << ","
@@ -503,6 +512,7 @@ void HostManager::WriteToMysql(
   for (int i = 0; i < info.net_info_size(); ++i) {
     const auto& net = info.net_info(i);
     std::string net_name = net.name();
+    const std::string escaped_net_name = EscapeSql(conn, net_name);
     
     NetDetailSample curr;
     curr.rcv_bytes_rate = net.rcv_rate();
@@ -530,7 +540,7 @@ void HostManager::WriteToMysql(
         << "snd_bytes_rate_rate, snd_packets_rate_rate, "
         << "err_in_rate, err_out_rate, drop_in_rate, drop_out_rate, "
         << "timestamp) VALUES ('"
-        << host_name << "','" << net_name << "',"
+        << escaped_host_name << "','" << escaped_net_name << "',"
         << curr.err_in << "," << curr.err_out << ","
         << curr.drop_in << "," << curr.drop_out << ","
         << curr.rcv_bytes_rate << "," << curr.rcv_packets_rate << ","
@@ -553,6 +563,7 @@ void HostManager::WriteToMysql(
   for (int i = 0; i < info.soft_irq_size(); ++i) {
     const auto& sirq = info.soft_irq(i);
     std::string cpu_name = sirq.cpu();
+    const std::string escaped_cpu_name = EscapeSql(conn, cpu_name);
     
     SoftIrqSample curr;
     curr.hi = sirq.hi();
@@ -575,7 +586,7 @@ void HostManager::WriteToMysql(
         << "hi_rate, timer_rate, net_tx_rate, net_rx_rate, block_rate, "
         << "irq_poll_rate, tasklet_rate, sched_rate, hrtimer_rate, rcu_rate, "
         << "timestamp) VALUES ('"
-        << host_name << "','" << cpu_name << "',"
+        << escaped_host_name << "','" << escaped_cpu_name << "',"
         << curr.hi << "," << curr.timer << "," << curr.net_tx << ","
         << curr.net_rx << "," << curr.block << "," << curr.irq_poll << ","
         << curr.tasklet << "," << curr.sched << "," << curr.hrtimer << ","
@@ -628,7 +639,7 @@ void HostManager::WriteToMysql(
         << "active_file_rate, inactive_file_rate, dirty_rate, writeback_rate, "
         << "anon_pages_rate, mapped_rate, kreclaimable_rate, sreclaimable_rate, "
         << "sunreclaim_rate, timestamp) VALUES ('"
-        << host_name << "',"
+        << escaped_host_name << "',"
         << curr.total << "," << curr.free << "," << curr.avail << ","
         << curr.buffers << "," << curr.cached << "," << curr.swap_cached << ","
         << curr.active << "," << curr.inactive << "," << curr.active_anon << ","
@@ -656,6 +667,7 @@ void HostManager::WriteToMysql(
   for (int i = 0; i < info.disk_info_size(); ++i) {
     const auto& disk = info.disk_info(i);
     std::string disk_name = disk.name();
+    const std::string escaped_disk_name = EscapeSql(conn, disk_name);
     
     DiskDetailSample curr;
     curr.read_bytes_per_sec = disk.read_bytes_per_sec();
@@ -677,7 +689,7 @@ void HostManager::WriteToMysql(
         << "read_bytes_per_sec_rate, write_bytes_per_sec_rate, read_iops_rate, write_iops_rate, "
         << "avg_read_latency_ms_rate, avg_write_latency_ms_rate, util_percent_rate, "
         << "timestamp) VALUES ('"
-        << host_name << "','" << disk_name << "',"
+        << escaped_host_name << "','" << escaped_disk_name << "',"
         << disk.reads() << "," << disk.writes() << ","
         << disk.sectors_read() << "," << disk.sectors_written() << ","
         << disk.read_time_ms() << "," << disk.write_time_ms() << ","

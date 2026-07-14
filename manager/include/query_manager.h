@@ -233,6 +233,8 @@ class QueryManager {
   // 执行查询并获取总数
   int GetTotalCount(const std::string& count_sql);
 
+  std::string EscapeSql(const std::string& value) const;
+
 #ifdef ENABLE_MYSQL
   MYSQL* conn_ = nullptr;
 #endif

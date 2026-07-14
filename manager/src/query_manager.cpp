@@ -109,6 +109,18 @@ int QueryManager::GetTotalCount(const std::string& count_sql) {
 #endif
 }
 
+std::string QueryManager::EscapeSql(const std::string& value) const {
+#ifdef ENABLE_MYSQL
+  std::string escaped(value.size() * 2 + 1, '\0');
+  const unsigned long length = mysql_real_escape_string(
+      conn_, escaped.data(), value.data(), static_cast<unsigned long>(value.size()));
+  escaped.resize(length);
+  return escaped;
+#else
+  return value;
+#endif
+}
+
 std::vector<PerformanceRecord> QueryManager::QueryPerformance(
     const std::string& server_name, const TimeRange& time_range, int page,
     int page_size, int* total_count) {
@@ -130,11 +142,12 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
+  const std::string escaped_server_name = EscapeSql(server_name);
 
   // 获取总数
   std::ostringstream count_sql;
   count_sql << "SELECT COUNT(*) FROM server_performance WHERE server_name='"
-            << server_name << "' AND timestamp BETWEEN '" << start_time
+            << escaped_server_name << "' AND timestamp BETWEEN '" << start_time
             << "' AND '" << end_time << "'";
   if (total_count) {
     *total_count = GetTotalCount(count_sql.str());
@@ -150,7 +163,7 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
          "send_rate, rcv_rate, score, cpu_percent_rate, mem_used_percent_rate, "
          "disk_util_percent_rate, load_avg_1_rate, send_rate_rate, rcv_rate_rate "
          "FROM server_performance WHERE server_name='"
-      << server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
+      << escaped_server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
       << end_time << "' ORDER BY timestamp DESC LIMIT " << page_size
       << " OFFSET " << offset;
 
@@ -230,6 +243,7 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
+  const std::string escaped_server_name = EscapeSql(server_name);
 
   std::ostringstream sql;
   if (interval_seconds > 0) {
@@ -255,7 +269,7 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
            "AVG(disk_util_percent_rate) as disk_util_percent_rate, "
            "AVG(load_avg_1_rate) as load_avg_1_rate "
            "FROM server_performance WHERE server_name='"
-        << server_name << "' AND timestamp BETWEEN '" << start_time
+         << escaped_server_name << "' AND timestamp BETWEEN '" << start_time
         << "' AND '" << end_time
         << "' GROUP BY server_name, time_bucket ORDER BY time_bucket";
   } else {
@@ -266,7 +280,7 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
            "rcv_rate, score, cpu_percent_rate, mem_used_percent_rate, "
            "disk_util_percent_rate, load_avg_1_rate "
            "FROM server_performance WHERE server_name='"
-        << server_name << "' AND timestamp BETWEEN '" << start_time
+         << escaped_server_name << "' AND timestamp BETWEEN '" << start_time
         << "' AND '" << end_time << "' ORDER BY timestamp";
   }
 
@@ -338,13 +352,14 @@ std::vector<AnomalyRecord> QueryManager::QueryAnomaly(
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
+  const std::string escaped_server_name = EscapeSql(server_name);
 
   // 构建WHERE条件
   std::ostringstream where_clause;
   where_clause << "timestamp BETWEEN '" << start_time << "' AND '" << end_time
                << "'";
   if (!server_name.empty()) {
-    where_clause << " AND server_name='" << server_name << "'";
+    where_clause << " AND server_name='" << escaped_server_name << "'";
   }
   where_clause << " AND (cpu_percent > " << thresholds.cpu_threshold
                << " OR mem_used_percent > " << thresholds.mem_threshold
@@ -643,11 +658,12 @@ std::vector<NetDetailRecord> QueryManager::QueryNetDetail(
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
+  const std::string escaped_server_name = EscapeSql(server_name);
 
   // 获取总数
   std::ostringstream count_sql;
   count_sql << "SELECT COUNT(*) FROM server_net_detail WHERE server_name='"
-            << server_name << "' AND timestamp BETWEEN '" << start_time
+             << escaped_server_name << "' AND timestamp BETWEEN '" << start_time
             << "' AND '" << end_time << "'";
   if (total_count) {
     *total_count = GetTotalCount(count_sql.str());
@@ -660,7 +676,7 @@ std::vector<NetDetailRecord> QueryManager::QueryNetDetail(
          "drop_in, drop_out, rcv_bytes_rate, snd_bytes_rate, "
          "rcv_packets_rate, snd_packets_rate "
          "FROM server_net_detail WHERE server_name='"
-      << server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
+       << escaped_server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
       << end_time << "' ORDER BY timestamp DESC LIMIT " << page_size
       << " OFFSET " << offset;
 
@@ -724,11 +740,12 @@ std::vector<DiskDetailRecord> QueryManager::QueryDiskDetail(
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
+  const std::string escaped_server_name = EscapeSql(server_name);
 
   // 获取总数
   std::ostringstream count_sql;
   count_sql << "SELECT COUNT(*) FROM server_disk_detail WHERE server_name='"
-            << server_name << "' AND timestamp BETWEEN '" << start_time
+             << escaped_server_name << "' AND timestamp BETWEEN '" << start_time
             << "' AND '" << end_time << "'";
   if (total_count) {
     *total_count = GetTotalCount(count_sql.str());
@@ -741,7 +758,7 @@ std::vector<DiskDetailRecord> QueryManager::QueryDiskDetail(
          "write_bytes_per_sec, read_iops, write_iops, avg_read_latency_ms, "
          "avg_write_latency_ms, util_percent "
          "FROM server_disk_detail WHERE server_name='"
-      << server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
+       << escaped_server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
       << end_time << "' ORDER BY timestamp DESC LIMIT " << page_size
       << " OFFSET " << offset;
 
@@ -804,11 +821,12 @@ std::vector<MemDetailRecord> QueryManager::QueryMemDetail(
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
+  const std::string escaped_server_name = EscapeSql(server_name);
 
   // 获取总数
   std::ostringstream count_sql;
   count_sql << "SELECT COUNT(*) FROM server_mem_detail WHERE server_name='"
-            << server_name << "' AND timestamp BETWEEN '" << start_time
+             << escaped_server_name << "' AND timestamp BETWEEN '" << start_time
             << "' AND '" << end_time << "'";
   if (total_count) {
     *total_count = GetTotalCount(count_sql.str());
@@ -820,7 +838,7 @@ std::vector<MemDetailRecord> QueryManager::QueryMemDetail(
   sql << "SELECT server_name, timestamp, total, free, avail, buffers, "
          "cached, active, inactive, dirty "
          "FROM server_mem_detail WHERE server_name='"
-      << server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
+       << escaped_server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
       << end_time << "' ORDER BY timestamp DESC LIMIT " << page_size
       << " OFFSET " << offset;
 
@@ -883,11 +901,12 @@ std::vector<SoftIrqDetailRecord> QueryManager::QuerySoftIrqDetail(
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
+  const std::string escaped_server_name = EscapeSql(server_name);
 
   // 获取总数
   std::ostringstream count_sql;
   count_sql << "SELECT COUNT(*) FROM server_softirq_detail WHERE server_name='"
-            << server_name << "' AND timestamp BETWEEN '" << start_time
+             << escaped_server_name << "' AND timestamp BETWEEN '" << start_time
             << "' AND '" << end_time << "'";
   if (total_count) {
     *total_count = GetTotalCount(count_sql.str());
@@ -899,7 +918,7 @@ std::vector<SoftIrqDetailRecord> QueryManager::QuerySoftIrqDetail(
   sql << "SELECT server_name, cpu_name, timestamp, hi, timer, net_tx, "
          "net_rx, block, sched "
          "FROM server_softirq_detail WHERE server_name='"
-      << server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
+       << escaped_server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
       << end_time << "' ORDER BY timestamp DESC LIMIT " << page_size
       << " OFFSET " << offset;
 
