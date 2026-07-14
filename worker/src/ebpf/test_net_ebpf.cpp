@@ -18,6 +18,8 @@
 #include <cstdint>
 #include <cstring>
 #include <csignal>
+#include <cerrno>
+#include <unordered_map>
 #include <vector>
 
 // 包含生成的 skeleton
@@ -151,12 +153,20 @@ int main() {
     printf("Monitoring network traffic... Press Ctrl+C to stop.\n\n");
 
     int map_fd = bpf_map__fd(skel->maps.net_stats_map);
+    const int possible_cpus = libbpf_num_possible_cpus();
+    if (map_fd < 0 || possible_cpus <= 0) {
+        fprintf(stderr, "Failed to prepare Per-CPU map reader\n");
+        net_stats_bpf__destroy(skel);
+        return 1;
+    }
+    std::vector<net_stats> per_cpu_stats(static_cast<size_t>(possible_cpus));
 
     // 上一次的统计数据
-    struct {
+    struct PrevStats {
         uint64_t rcv_bytes;
         uint64_t snd_bytes;
-    } prev_stats[64] = {};
+    };
+    std::unordered_map<uint32_t, PrevStats> prev_stats;
 
     while (running) {
         sleep(2);
@@ -165,26 +175,44 @@ int main() {
         printf("%-12s %15s %15s %15s %15s\n", 
                "Interface", "RX bytes/s", "TX bytes/s", "RX pkts", "TX pkts");
 
-        uint32_t key = 0, next_key;
-        struct net_stats stats;
+        uint32_t current_key = 0, next_key;
+        const void* key = nullptr;
+        int lookup_result = 0;
 
-        while (bpf_map_get_next_key(map_fd, &key, &next_key) == 0) {
-            if (bpf_map_lookup_elem(map_fd, &next_key, &stats) == 0) {
+        while ((lookup_result = bpf_map_get_next_key(map_fd, key, &next_key)) == 0) {
+            if (bpf_map_lookup_elem(map_fd, &next_key, per_cpu_stats.data()) == 0) {
+                struct net_stats stats = {};
+                for (const auto& cpu_stats : per_cpu_stats) {
+                    stats.rcv_bytes += cpu_stats.rcv_bytes;
+                    stats.rcv_packets += cpu_stats.rcv_packets;
+                    stats.snd_bytes += cpu_stats.snd_bytes;
+                    stats.snd_packets += cpu_stats.snd_packets;
+                }
                 char ifname[IF_NAMESIZE];
                 if (if_indextoname(next_key, ifname) != nullptr) {
                     // 计算速率 (2秒间隔)
-                    uint64_t rx_rate = (stats.rcv_bytes - prev_stats[next_key].rcv_bytes) / 2;
-                    uint64_t tx_rate = (stats.snd_bytes - prev_stats[next_key].snd_bytes) / 2;
+                    const auto previous = prev_stats.find(next_key);
+                    const uint64_t previous_rx = previous == prev_stats.end()
+                                                     ? 0
+                                                     : previous->second.rcv_bytes;
+                    const uint64_t previous_tx = previous == prev_stats.end()
+                                                     ? 0
+                                                     : previous->second.snd_bytes;
+                    const uint64_t rx_rate = (stats.rcv_bytes - previous_rx) / 2;
+                    const uint64_t tx_rate = (stats.snd_bytes - previous_tx) / 2;
 
                     printf("%-12s %15lu %15lu %15lu %15lu\n",
                            ifname, rx_rate, tx_rate, 
                            stats.rcv_packets, stats.snd_packets);
 
-                    prev_stats[next_key].rcv_bytes = stats.rcv_bytes;
-                    prev_stats[next_key].snd_bytes = stats.snd_bytes;
+                    prev_stats[next_key] = {stats.rcv_bytes, stats.snd_bytes};
                 }
             }
-            key = next_key;
+            current_key = next_key;
+            key = &current_key;
+        }
+        if (lookup_result != -ENOENT) {
+            fprintf(stderr, "Failed to iterate Per-CPU map: %s\n", strerror(-lookup_result));
         }
     }
 
