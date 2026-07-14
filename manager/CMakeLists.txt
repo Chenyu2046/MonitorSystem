@@ -15,6 +15,9 @@ endif()
 
 # MySQL 支持选项
 option(ENABLE_MYSQL "Enable MySQL support for data persistence" ON)
+if(NOT ENABLE_MYSQL)
+    message(FATAL_ERROR "The production manager requires MySQL persistence")
+endif()
 
 set(MANAGER_SOURCES
     src/main.cpp
@@ -48,7 +51,7 @@ if(ENABLE_MYSQL)
         target_include_directories(manager PUBLIC ${MYSQL_INCLUDE_DIRS})
         list(APPEND MANAGER_LIBS ${MYSQL_LIBRARIES})
     else()
-        message(WARNING "MySQL not found, disabling MySQL support")
+        message(FATAL_ERROR "MySQL client development files are required for the production manager")
     endif()
 endif()
 

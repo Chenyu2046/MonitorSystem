@@ -49,18 +49,24 @@ bool GrpcServerImpl::IsAuthorizedWorker(
                         "Worker certificate is not authorized for this host");
   }
 
-  // 存储数据
+  // 调用回调函数
+  const auto ingest_result = callback_ ? callback_(*request)
+                                       : HostManager::IngestResult::kFailed;
+  if (ingest_result == HostManager::IngestResult::kCommitUnknown) {
+    return grpc::Status(grpc::StatusCode::UNKNOWN,
+                        "Monitor data commit outcome is unknown");
+  }
+  if (ingest_result != HostManager::IngestResult::kPersisted) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "Monitor data persistence is unavailable");
+  }
+
   {
     std::lock_guard<std::mutex> lock(mtx_);
     host_data_[hostname] = {*request, std::chrono::system_clock::now()};
   }
 
   std::cout << "Received monitor data from: " << hostname << std::endl;
-
-  // 调用回调函数
-  if (callback_) {
-    callback_(*request);
-  }
 
   return grpc::Status::OK;
 }

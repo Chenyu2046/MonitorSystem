@@ -53,7 +53,7 @@ int main(int argc, char* argv[]) {
   monitor::HostManager mgr(database_config);
   service.SetDataReceivedCallback(
       [&mgr](const monitor::proto::MonitorInfo& info) {
-        mgr.OnDataReceived(info);
+        return mgr.OnDataReceived(info);
       });
 
   // 启动 HostManager 后台处理

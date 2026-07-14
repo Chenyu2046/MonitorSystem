@@ -14,42 +14,6 @@ namespace monitor {
 
 #ifdef ENABLE_MYSQL
 namespace {
-// 用于详细表变化率计算的历史数据
-struct NetDetailSample {
-  float rcv_bytes_rate = 0;
-  float rcv_packets_rate = 0;
-  float snd_bytes_rate = 0;
-  float snd_packets_rate = 0;
-  // 错误和丢弃统计
-  uint64_t err_in = 0;
-  uint64_t err_out = 0;
-  uint64_t drop_in = 0;
-  uint64_t drop_out = 0;
-};
-
-struct SoftIrqSample {
-  float hi = 0, timer = 0, net_tx = 0, net_rx = 0, block = 0;
-  float irq_poll = 0, tasklet = 0, sched = 0, hrtimer = 0, rcu = 0;
-};
-
-struct MemDetailSample {
-  float total = 0, free = 0, avail = 0, buffers = 0, cached = 0;
-  float swap_cached = 0, active = 0, inactive = 0;
-  float active_anon = 0, inactive_anon = 0, active_file = 0, inactive_file = 0;
-  float dirty = 0, writeback = 0, anon_pages = 0, mapped = 0;
-  float kreclaimable = 0, sreclaimable = 0, sunreclaim = 0;
-};
-
-struct DiskDetailSample {
-  float read_bytes_per_sec = 0;
-  float write_bytes_per_sec = 0;
-  float read_iops = 0;
-  float write_iops = 0;
-  float avg_read_latency_ms = 0;
-  float avg_write_latency_ms = 0;
-  float util_percent = 0;
-};
-
 std::string EscapeSql(MYSQL* conn, const std::string& value) {
   std::string escaped(value.size() * 2 + 1, '\0');
   const unsigned long length = mysql_real_escape_string(
@@ -58,35 +22,8 @@ std::string EscapeSql(MYSQL* conn, const std::string& value) {
   return escaped;
 }
 
-// 历史数据存储 (host_name -> net_name/cpu_name/disk_name -> sample)
-static std::map<std::string, std::map<std::string, NetDetailSample>> last_net_samples;
-static std::map<std::string, std::map<std::string, SoftIrqSample>> last_softirq_samples;
-static std::map<std::string, MemDetailSample> last_mem_samples;
-static std::map<std::string, std::map<std::string, DiskDetailSample>> last_disk_samples;
-
 }  // namespace
 #endif
-
-// 用于网络速率计算的采样数据
-struct NetSample {
-  double last_in_bytes = 0;
-  double last_out_bytes = 0;
-  std::chrono::system_clock::time_point last_time;
-};
-static std::map<std::string, NetSample> net_samples;
-
-// 用于变化率计算的性能采样数据
-struct PerfSample {
-  float cpu_percent = 0, usr_percent = 0, system_percent = 0;
-  float nice_percent = 0, idle_percent = 0, io_wait_percent = 0;
-  float irq_percent = 0, soft_irq_percent = 0;
-  float steal_percent = 0, guest_percent = 0, guest_nice_percent = 0;
-  float load_avg_1 = 0, load_avg_3 = 0, load_avg_15 = 0;
-  float mem_used_percent = 0, mem_total = 0, mem_free = 0, mem_avail = 0;
-  float net_in_rate = 0, net_out_rate = 0;
-  float score = 0;
-};
-static std::map<std::string, PerfSample> last_perf_samples;
 
 HostManager::HostManager(runtime_config::DatabaseConfig database_config)
     : running_(false), database_config_(std::move(database_config)) {
@@ -94,6 +31,9 @@ HostManager::HostManager(runtime_config::DatabaseConfig database_config)
 
 HostManager::~HostManager() {
   Stop();
+#ifdef ENABLE_MYSQL
+  if (mysql_conn_) mysql_close(static_cast<MYSQL*>(mysql_conn_));
+#endif
 }
 
 void HostManager::Start() {
@@ -132,7 +72,9 @@ void HostManager::ProcessLoop() {
 }
 
 // 计算主机的综合评分
-void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
+HostManager::IngestResult HostManager::OnDataReceived(
+    const monitor::proto::MonitorInfo& info) {
+  std::lock_guard<std::mutex> ingest_lock(ingest_mtx_);
   // 构建服务器唯一标识: hostname_ip
   std::string host_name;
   if (info.has_host_info()) {
@@ -156,8 +98,29 @@ void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
   
   if (host_name.empty()) {
     std::cerr << "Received data with empty server identifier" << std::endl;
-    return;
+    return IngestResult::kFailed;
   }
+
+  const auto perf_it = last_perf_samples_.find(host_name);
+  const bool had_perf = perf_it != last_perf_samples_.end();
+  const PerfSample previous_perf = had_perf ? perf_it->second : PerfSample{};
+#ifdef ENABLE_MYSQL
+  const auto net_it = last_net_samples_.find(host_name);
+  const auto softirq_it = last_softirq_samples_.find(host_name);
+  const auto mem_it = last_mem_samples_.find(host_name);
+  const auto disk_it = last_disk_samples_.find(host_name);
+  const auto disk_util_it = last_disk_util_samples_.find(host_name);
+  const bool had_net = net_it != last_net_samples_.end();
+  const bool had_softirq = softirq_it != last_softirq_samples_.end();
+  const bool had_mem = mem_it != last_mem_samples_.end();
+  const bool had_disk = disk_it != last_disk_samples_.end();
+  const bool had_disk_util = disk_util_it != last_disk_util_samples_.end();
+  const auto previous_net = had_net ? net_it->second : decltype(last_net_samples_)::mapped_type{};
+  const auto previous_softirq = had_softirq ? softirq_it->second : decltype(last_softirq_samples_)::mapped_type{};
+  const auto previous_mem = had_mem ? mem_it->second : MemDetailSample{};
+  const auto previous_disk = had_disk ? disk_it->second : decltype(last_disk_samples_)::mapped_type{};
+  const float previous_disk_util = had_disk_util ? disk_util_it->second : 0;
+#endif
 
   double score = CalcScore(info);
   auto now = std::chrono::system_clock::now();
@@ -198,7 +161,7 @@ void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
   curr.score = score;
 
   // 变化率计算
-  PerfSample last = last_perf_samples[host_name];
+  PerfSample last = last_perf_samples_[host_name];
   auto rate = [](float now_val, float last_val) -> float {
     if (last_val == 0) return 0;
     return (now_val - last_val) / last_val;
@@ -222,21 +185,41 @@ void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
   float net_in_rate_rate = rate(curr.net_in_rate, last.net_in_rate);
   float net_out_rate_rate = rate(curr.net_out_rate, last.net_out_rate);
 
-  last_perf_samples[host_name] = curr;
-
-  {
-    std::lock_guard<std::mutex> lock(mtx_);
-    host_scores_[host_name] = HostScore{info, score, now};
-  }
+  last_perf_samples_[host_name] = curr;
 
   // 写入所有表
-  WriteToMysql(host_name, HostScore{info, score, now}, net_in_rate, net_out_rate,
+  const auto write_result = WriteToMysql(host_name, HostScore{info, score, now}, net_in_rate, net_out_rate,
                cpu_percent_rate, usr_percent_rate, system_percent_rate,
                nice_percent_rate, idle_percent_rate, io_wait_percent_rate,
                irq_percent_rate, soft_irq_percent_rate, 0, 0, 0,
                load_avg_1_rate, load_avg_3_rate, load_avg_15_rate,
                mem_used_percent_rate, mem_total_rate, mem_free_rate,
                mem_avail_rate, net_in_rate_rate, net_out_rate_rate, 0, 0);
+  if (write_result == IngestResult::kFailed) {
+    if (had_perf) last_perf_samples_[host_name] = previous_perf;
+    else last_perf_samples_.erase(host_name);
+#ifdef ENABLE_MYSQL
+    if (had_net) last_net_samples_[host_name] = previous_net;
+    else last_net_samples_.erase(host_name);
+    if (had_softirq) last_softirq_samples_[host_name] = previous_softirq;
+    else last_softirq_samples_.erase(host_name);
+    if (had_mem) last_mem_samples_[host_name] = previous_mem;
+    else last_mem_samples_.erase(host_name);
+    if (had_disk) last_disk_samples_[host_name] = previous_disk;
+    else last_disk_samples_.erase(host_name);
+    if (had_disk_util) last_disk_util_samples_[host_name] = previous_disk_util;
+    else last_disk_util_samples_.erase(host_name);
+#endif
+    return IngestResult::kFailed;
+  }
+  if (write_result == IngestResult::kCommitUnknown) {
+    return IngestResult::kCommitUnknown;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(mtx_);
+    host_scores_[host_name] = HostScore{info, score, now};
+  }
 
   std::cout << "\n================== Received Data ==================" << std::endl;
   std::cout << "Server: " << host_name << ", Score: " << score << std::endl;
@@ -301,6 +284,7 @@ void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
   std::cout << "\n--- Database ---" << std::endl;
   std::cout << "  Data saved to MySQL (monitor_db)" << std::endl;
   std::cout << "====================================================\n" << std::endl;
+  return IngestResult::kPersisted;
 }
 
 std::unordered_map<std::string, HostScore> HostManager::GetAllHostScores() {
@@ -388,7 +372,7 @@ double HostManager::CalcScore(const monitor::proto::MonitorInfo& info) {
   return score < 0 ? 0 : (score > 100 ? 100 : score);
 }
 
-void HostManager::WriteToMysql(
+HostManager::IngestResult HostManager::WriteToMysql(
     const std::string& host_name, const HostScore& host_score,
     double net_in_rate, double net_out_rate, float cpu_percent_rate,
     float usr_percent_rate, float system_percent_rate, float nice_percent_rate,
@@ -400,20 +384,40 @@ void HostManager::WriteToMysql(
     float mem_avail_rate, float net_in_rate_rate, float net_out_rate_rate,
     float net_in_drop_rate_rate, float net_out_drop_rate_rate) {
 #ifdef ENABLE_MYSQL
-  MYSQL* conn = mysql_init(NULL);
-  if (!conn) {
-    std::cerr << "mysql_init failed\n";
-    return;
-  }
-  if (!mysql_real_connect(conn, database_config_.host.c_str(),
-                          database_config_.user.c_str(),
-                          database_config_.password.c_str(),
-                          database_config_.database.c_str(), 0, NULL, 0)) {
-    std::cerr << "mysql_real_connect failed: " << mysql_error(conn) << "\n";
+  MYSQL* conn = static_cast<MYSQL*>(mysql_conn_);
+  if (conn && mysql_ping(conn) != 0) {
     mysql_close(conn);
-    return;
+    mysql_conn_ = nullptr;
+    conn = nullptr;
+  }
+  if (!conn) {
+    conn = mysql_init(NULL);
+    if (!conn) {
+      std::cerr << "mysql_init failed\n";
+      return IngestResult::kFailed;
+    }
+    if (!mysql_real_connect(conn, database_config_.host.c_str(),
+                            database_config_.user.c_str(),
+                            database_config_.password.c_str(),
+                            database_config_.database.c_str(), 0, NULL, 0)) {
+      std::cerr << "mysql_real_connect failed: " << mysql_error(conn) << "\n";
+      mysql_close(conn);
+      return IngestResult::kFailed;
+    }
+    mysql_conn_ = conn;
   }
   const std::string escaped_host_name = EscapeSql(conn, host_name);
+  if (mysql_query(conn, "START TRANSACTION") != 0) {
+    std::cerr << "Failed to start transaction: " << mysql_error(conn) << "\n";
+    mysql_close(conn);
+    mysql_conn_ = nullptr;
+    return IngestResult::kFailed;
+  }
+  auto execute = [conn](const std::string& sql) {
+    if (mysql_query(conn, sql.c_str()) == 0) return true;
+    std::cerr << "MySQL insert failed: " << mysql_error(conn) << "\n";
+    return false;
+  };
 
   // 时间戳
   std::time_t t = std::chrono::system_clock::to_time_t(host_score.timestamp);
@@ -470,12 +474,11 @@ void HostManager::WriteToMysql(
     }
 
     // 计算磁盘利用率变化率
-    static std::map<std::string, float> last_disk_util;
     float disk_util_percent_rate = 0;
-    if (last_disk_util.count(host_name) && last_disk_util[host_name] != 0) {
-      disk_util_percent_rate = (disk_util_percent - last_disk_util[host_name]) / last_disk_util[host_name];
+    if (last_disk_util_samples_.count(host_name) && last_disk_util_samples_[host_name] != 0) {
+      disk_util_percent_rate = (disk_util_percent - last_disk_util_samples_[host_name]) / last_disk_util_samples_[host_name];
     }
-    last_disk_util[host_name] = disk_util_percent;
+    last_disk_util_samples_[host_name] = disk_util_percent;
 
     std::ostringstream oss;
     oss << "INSERT INTO server_performance "
@@ -505,7 +508,7 @@ void HostManager::WriteToMysql(
         << mem_avail_rate << "," << disk_util_percent_rate << ","
         << net_in_rate_rate << "," << net_out_rate_rate
         << ",'" << time_buf << "')";
-    mysql_query(conn, oss.str().c_str());
+    if (!execute(oss.str())) goto rollback;
   }
 
   // ========== 2. 写入网络详细表 server_net_detail ==========
@@ -524,7 +527,7 @@ void HostManager::WriteToMysql(
     curr.drop_in = net.drop_in();
     curr.drop_out = net.drop_out();
 
-    NetDetailSample& last = last_net_samples[host_name][net_name];
+    NetDetailSample& last = last_net_samples_[host_name][net_name];
     
     // 计算错误/丢弃变化率
     auto rate_u64 = [](uint64_t now_val, uint64_t last_val) -> float {
@@ -554,7 +557,7 @@ void HostManager::WriteToMysql(
         << rate_u64(curr.drop_in, last.drop_in) << ","
         << rate_u64(curr.drop_out, last.drop_out)
         << ",'" << time_buf << "')";
-    mysql_query(conn, oss.str().c_str());
+    if (!execute(oss.str())) goto rollback;
     
     last = curr;
   }
@@ -577,7 +580,7 @@ void HostManager::WriteToMysql(
     curr.hrtimer = sirq.hrtimer();
     curr.rcu = sirq.rcu();
 
-    SoftIrqSample& last = last_softirq_samples[host_name][cpu_name];
+    SoftIrqSample& last = last_softirq_samples_[host_name][cpu_name];
     
     std::ostringstream oss;
     oss << "INSERT INTO server_softirq_detail "
@@ -597,7 +600,7 @@ void HostManager::WriteToMysql(
         << rate(curr.tasklet, last.tasklet) << "," << rate(curr.sched, last.sched) << ","
         << rate(curr.hrtimer, last.hrtimer) << "," << rate(curr.rcu, last.rcu)
         << ",'" << time_buf << "')";
-    mysql_query(conn, oss.str().c_str());
+    if (!execute(oss.str())) goto rollback;
     
     last = curr;
   }
@@ -627,7 +630,7 @@ void HostManager::WriteToMysql(
     curr.sreclaimable = mem.sreclaimable();
     curr.sunreclaim = mem.sunreclaim();
 
-    MemDetailSample& last = last_mem_samples[host_name];
+    MemDetailSample& last = last_mem_samples_[host_name];
     
     std::ostringstream oss;
     oss << "INSERT INTO server_mem_detail "
@@ -658,7 +661,7 @@ void HostManager::WriteToMysql(
         << rate(curr.kreclaimable, last.kreclaimable) << "," << rate(curr.sreclaimable, last.sreclaimable) << ","
         << rate(curr.sunreclaim, last.sunreclaim)
         << ",'" << time_buf << "')";
-    mysql_query(conn, oss.str().c_str());
+    if (!execute(oss.str())) goto rollback;
     
     last = curr;
   }
@@ -678,7 +681,7 @@ void HostManager::WriteToMysql(
     curr.avg_write_latency_ms = disk.avg_write_latency_ms();
     curr.util_percent = disk.util_percent();
 
-    DiskDetailSample& last = last_disk_samples[host_name][disk_name];
+    DiskDetailSample& last = last_disk_samples_[host_name][disk_name];
     
     std::ostringstream oss;
     oss << "INSERT INTO server_disk_detail "
@@ -707,12 +710,24 @@ void HostManager::WriteToMysql(
         << rate(curr.avg_write_latency_ms, last.avg_write_latency_ms) << ","
         << rate(curr.util_percent, last.util_percent)
         << ",'" << time_buf << "')";
-    mysql_query(conn, oss.str().c_str());
+    if (!execute(oss.str())) goto rollback;
     
     last = curr;
   }
 
+  if (mysql_query(conn, "COMMIT") != 0) {
+    std::cerr << "Failed to commit transaction: " << mysql_error(conn) << "\n";
+    mysql_close(conn);
+    mysql_conn_ = nullptr;
+    return IngestResult::kCommitUnknown;
+  }
+  return IngestResult::kPersisted;
+
+rollback:
+  mysql_query(conn, "ROLLBACK");
   mysql_close(conn);
+  mysql_conn_ = nullptr;
+  return IngestResult::kFailed;
 #else
   (void)host_name; (void)host_score; (void)net_in_rate; (void)net_out_rate;
   (void)cpu_percent_rate; (void)usr_percent_rate; (void)system_percent_rate;
@@ -723,6 +738,7 @@ void HostManager::WriteToMysql(
   (void)mem_used_percent_rate; (void)mem_total_rate; (void)mem_free_rate;
   (void)mem_avail_rate; (void)net_in_rate_rate; (void)net_out_rate_rate;
   (void)net_in_drop_rate_rate; (void)net_out_drop_rate_rate;
+  return IngestResult::kFailed;
 #endif
 }
 
