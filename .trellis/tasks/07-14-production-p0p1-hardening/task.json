@@ -3,7 +3,7 @@
   "name": "production-p0p1-hardening",
   "title": "Production P0/P1 hardening",
   "description": "Close the confirmed production P0 and P1 security, integrity, concurrency, and resource-bound defects through independently reviewed and pushed child tasks.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": "manager, worker, proto, docs",
   "package": "manager",
@@ -21,10 +21,11 @@
   "children": [
     "07-14-p0-secure-transport-secrets",
     "07-14-p0-eliminate-sql-injection",
-    "07-14-p1-durable-concurrent-ingestion"
+    "07-14-p1-durable-concurrent-ingestion",
+    "07-14-p1-bound-query-host-resources"
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
+  "notes": "P0 security and SQL hardening, P1 durable ingestion, and P1 query/host resource bounds are reviewed and pushed. Remaining P1 runtime data correctness and worker lifecycle items are in progress.",
   "meta": {}
 }

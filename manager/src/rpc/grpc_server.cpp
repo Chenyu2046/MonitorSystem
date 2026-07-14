@@ -4,6 +4,12 @@
 
 namespace monitor {
 
+namespace {
+constexpr size_t kMaxHostIdentifierLength = 255;
+constexpr size_t kMaxCachedHosts = 256;
+constexpr size_t kMaxTelemetryItems = 256;
+}
+
 GrpcServerImpl::GrpcServerImpl(runtime_config::AuthorizationConfig authorization)
     : authorization_(std::move(authorization)) {}
 
@@ -37,8 +43,20 @@ bool GrpcServerImpl::IsAuthorizedWorker(
                           "name and host_info.hostname must match");
     }
   }
+  if (request->ByteSizeLong() > 256 * 1024 ||
+      request->cpu_stat_size() > kMaxTelemetryItems ||
+      request->net_info_size() > kMaxTelemetryItems ||
+      request->disk_info_size() > kMaxTelemetryItems ||
+      request->soft_irq_size() > kMaxTelemetryItems) {
+    return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED,
+                        "Monitor payload exceeds resource limits");
+  }
   if (hostname.empty()) {
     hostname = request->name();
+  }
+  if (hostname.size() > kMaxHostIdentifierLength) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "Host identifier is too long");
   }
 
   if (hostname.empty()) {
@@ -63,6 +81,14 @@ bool GrpcServerImpl::IsAuthorizedWorker(
 
   {
     std::lock_guard<std::mutex> lock(mtx_);
+    if (host_data_.find(hostname) == host_data_.end() &&
+        host_data_.size() >= kMaxCachedHosts) {
+      auto oldest = host_data_.begin();
+      for (auto it = host_data_.begin(); it != host_data_.end(); ++it) {
+        if (it->second.timestamp < oldest->second.timestamp) oldest = it;
+      }
+      host_data_.erase(oldest);
+    }
     host_data_[hostname] = {*request, std::chrono::system_clock::now()};
   }
 

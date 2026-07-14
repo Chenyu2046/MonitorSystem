@@ -76,6 +76,8 @@ int main(int argc, char* argv[]) {
 
   // 启动 gRPC 服务器
   grpc::ServerBuilder builder;
+  builder.SetMaxReceiveMessageSize(256 * 1024);
+  builder.SetMaxSendMessageSize(4 * 1024 * 1024);
   builder.AddListeningPort(listen_address, server_credentials);
   builder.RegisterService(&service);
   builder.RegisterService(&query_service);

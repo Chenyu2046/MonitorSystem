@@ -1,11 +1,26 @@
 #include "query_manager.h"
 
+#include <algorithm>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 
 namespace monitor {
+
+namespace {
+constexpr int kMaxPageSize = 1000;
+constexpr int kMaxPage = 10000;
+constexpr int kMinTrendIntervalSeconds = 300;
+constexpr auto kMaxQueryRange = std::chrono::hours(24 * 31);
+
+void NormalizePagination(int* page, int* page_size) {
+  if (*page < 1) *page = 1;
+  if (*page_size < 1) *page_size = 100;
+  *page = std::min(*page, kMaxPage);
+  *page_size = std::min(*page_size, kMaxPageSize);
+}
+}
 
 QueryManager::QueryManager() = default;
 
@@ -62,7 +77,8 @@ void QueryManager::Close() {
 }
 
 bool QueryManager::ValidateTimeRange(const TimeRange& range) const {
-  return range.start_time <= range.end_time;
+  return range.start_time <= range.end_time &&
+         range.end_time - range.start_time <= kMaxQueryRange;
 }
 
 std::string QueryManager::FormatTime(
@@ -137,8 +153,7 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
     std::cerr << "QueryManager: Invalid time range" << std::endl;
     return records;
   }
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
@@ -154,7 +169,8 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
   }
 
   // 查询数据
-  int offset = (page - 1) * page_size;
+  const int64_t offset = std::min<int64_t>(
+      static_cast<int64_t>(page - 1) * page_size, 10000000);
   std::ostringstream sql;
   sql << "SELECT server_name, timestamp, cpu_percent, usr_percent, "
          "system_percent, nice_percent, idle_percent, io_wait_percent, "
@@ -245,8 +261,12 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
   std::string end_time = FormatTime(time_range.end_time);
   const std::string escaped_server_name = EscapeSql(server_name);
 
+  if (interval_seconds < kMinTrendIntervalSeconds) {
+    interval_seconds = kMinTrendIntervalSeconds;
+  }
+
   std::ostringstream sql;
-  if (interval_seconds > 0) {
+  {
     // 带聚合的查询
     sql << "SELECT server_name, "
            "FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(timestamp) / "
@@ -272,16 +292,6 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
          << escaped_server_name << "' AND timestamp BETWEEN '" << start_time
         << "' AND '" << end_time
         << "' GROUP BY server_name, time_bucket ORDER BY time_bucket";
-  } else {
-    // 不聚合，直接查询
-    sql << "SELECT server_name, timestamp, cpu_percent, usr_percent, "
-           "system_percent, io_wait_percent, load_avg_1, load_avg_3, "
-           "load_avg_15, mem_used_percent, disk_util_percent, send_rate, "
-           "rcv_rate, score, cpu_percent_rate, mem_used_percent_rate, "
-           "disk_util_percent_rate, load_avg_1_rate "
-           "FROM server_performance WHERE server_name='"
-         << escaped_server_name << "' AND timestamp BETWEEN '" << start_time
-        << "' AND '" << end_time << "' ORDER BY timestamp";
   }
 
   if (mysql_query(conn_, sql.str().c_str()) != 0) {
@@ -347,8 +357,7 @@ std::vector<AnomalyRecord> QueryManager::QueryAnomaly(
     std::cerr << "QueryManager: Invalid time range" << std::endl;
     return records;
   }
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
@@ -377,7 +386,8 @@ std::vector<AnomalyRecord> QueryManager::QueryAnomaly(
   }
 
   // 查询数据
-  int offset = (page - 1) * page_size;
+  const int64_t offset = std::min<int64_t>(
+      static_cast<int64_t>(page - 1) * page_size, 10000000);
   std::ostringstream sql;
   sql << "SELECT server_name, timestamp, cpu_percent, mem_used_percent, "
          "disk_util_percent, cpu_percent_rate, mem_used_percent_rate "
@@ -475,8 +485,7 @@ std::vector<ServerScoreSummary> QueryManager::QueryScoreRank(SortOrder order,
     return records;
   }
 
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   // 获取总数（不同服务器数量）
   std::string count_sql =
@@ -486,7 +495,8 @@ std::vector<ServerScoreSummary> QueryManager::QueryScoreRank(SortOrder order,
   }
 
   // 查询每台服务器的最新数据并排序
-  int offset = (page - 1) * page_size;
+  const int64_t offset = std::min<int64_t>(
+      static_cast<int64_t>(page - 1) * page_size, 10000000);
   std::string order_str = (order == SortOrder::ASC) ? "ASC" : "DESC";
 
   std::ostringstream sql;
@@ -553,16 +563,42 @@ std::vector<ServerScoreSummary> QueryManager::QueryLatestScore(
     return records;
   }
 
-  // 查询每台服务器的最新数据
+  const std::string latest_rows =
+      " FROM server_performance p1 INNER JOIN ("
+      "SELECT newest.server_name, MAX(newest.id) AS latest_id "
+      "FROM server_performance newest INNER JOIN ("
+      "SELECT server_name, MAX(timestamp) AS max_ts "
+      "FROM server_performance GROUP BY server_name"
+      ") latest_ts ON newest.server_name = latest_ts.server_name "
+      "AND newest.timestamp = latest_ts.max_ts "
+      "GROUP BY newest.server_name"
+      ") p2 ON p1.id = p2.latest_id ";
+
+  if (stats) {
+    const std::string stats_sql =
+        "SELECT COUNT(*), "
+        "SUM(p1.timestamp >= NOW() - INTERVAL 60 SECOND), AVG(p1.score), "
+        "MAX(p1.score), MIN(p1.score)" + latest_rows;
+    if (mysql_query(conn_, stats_sql.c_str()) != 0) return records;
+    MYSQL_RES* stats_result = mysql_store_result(conn_);
+    MYSQL_ROW stats_row = stats_result ? mysql_fetch_row(stats_result) : nullptr;
+    if (!stats_row) {
+      if (stats_result) mysql_free_result(stats_result);
+      return records;
+    }
+    stats->total_servers = stats_row[0] ? std::atoi(stats_row[0]) : 0;
+    stats->online_servers = stats_row[1] ? std::atoi(stats_row[1]) : 0;
+    stats->offline_servers = stats->total_servers - stats->online_servers;
+    stats->avg_score = stats_row[2] ? std::atof(stats_row[2]) : 0;
+    stats->max_score = stats_row[3] ? std::atof(stats_row[3]) : 0;
+    stats->min_score = stats_row[4] ? std::atof(stats_row[4]) : 0;
+    mysql_free_result(stats_result);
+  }
+
   std::string sql =
       "SELECT p1.server_name, p1.score, p1.timestamp, p1.cpu_percent, "
-      "p1.mem_used_percent, p1.disk_util_percent, p1.load_avg_1 "
-      "FROM server_performance p1 "
-      "INNER JOIN ("
-      "  SELECT server_name, MAX(timestamp) as max_ts "
-      "  FROM server_performance GROUP BY server_name"
-      ") p2 ON p1.server_name = p2.server_name AND p1.timestamp = p2.max_ts "
-      "ORDER BY p1.score DESC";
+      "p1.mem_used_percent, p1.disk_util_percent, p1.load_avg_1" +
+      latest_rows + "ORDER BY p1.score DESC LIMIT 1000";
 
   if (mysql_query(conn_, sql.c_str()) != 0) {
     std::cerr << "QueryManager: latest score query failed: "
@@ -576,12 +612,6 @@ std::vector<ServerScoreSummary> QueryManager::QueryLatestScore(
   }
 
   auto now = std::chrono::system_clock::now();
-  float total_score = 0;
-  float max_score = -1;
-  float min_score = 101;
-  std::string best_server, worst_server;
-  int online_count = 0, offline_count = 0;
-
   MYSQL_ROW row;
   while ((row = mysql_fetch_row(result))) {
     ServerScoreSummary rec;
@@ -599,37 +629,20 @@ std::vector<ServerScoreSummary> QueryManager::QueryLatestScore(
                    .count();
     rec.status = (age > 60) ? ServerStatus::OFFLINE : ServerStatus::ONLINE;
 
-    if (rec.status == ServerStatus::ONLINE) {
-      online_count++;
-    } else {
-      offline_count++;
-    }
-
-    // 统计
-    total_score += rec.score;
-    if (rec.score > max_score) {
-      max_score = rec.score;
-      best_server = rec.server_name;
-    }
-    if (rec.score < min_score) {
-      min_score = rec.score;
-      worst_server = rec.server_name;
-    }
-
     records.push_back(rec);
   }
   mysql_free_result(result);
 
-  // 填充集群统计
-  if (stats) {
-    stats->total_servers = static_cast<int>(records.size());
-    stats->online_servers = online_count;
-    stats->offline_servers = offline_count;
-    stats->avg_score = records.empty() ? 0 : total_score / records.size();
-    stats->max_score = max_score > 0 ? max_score : 0;
-    stats->min_score = min_score < 101 ? min_score : 0;
-    stats->best_server = best_server;
-    stats->worst_server = worst_server;
+  if (stats && !records.empty()) {
+    stats->best_server = records.front().server_name;
+    const std::string worst_sql =
+        "SELECT p1.server_name" + latest_rows + "ORDER BY p1.score ASC LIMIT 1";
+    if (mysql_query(conn_, worst_sql.c_str()) == 0) {
+      MYSQL_RES* worst_result = mysql_store_result(conn_);
+      MYSQL_ROW worst_row = worst_result ? mysql_fetch_row(worst_result) : nullptr;
+      if (worst_row && worst_row[0]) stats->worst_server = worst_row[0];
+      if (worst_result) mysql_free_result(worst_result);
+    }
   }
 #else
   (void)stats;
@@ -653,8 +666,7 @@ std::vector<NetDetailRecord> QueryManager::QueryNetDetail(
   if (!ValidateTimeRange(time_range)) {
     return records;
   }
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
@@ -670,7 +682,8 @@ std::vector<NetDetailRecord> QueryManager::QueryNetDetail(
   }
 
   // 查询数据
-  int offset = (page - 1) * page_size;
+  const int64_t offset = std::min<int64_t>(
+      static_cast<int64_t>(page - 1) * page_size, 10000000);
   std::ostringstream sql;
   sql << "SELECT server_name, net_name, timestamp, err_in, err_out, "
          "drop_in, drop_out, rcv_bytes_rate, snd_bytes_rate, "
@@ -735,8 +748,7 @@ std::vector<DiskDetailRecord> QueryManager::QueryDiskDetail(
   if (!ValidateTimeRange(time_range)) {
     return records;
   }
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
@@ -752,7 +764,8 @@ std::vector<DiskDetailRecord> QueryManager::QueryDiskDetail(
   }
 
   // 查询数据
-  int offset = (page - 1) * page_size;
+  const int64_t offset = std::min<int64_t>(
+      static_cast<int64_t>(page - 1) * page_size, 10000000);
   std::ostringstream sql;
   sql << "SELECT server_name, disk_name, timestamp, read_bytes_per_sec, "
          "write_bytes_per_sec, read_iops, write_iops, avg_read_latency_ms, "
@@ -816,8 +829,7 @@ std::vector<MemDetailRecord> QueryManager::QueryMemDetail(
   if (!ValidateTimeRange(time_range)) {
     return records;
   }
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
@@ -833,7 +845,8 @@ std::vector<MemDetailRecord> QueryManager::QueryMemDetail(
   }
 
   // 查询数据
-  int offset = (page - 1) * page_size;
+  const int64_t offset = std::min<int64_t>(
+      static_cast<int64_t>(page - 1) * page_size, 10000000);
   std::ostringstream sql;
   sql << "SELECT server_name, timestamp, total, free, avail, buffers, "
          "cached, active, inactive, dirty "
@@ -896,8 +909,7 @@ std::vector<SoftIrqDetailRecord> QueryManager::QuerySoftIrqDetail(
   if (!ValidateTimeRange(time_range)) {
     return records;
   }
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
@@ -913,7 +925,8 @@ std::vector<SoftIrqDetailRecord> QueryManager::QuerySoftIrqDetail(
   }
 
   // 查询数据
-  int offset = (page - 1) * page_size;
+  const int64_t offset = std::min<int64_t>(
+      static_cast<int64_t>(page - 1) * page_size, 10000000);
   std::ostringstream sql;
   sql << "SELECT server_name, cpu_name, timestamp, hi, timer, net_tx, "
          "net_rx, block, sched "

@@ -1,8 +1,22 @@
 #include "rpc/query_service.h"
 
+#include <algorithm>
 #include <iostream>
 
 namespace monitor {
+
+namespace {
+constexpr int kMaxPageSize = 1000;
+constexpr int kMaxPage = 10000;
+constexpr int kMinTrendIntervalSeconds = 300;
+
+void NormalizePagination(int* page, int* page_size) {
+  if (*page < 1) *page = 1;
+  if (*page_size < 1) *page_size = 100;
+  *page = std::min(*page, kMaxPage);
+  *page_size = std::min(*page_size, kMaxPageSize);
+}
+}  // namespace
 
 QueryServiceImpl::QueryServiceImpl(
     QueryManager* query_manager, runtime_config::AuthorizationConfig authorization)
@@ -59,8 +73,7 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   int total_count = 0;
   auto records = query_manager_->QueryPerformance(
@@ -120,8 +133,10 @@ void QueryServiceImpl::SetTimestamp(
                         "Invalid time range: start_time > end_time");
   }
 
+  const int interval_seconds = std::max(
+      request->interval_seconds(), kMinTrendIntervalSeconds);
   auto records = query_manager_->QueryTrend(
-      request->server_name(), time_range, request->interval_seconds());
+      request->server_name(), time_range, interval_seconds);
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_records();
@@ -145,7 +160,7 @@ void QueryServiceImpl::SetTimestamp(
     proto_rec->set_load_avg_1_rate(rec.load_avg_1_rate);
   }
 
-  response->set_interval_seconds(request->interval_seconds());
+  response->set_interval_seconds(interval_seconds);
 
   return grpc::Status::OK;
 }
@@ -181,8 +196,7 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   int total_count = 0;
   auto records = query_manager_->QueryAnomaly(
@@ -226,8 +240,7 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   int total_count = 0;
   auto records =
@@ -317,8 +330,7 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   int total_count = 0;
   auto records = query_manager_->QueryNetDetail(
@@ -366,8 +378,7 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   int total_count = 0;
   auto records = query_manager_->QueryDiskDetail(
@@ -414,8 +425,7 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   int total_count = 0;
   auto records = query_manager_->QueryMemDetail(
@@ -462,8 +472,7 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  if (page < 1) page = 1;
-  if (page_size < 1) page_size = 100;
+  NormalizePagination(&page, &page_size);
 
   int total_count = 0;
   auto records = query_manager_->QuerySoftIrqDetail(
