@@ -48,22 +48,32 @@ void HostManager::Stop() {
   }
 }
 
+void HostManager::RemoveHostState(const std::string& host_name) {
+  host_scores_.erase(host_name);
+  last_net_samples_.erase(host_name);
+  last_softirq_samples_.erase(host_name);
+  last_mem_samples_.erase(host_name);
+  last_disk_samples_.erase(host_name);
+  last_disk_util_samples_.erase(host_name);
+  last_perf_samples_.erase(host_name);
+  last_ingest_times_.erase(host_name);
+}
+
 void HostManager::ProcessLoop() {
   while (running_) {
-    // 每隔 60 秒检查 host_scores_ 中的主机数据是否过期
-    std::this_thread::sleep_for(std::chrono::seconds(60));
+    std::this_thread::sleep_for(std::chrono::seconds(1));
     
     // 获取当前时间
     auto now = std::chrono::system_clock::now();
+    std::lock_guard<std::mutex> ingest_lock(ingest_mtx_);
     std::lock_guard<std::mutex> lock(mtx_);
-    // 遍历 host_scores_，移除过期的主机数据
-    for (auto it = host_scores_.begin(); it != host_scores_.end();) {
+    for (auto it = last_ingest_times_.begin(); it != last_ingest_times_.end();) {
       auto age = std::chrono::duration_cast<std::chrono::seconds>(
-          now - it->second.timestamp).count();
-      // 如果某个主机的最新数据超过 60 秒没有更新，就认为它已经不活跃了，从 host_scores_ 中移除
+          now - it->second).count();
       if (age > 60) {
-        std::cout << "Removing stale host: " << it->first << std::endl;
-        it = host_scores_.erase(it); // erase 返回下一个迭代器
+        const std::string host_name = it->first;
+        ++it;
+        RemoveHostState(host_name);
       } else {
         ++it;
       }
@@ -99,6 +109,10 @@ HostManager::IngestResult HostManager::OnDataReceived(
   if (host_name.empty()) {
     std::cerr << "Received data with empty server identifier" << std::endl;
     return IngestResult::kFailed;
+  }
+  if (last_ingest_times_.find(host_name) == last_ingest_times_.end() &&
+      last_ingest_times_.size() >= kMaxTrackedHosts) {
+    return IngestResult::kResourceExhausted;
   }
 
   const auto perf_it = last_perf_samples_.find(host_name);
@@ -213,6 +227,7 @@ HostManager::IngestResult HostManager::OnDataReceived(
     return IngestResult::kFailed;
   }
   if (write_result == IngestResult::kCommitUnknown) {
+    last_ingest_times_[host_name] = now;
     return IngestResult::kCommitUnknown;
   }
 
@@ -220,6 +235,7 @@ HostManager::IngestResult HostManager::OnDataReceived(
     std::lock_guard<std::mutex> lock(mtx_);
     host_scores_[host_name] = HostScore{info, score, now};
   }
+  last_ingest_times_[host_name] = now;
 
   return IngestResult::kPersisted;
 }

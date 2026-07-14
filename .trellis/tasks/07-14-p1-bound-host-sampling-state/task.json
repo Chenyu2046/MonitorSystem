@@ -1,0 +1,17 @@
+{
+  "id": "p1-bound-host-sampling-state",
+  "name": "p1-bound-host-sampling-state",
+  "title": "P1 bound host sampling state",
+  "description": "Bound and expire all HostManager per-host sampling state.",
+  "status": "completed",
+  "package": "manager",
+  "priority": "P1",
+  "creator": "chenyu",
+  "assignee": "chenyu",
+  "createdAt": "2026-07-14",
+  "completedAt": "2026-07-14",
+  "base_branch": "codex/production-hardening",
+  "parent": "07-14-production-p0p1-hardening",
+  "relatedFiles": ["manager/include/host_manager.h", "manager/src/host_manager.cpp", "manager/src/rpc/grpc_server.cpp"],
+  "notes": "Static host-state boundary checks and final independent CR passed. Linux 257-host, TTL, and persistence failure injection remain deployment verification and are documented in README."
+}

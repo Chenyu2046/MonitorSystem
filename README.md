@@ -166,6 +166,40 @@ Manager 配置的 CA 信任，且其 SAN 必须同时位于 Worker allowlist 并
 | `server_mem_detail` | 内存分布详细数据 |
 | `server_softirq_detail` | 软中断详细数据 |
 
+### 生产迁移、验证与回滚
+
+本版本没有 schema migration。网络速率在本版本起统一为**全部接口聚合的十进制
+`kB/s`**；旧 `server_performance` 行只包含首张网卡，且被 Manager 二次除以
+`1024`。记录部署切换的 UTC 时间，查询趋势时不要跨越该时间混合解释旧/新数据；
+若必须形成连续趋势，需从原始采集数据重算旧行后另行迁移。
+
+在 Linux 部署机执行以下最小验证。Manager 依赖 MySQL client development files，
+Worker 的 eBPF 采集需要 libbpf/libelf/z 和相应内核权限；缺少 eBPF 依赖时，构建
+会选择 `/proc/net/dev` 采集器。
+
+```bash
+cmake -S . -B build -DBUILD_MANAGER=ON -DENABLE_MYSQL=ON
+cmake --build build -j"$(nproc)"
+
+# mTLS 握手：带 Worker 证书必须成功；省略 -cert/-key 必须被 Manager 拒绝。
+openssl s_client -connect manager.example.internal:50051 \
+  -CAfile /etc/monitor/tls/ca.pem \
+  -cert /etc/monitor/tls/worker.pem \
+  -key /etc/monitor/tls/worker-key.pem
+
+# 启动一台有效 Worker 后，确认 60 秒内有采样；停止它后 60 秒以上再次查询，
+# HostManager 的内存状态应被 TTL 回收。对第 257 个不同的允许 SAN/hostname 上报，
+# RPC 应返回 RESOURCE_EXHAUSTED。
+```
+
+MySQL 验证应覆盖包含单引号和反斜杠的主机/接口名、五表事务失败回滚和 commit
+unknown 注入；网络验证应在固定窗口内将 Worker 的 `kB/s` 与
+`/proc/net/dev` 字节差除以 `1000 * seconds` 对账。
+
+回滚时停止 Manager 和 Worker，恢复上一版已验证二进制（或在源码部署中逐个
+`git revert` 本次 hardening commit），然后重新启动。由于没有 schema 变更，不需要
+DDL 回滚；保留切换 UTC 时间，避免把不同单位口径的历史行合并到同一趋势。
+
 ## 🔨 编译
 
 ```bash
@@ -173,14 +207,8 @@ Manager 配置的 CA 信任，且其 SAN 必须同时位于 Worker allowlist 并
 git clone https://github.com/cpp-agan-team/monitor_system.git
 cd monitor_system
 
-# 创建构建目录
-mkdir build && cd build
-
-# 配置
-cmake ..
-
-# 编译
-make -j$(nproc)
+cmake -S . -B build -DBUILD_MANAGER=ON -DENABLE_MYSQL=ON
+cmake --build build -j"$(nproc)"
 ```
 
 ### 内核模块编译
@@ -231,7 +259,6 @@ sudo ./build/worker/worker manager.example.internal:50051
 Manager 端显示：
 ```
 Received monitor data from: server1
-Processed data from server1_192.168.1.101, score: 75.32
 ```
 
 ### 5. 停止服务和卸载内核模块

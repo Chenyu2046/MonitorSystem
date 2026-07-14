@@ -1,0 +1,3 @@
+{"file":"manager/include/host_manager.h","reason":"Adds a single 256-host admission index and state-removal helper."}
+{"file":"manager/src/host_manager.cpp","reason":"Expires every per-host state map after 60 seconds under the ingest lock."}
+{"file":"manager/src/rpc/grpc_server.cpp","reason":"Maps bounded host admission to RESOURCE_EXHAUSTED."}

@@ -25,7 +25,7 @@ struct HostScore {
 // 管理多个远程主机的监控数据（推送模式）
 class HostManager {
  public:
-  enum class IngestResult { kPersisted, kFailed, kCommitUnknown };
+  enum class IngestResult { kPersisted, kFailed, kCommitUnknown, kResourceExhausted };
   explicit HostManager(runtime_config::DatabaseConfig database_config);
   ~HostManager();
 
@@ -74,6 +74,8 @@ class HostManager {
     float mem_total = 0, mem_free = 0, mem_avail = 0;
     float net_in_rate = 0, net_out_rate = 0, score = 0;
   };
+  static constexpr size_t kMaxTrackedHosts = 256;
+  void RemoveHostState(const std::string& host_name);
   void ProcessLoop();
   double CalcScore(const monitor::proto::MonitorInfo& info);
   IngestResult WriteToMysql(const std::string& host_name, const HostScore& host_score,
@@ -103,6 +105,7 @@ class HostManager {
   std::map<std::string, std::map<std::string, DiskDetailSample>> last_disk_samples_;
   std::map<std::string, float> last_disk_util_samples_;
   std::map<std::string, PerfSample> last_perf_samples_;
+  std::map<std::string, std::chrono::system_clock::time_point> last_ingest_times_;
 };
 
 }  // namespace monitor

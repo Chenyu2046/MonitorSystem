@@ -74,6 +74,10 @@ bool GrpcServerImpl::IsAuthorizedWorker(
     return grpc::Status(grpc::StatusCode::UNKNOWN,
                         "Monitor data commit outcome is unknown");
   }
+  if (ingest_result == HostManager::IngestResult::kResourceExhausted) {
+    return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED,
+                        "Manager host capacity reached");
+  }
   if (ingest_result != HostManager::IngestResult::kPersisted) {
     return grpc::Status(grpc::StatusCode::UNAVAILABLE,
                         "Monitor data persistence is unavailable");

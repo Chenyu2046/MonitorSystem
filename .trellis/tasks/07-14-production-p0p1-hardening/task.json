@@ -3,7 +3,7 @@
   "name": "production-p0p1-hardening",
   "title": "Production P0/P1 hardening",
   "description": "Close the confirmed production P0 and P1 security, integrity, concurrency, and resource-bound defects through independently reviewed and pushed child tasks.",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": "manager, worker, proto, docs",
   "package": "manager",
@@ -11,7 +11,7 @@
   "creator": "chenyu",
   "assignee": "chenyu",
   "createdAt": "2026-07-14",
-  "completedAt": null,
+  "completedAt": "2026-07-14",
   "branch": null,
   "base_branch": "codex/production-hardening",
   "worktree_path": null,
@@ -24,10 +24,11 @@
     "07-14-p1-durable-concurrent-ingestion",
     "07-14-p1-bound-query-host-resources",
     "07-14-p1-network-units-interfaces",
-    "07-14-p1-worker-runtime-boundaries"
+    "07-14-p1-worker-runtime-boundaries",
+    "07-14-p1-bound-host-sampling-state"
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "P0 security and SQL hardening, P1 durable ingestion, and P1 query/host resource bounds are reviewed and pushed. Remaining P1 runtime data correctness and worker lifecycle items are in progress.",
+  "notes": "All listed P0/P1 code fixes completed independent CR and were pushed. Linux build, mTLS handshake, MySQL failure injection, 257-host TTL, and network traffic reconciliation are documented deployment-environment verification steps.",
   "meta": {}
 }

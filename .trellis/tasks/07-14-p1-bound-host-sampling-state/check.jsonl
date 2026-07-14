@@ -1,0 +1,2 @@
+{"check":"static host-state boundary assertions","result":"passed","evidence":"all state maps are removed together; new hosts are capped at 256; RPC maps capacity to RESOURCE_EXHAUSTED"}
+{"check":"independent CR","result":"passed after 1-second cleanup cadence","evidence":"lock order, rollback, unknown-commit, and TTL semantics reviewed"}
