@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <unordered_set>
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -251,13 +252,8 @@ static bool ReadErrorCounters(const std::string& ifname, uint64_t* err_in,
 }
 
 std::string NetEbpfMonitor::GetIfName(uint32_t ifindex) {
-  // 先查缓存
-  auto it = ifname_cache_.find(ifindex);
-  if (it != ifname_cache_.end()) {
-    return it->second;
-  }
-
-  // 使用 if_indextoname 获取网卡名
+  // ifindex 会在接口删除后复用，且 eBPF map 可能短暂保留旧 key；每轮必须
+  // 以系统当前接口表为准，不能直接信任名称缓存。
   char ifname[IF_NAMESIZE];
   if (if_indextoname(ifindex, ifname) != nullptr) {
     std::string name(ifname);
@@ -265,6 +261,7 @@ std::string NetEbpfMonitor::GetIfName(uint32_t ifindex) {
     return name;
   }
 
+  ifname_cache_.erase(ifindex);
   return "";
 }
 
@@ -345,12 +342,14 @@ void NetEbpfMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
     return;
   }
   consecutive_read_failures_ = 0;
+  std::unordered_set<uint32_t> active_ifindexes;
 
   for (const auto& interface_stats : interfaces) {
     std::string ifname = GetIfName(interface_stats.ifindex);
     if (ifname.empty() || ifname == "lo") {
       continue;
     }
+    active_ifindexes.insert(interface_stats.ifindex);
 
     const auto& stats = interface_stats.stats;
     auto* net_info = monitor_info->add_net_info();
@@ -409,6 +408,23 @@ void NetEbpfMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
     // 更新缓存
     cache_[interface_stats.ifindex] = {stats.rcv_bytes, stats.rcv_packets,
                                        stats.snd_bytes, stats.snd_packets, now};
+  }
+
+  // 容器/veth 删除后 BPF map 可能仍短暂保留旧 key；每轮按活跃接口回收用户态
+  // 缓存，避免长期接口 churn 让速率基线和 ifindex 名称映射持续增长。
+  for (auto it = cache_.begin(); it != cache_.end();) {
+    if (active_ifindexes.find(it->first) == active_ifindexes.end()) {
+      it = cache_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (auto it = ifname_cache_.begin(); it != ifname_cache_.end();) {
+    if (active_ifindexes.find(it->first) == active_ifindexes.end()) {
+      it = ifname_cache_.erase(it);
+    } else {
+      ++it;
+    }
   }
 
   last_update_ = now;

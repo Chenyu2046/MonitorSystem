@@ -1,6 +1,6 @@
 #include "query_manager.h"
+#include "query_limits.h"
 
-#include <algorithm>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -9,52 +9,72 @@
 namespace monitor {
 
 namespace {
-constexpr int kMaxPageSize = 1000;
-constexpr int kMaxPage = 10000;
 constexpr int kMinTrendIntervalSeconds = 300;
 constexpr auto kMaxQueryRange = std::chrono::hours(24 * 31);
-
-void NormalizePagination(int* page, int* page_size) {
-  if (*page < 1) *page = 1;
-  if (*page_size < 1) *page_size = 100;
-  *page = std::min(*page, kMaxPage);
-  *page_size = std::min(*page_size, kMaxPageSize);
+constexpr unsigned int kMysqlTimeoutSeconds = 5;
+constexpr auto kQueryLockWait = std::chrono::milliseconds(200);
+#ifdef ENABLE_MYSQL
+bool ResultReadSucceeded(MYSQL* conn, const char* query_name) {
+  if (mysql_errno(conn) == 0) return true;
+  std::cerr << "QueryManager: " << query_name
+            << " result read failed: " << mysql_error(conn) << std::endl;
+  return false;
 }
+#endif
 }
 
 QueryManager::QueryManager() = default;
 
 QueryManager::~QueryManager() { Close(); }
 
+#ifdef ENABLE_MYSQL
+bool QueryManager::EnsureConnectedLocked() {
+  if (conn_ && mysql_ping(conn_) == 0) return true;
+  if (conn_) {
+    mysql_close(conn_);
+    conn_ = nullptr;
+  }
+  conn_ = mysql_init(nullptr);
+  if (!conn_ ||
+      mysql_options(conn_, MYSQL_OPT_CONNECT_TIMEOUT, &kMysqlTimeoutSeconds) != 0 ||
+      mysql_options(conn_, MYSQL_OPT_READ_TIMEOUT, &kMysqlTimeoutSeconds) != 0 ||
+      mysql_options(conn_, MYSQL_OPT_WRITE_TIMEOUT, &kMysqlTimeoutSeconds) != 0 ||
+      !mysql_real_connect(conn_, database_host_.c_str(), database_user_.c_str(),
+                          database_password_.c_str(), database_name_.c_str(), 0,
+                          nullptr, 0)) {
+    if (conn_) {
+      std::cerr << "QueryManager: MySQL connection unavailable: "
+                << mysql_error(conn_) << std::endl;
+      mysql_close(conn_);
+      conn_ = nullptr;
+    }
+    initialized_ = false;
+    return false;
+  }
+  mysql_set_character_set(conn_, "utf8mb4");
+  initialized_ = true;
+  return true;
+}
+#endif
+
 bool QueryManager::Init(const std::string& host, const std::string& user,
                         const std::string& password,
                         const std::string& database) {
 #ifdef ENABLE_MYSQL
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (initialized_) {
-    return true;
-  }
-
-  conn_ = mysql_init(nullptr);
-  if (!conn_) {
-    std::cerr << "QueryManager: mysql_init failed" << std::endl;
-    return false;
-  }
-
-  if (!mysql_real_connect(conn_, host.c_str(), user.c_str(), password.c_str(),
-                          database.c_str(), 0, nullptr, 0)) {
-    std::cerr << "QueryManager: mysql_real_connect failed: "
-              << mysql_error(conn_) << std::endl;
+  std::lock_guard<std::timed_mutex> lock(mtx_);
+  const bool config_changed = database_host_ != host || database_user_ != user ||
+                              database_password_ != password ||
+                              database_name_ != database;
+  if (config_changed && conn_) {
     mysql_close(conn_);
     conn_ = nullptr;
-    return false;
+    initialized_ = false;
   }
-
-  // 设置字符集
-  mysql_set_character_set(conn_, "utf8mb4");
-  initialized_ = true;
-  std::cout << "QueryManager: MySQL connection initialized" << std::endl;
-  return true;
+  database_host_ = host;
+  database_user_ = user;
+  database_password_ = password;
+  database_name_ = database;
+  return EnsureConnectedLocked();
 #else
   (void)host;
   (void)user;
@@ -67,7 +87,7 @@ bool QueryManager::Init(const std::string& host, const std::string& user,
 
 void QueryManager::Close() {
 #ifdef ENABLE_MYSQL
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::timed_mutex> lock(mtx_);
   if (conn_) {
     mysql_close(conn_);
     conn_ = nullptr;
@@ -104,12 +124,12 @@ int QueryManager::GetTotalCount(const std::string& count_sql) {
   if (mysql_query(conn_, count_sql.c_str()) != 0) {
     std::cerr << "QueryManager: count query failed: " << mysql_error(conn_)
               << std::endl;
-    return 0;
+    return -1;
   }
 
   MYSQL_RES* result = mysql_store_result(conn_);
   if (!result) {
-    return 0;
+    return -1;
   }
 
   int count = 0;
@@ -117,8 +137,9 @@ int QueryManager::GetTotalCount(const std::string& count_sql) {
   if (row && row[0]) {
     count = std::atoi(row[0]);
   }
+  const bool read_succeeded = ResultReadSucceeded(conn_, "count query");
   mysql_free_result(result);
-  return count;
+  return read_succeeded ? count : -1;
 #else
   (void)count_sql;
   return 0;
@@ -139,12 +160,14 @@ std::string QueryManager::EscapeSql(const std::string& value) const {
 
 std::vector<PerformanceRecord> QueryManager::QueryPerformance(
     const std::string& server_name, const TimeRange& time_range, int page,
-    int page_size, int* total_count) {
+    int page_size, int* total_count, bool* query_ok) {
   std::vector<PerformanceRecord> records;
+  if (query_ok) *query_ok = false;
 
 #ifdef ENABLE_MYSQL
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!initialized_ || !conn_) {
+  std::unique_lock<std::timed_mutex> lock(mtx_, std::defer_lock);
+  if (!lock.try_lock_for(kQueryLockWait)) return records;
+  if (!EnsureConnectedLocked()) {
     return records;
   }
 
@@ -153,7 +176,7 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
     std::cerr << "QueryManager: Invalid time range" << std::endl;
     return records;
   }
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
@@ -166,18 +189,21 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
             << "' AND '" << end_time << "'";
   if (total_count) {
     *total_count = GetTotalCount(count_sql.str());
+    if (*total_count < 0) return records;
   }
 
   // 查询数据
   const int64_t offset = std::min<int64_t>(
-      static_cast<int64_t>(page - 1) * page_size, 10000000);
+      static_cast<int64_t>(page - 1) * page_size, kMaxQueryOffset);
   std::ostringstream sql;
   sql << "SELECT server_name, timestamp, cpu_percent, usr_percent, "
          "system_percent, nice_percent, idle_percent, io_wait_percent, "
          "irq_percent, soft_irq_percent, load_avg_1, load_avg_3, load_avg_15, "
          "mem_used_percent, total, free, avail, disk_util_percent, "
-         "send_rate, rcv_rate, score, cpu_percent_rate, mem_used_percent_rate, "
-         "disk_util_percent_rate, load_avg_1_rate, send_rate_rate, rcv_rate_rate "
+         "send_rate, rcv_rate, score, cpu_percent_rate, usr_percent_rate, "
+         "system_percent_rate, io_wait_percent_rate, mem_used_percent_rate, "
+         "disk_util_percent_rate, load_avg_1_rate, load_avg_3_rate, "
+         "load_avg_15_rate, send_rate_rate, rcv_rate_rate "
          "FROM server_performance WHERE server_name='"
       << escaped_server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
       << end_time << "' ORDER BY timestamp DESC LIMIT " << page_size
@@ -221,14 +247,21 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
     rec.rcv_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.score = row[i] ? std::atof(row[i]) : 0; i++;
     rec.cpu_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.usr_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.system_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.io_wait_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.mem_used_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.disk_util_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.load_avg_1_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.load_avg_3_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.load_avg_15_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.send_rate_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.rcv_rate_rate = row[i] ? std::atof(row[i]) : 0;
     records.push_back(rec);
   }
+  const bool read_succeeded = ResultReadSucceeded(conn_, "query");
   mysql_free_result(result);
+  if (!read_succeeded) return records;
 #else
   (void)server_name;
   (void)time_range;
@@ -237,18 +270,23 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
   (void)total_count;
 #endif
 
+#ifdef ENABLE_MYSQL
+  if (query_ok) *query_ok = true;
+#endif
   return records;
 }
 
 
 std::vector<PerformanceRecord> QueryManager::QueryTrend(
     const std::string& server_name, const TimeRange& time_range,
-    int interval_seconds) {
+    int interval_seconds, bool* query_ok) {
   std::vector<PerformanceRecord> records;
+  if (query_ok) *query_ok = false;
 
 #ifdef ENABLE_MYSQL
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!initialized_ || !conn_) {
+  std::unique_lock<std::timed_mutex> lock(mtx_, std::defer_lock);
+  if (!lock.try_lock_for(kQueryLockWait)) return records;
+  if (!EnsureConnectedLocked()) {
     return records;
   }
 
@@ -266,9 +304,8 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
   }
 
   std::ostringstream sql;
-  {
-    // 带聚合的查询
-    sql << "SELECT server_name, "
+  // 趋势查询始终聚合；最小粒度和最长时间范围共同限制返回点数与数据库扫描量。
+  sql << "SELECT server_name, "
            "FROM_UNIXTIME(FLOOR(UNIX_TIMESTAMP(timestamp) / "
         << interval_seconds << ") * " << interval_seconds
         << ") as time_bucket, "
@@ -285,14 +322,20 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
            "AVG(rcv_rate) as rcv_rate, "
            "AVG(score) as score, "
            "AVG(cpu_percent_rate) as cpu_percent_rate, "
+           "AVG(usr_percent_rate) as usr_percent_rate, "
+           "AVG(system_percent_rate) as system_percent_rate, "
+           "AVG(io_wait_percent_rate) as io_wait_percent_rate, "
            "AVG(mem_used_percent_rate) as mem_used_percent_rate, "
            "AVG(disk_util_percent_rate) as disk_util_percent_rate, "
-           "AVG(load_avg_1_rate) as load_avg_1_rate "
+           "AVG(load_avg_1_rate) as load_avg_1_rate, "
+           "AVG(load_avg_3_rate) as load_avg_3_rate, "
+           "AVG(load_avg_15_rate) as load_avg_15_rate, "
+           "AVG(send_rate_rate) as send_rate_rate, "
+           "AVG(rcv_rate_rate) as rcv_rate_rate "
            "FROM server_performance WHERE server_name='"
          << escaped_server_name << "' AND timestamp BETWEEN '" << start_time
         << "' AND '" << end_time
-        << "' GROUP BY server_name, time_bucket ORDER BY time_bucket";
-  }
+      << "' GROUP BY server_name, time_bucket ORDER BY time_bucket";
 
   if (mysql_query(conn_, sql.str().c_str()) != 0) {
     std::cerr << "QueryManager: trend query failed: " << mysql_error(conn_)
@@ -325,18 +368,30 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
     rec.rcv_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.score = row[i] ? std::atof(row[i]) : 0; i++;
     rec.cpu_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.usr_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.system_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.io_wait_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.mem_used_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.disk_util_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
-    rec.load_avg_1_rate = row[i] ? std::atof(row[i]) : 0;
+    rec.load_avg_1_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.load_avg_3_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.load_avg_15_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.send_rate_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.rcv_rate_rate = row[i] ? std::atof(row[i]) : 0;
     records.push_back(rec);
   }
+  const bool read_succeeded = ResultReadSucceeded(conn_, "query");
   mysql_free_result(result);
+  if (!read_succeeded) return records;
 #else
   (void)server_name;
   (void)time_range;
   (void)interval_seconds;
 #endif
 
+#ifdef ENABLE_MYSQL
+  if (query_ok) *query_ok = true;
+#endif
   return records;
 }
 
@@ -344,12 +399,14 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
 std::vector<AnomalyRecord> QueryManager::QueryAnomaly(
     const std::string& server_name, const TimeRange& time_range,
     const AnomalyThresholds& thresholds, int page, int page_size,
-    int* total_count) {
+    int* total_count, bool* query_ok) {
   std::vector<AnomalyRecord> records;
+  if (query_ok) *query_ok = false;
 
 #ifdef ENABLE_MYSQL
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!initialized_ || !conn_) {
+  std::unique_lock<std::timed_mutex> lock(mtx_, std::defer_lock);
+  if (!lock.try_lock_for(kQueryLockWait)) return records;
+  if (!EnsureConnectedLocked()) {
     return records;
   }
 
@@ -357,7 +414,7 @@ std::vector<AnomalyRecord> QueryManager::QueryAnomaly(
     std::cerr << "QueryManager: Invalid time range" << std::endl;
     return records;
   }
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
@@ -383,11 +440,12 @@ std::vector<AnomalyRecord> QueryManager::QueryAnomaly(
             << where_clause.str();
   if (total_count) {
     *total_count = GetTotalCount(count_sql.str());
+    if (*total_count < 0) return records;
   }
 
   // 查询数据
   const int64_t offset = std::min<int64_t>(
-      static_cast<int64_t>(page - 1) * page_size, 10000000);
+      static_cast<int64_t>(page - 1) * page_size, kMaxQueryOffset);
   std::ostringstream sql;
   sql << "SELECT server_name, timestamp, cpu_percent, mem_used_percent, "
          "disk_util_percent, cpu_percent_rate, mem_used_percent_rate "
@@ -459,7 +517,9 @@ std::vector<AnomalyRecord> QueryManager::QueryAnomaly(
                   thresholds.change_rate_threshold);
     }
   }
+  const bool read_succeeded = ResultReadSucceeded(conn_, "query");
   mysql_free_result(result);
+  if (!read_succeeded) return records;
 #else
   (void)server_name;
   (void)time_range;
@@ -469,6 +529,9 @@ std::vector<AnomalyRecord> QueryManager::QueryAnomaly(
   (void)total_count;
 #endif
 
+#ifdef ENABLE_MYSQL
+  if (query_ok) *query_ok = true;
+#endif
   return records;
 }
 
@@ -476,27 +539,31 @@ std::vector<AnomalyRecord> QueryManager::QueryAnomaly(
 std::vector<ServerScoreSummary> QueryManager::QueryScoreRank(SortOrder order,
                                                               int page,
                                                               int page_size,
-                                                              int* total_count) {
+                                                              int* total_count,
+                                                              bool* query_ok) {
   std::vector<ServerScoreSummary> records;
+  if (query_ok) *query_ok = false;
 
 #ifdef ENABLE_MYSQL
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!initialized_ || !conn_) {
+  std::unique_lock<std::timed_mutex> lock(mtx_, std::defer_lock);
+  if (!lock.try_lock_for(kQueryLockWait)) return records;
+  if (!EnsureConnectedLocked()) {
     return records;
   }
 
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   // 获取总数（不同服务器数量）
   std::string count_sql =
       "SELECT COUNT(DISTINCT server_name) FROM server_performance";
   if (total_count) {
     *total_count = GetTotalCount(count_sql);
+    if (*total_count < 0) return records;
   }
 
   // 查询每台服务器的最新数据并排序
   const int64_t offset = std::min<int64_t>(
-      static_cast<int64_t>(page - 1) * page_size, 10000000);
+      static_cast<int64_t>(page - 1) * page_size, kMaxQueryOffset);
   std::string order_str = (order == SortOrder::ASC) ? "ASC" : "DESC";
 
   std::ostringstream sql;
@@ -504,9 +571,14 @@ std::vector<ServerScoreSummary> QueryManager::QueryScoreRank(SortOrder order,
          "p1.mem_used_percent, p1.disk_util_percent, p1.load_avg_1 "
          "FROM server_performance p1 "
          "INNER JOIN ("
-         "  SELECT server_name, MAX(timestamp) as max_ts "
-         "  FROM server_performance GROUP BY server_name"
-         ") p2 ON p1.server_name = p2.server_name AND p1.timestamp = p2.max_ts "
+         "  SELECT newest.server_name, MAX(newest.id) AS latest_id "
+         "  FROM server_performance newest INNER JOIN ("
+         "    SELECT server_name, MAX(timestamp) AS max_ts "
+         "    FROM server_performance GROUP BY server_name"
+         "  ) latest_ts ON newest.server_name = latest_ts.server_name "
+         "  AND newest.timestamp = latest_ts.max_ts "
+         "  GROUP BY newest.server_name"
+         ") p2 ON p1.id = p2.latest_id "
          "ORDER BY p1.score "
       << order_str << " LIMIT " << page_size << " OFFSET " << offset;
 
@@ -541,7 +613,9 @@ std::vector<ServerScoreSummary> QueryManager::QueryScoreRank(SortOrder order,
 
     records.push_back(rec);
   }
+  const bool read_succeeded = ResultReadSucceeded(conn_, "query");
   mysql_free_result(result);
+  if (!read_succeeded) return records;
 #else
   (void)order;
   (void)page;
@@ -549,17 +623,22 @@ std::vector<ServerScoreSummary> QueryManager::QueryScoreRank(SortOrder order,
   (void)total_count;
 #endif
 
+#ifdef ENABLE_MYSQL
+  if (query_ok) *query_ok = true;
+#endif
   return records;
 }
 
 
 std::vector<ServerScoreSummary> QueryManager::QueryLatestScore(
-    ClusterStats* stats) {
+    ClusterStats* stats, bool* query_ok) {
   std::vector<ServerScoreSummary> records;
+  if (query_ok) *query_ok = false;
 
 #ifdef ENABLE_MYSQL
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!initialized_ || !conn_) {
+  std::unique_lock<std::timed_mutex> lock(mtx_, std::defer_lock);
+  if (!lock.try_lock_for(kQueryLockWait)) return records;
+  if (!EnsureConnectedLocked()) {
     return records;
   }
 
@@ -592,7 +671,9 @@ std::vector<ServerScoreSummary> QueryManager::QueryLatestScore(
     stats->avg_score = stats_row[2] ? std::atof(stats_row[2]) : 0;
     stats->max_score = stats_row[3] ? std::atof(stats_row[3]) : 0;
     stats->min_score = stats_row[4] ? std::atof(stats_row[4]) : 0;
+    const bool read_succeeded = ResultReadSucceeded(conn_, "latest score stats");
     mysql_free_result(stats_result);
+    if (!read_succeeded) return records;
   }
 
   std::string sql =
@@ -631,42 +712,60 @@ std::vector<ServerScoreSummary> QueryManager::QueryLatestScore(
 
     records.push_back(rec);
   }
+  const bool records_read_succeeded =
+      ResultReadSucceeded(conn_, "latest score query");
   mysql_free_result(result);
+  if (!records_read_succeeded) return records;
 
   if (stats && !records.empty()) {
     stats->best_server = records.front().server_name;
     const std::string worst_sql =
         "SELECT p1.server_name" + latest_rows + "ORDER BY p1.score ASC LIMIT 1";
-    if (mysql_query(conn_, worst_sql.c_str()) == 0) {
-      MYSQL_RES* worst_result = mysql_store_result(conn_);
-      MYSQL_ROW worst_row = worst_result ? mysql_fetch_row(worst_result) : nullptr;
-      if (worst_row && worst_row[0]) stats->worst_server = worst_row[0];
-      if (worst_result) mysql_free_result(worst_result);
+    if (mysql_query(conn_, worst_sql.c_str()) != 0) {
+      std::cerr << "QueryManager: worst score query failed: "
+                << mysql_error(conn_) << std::endl;
+      return records;
     }
+    MYSQL_RES* worst_result = mysql_store_result(conn_);
+    MYSQL_ROW worst_row = worst_result ? mysql_fetch_row(worst_result) : nullptr;
+    if (!worst_row) {
+      if (worst_result) mysql_free_result(worst_result);
+      return records;
+    }
+    if (worst_row[0]) stats->worst_server = worst_row[0];
+    const bool worst_read_succeeded =
+        ResultReadSucceeded(conn_, "worst score query");
+    mysql_free_result(worst_result);
+    if (!worst_read_succeeded) return records;
   }
 #else
   (void)stats;
 #endif
 
+#ifdef ENABLE_MYSQL
+  if (query_ok) *query_ok = true;
+#endif
   return records;
 }
 
 
 std::vector<NetDetailRecord> QueryManager::QueryNetDetail(
     const std::string& server_name, const TimeRange& time_range, int page,
-    int page_size, int* total_count) {
+    int page_size, int* total_count, bool* query_ok) {
   std::vector<NetDetailRecord> records;
+  if (query_ok) *query_ok = false;
 
 #ifdef ENABLE_MYSQL
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!initialized_ || !conn_) {
+  std::unique_lock<std::timed_mutex> lock(mtx_, std::defer_lock);
+  if (!lock.try_lock_for(kQueryLockWait)) return records;
+  if (!EnsureConnectedLocked()) {
     return records;
   }
 
   if (!ValidateTimeRange(time_range)) {
     return records;
   }
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
@@ -679,11 +778,12 @@ std::vector<NetDetailRecord> QueryManager::QueryNetDetail(
             << "' AND '" << end_time << "'";
   if (total_count) {
     *total_count = GetTotalCount(count_sql.str());
+    if (*total_count < 0) return records;
   }
 
   // 查询数据
   const int64_t offset = std::min<int64_t>(
-      static_cast<int64_t>(page - 1) * page_size, 10000000);
+      static_cast<int64_t>(page - 1) * page_size, kMaxQueryOffset);
   std::ostringstream sql;
   sql << "SELECT server_name, net_name, timestamp, err_in, err_out, "
          "drop_in, drop_out, rcv_bytes_rate, snd_bytes_rate, "
@@ -722,7 +822,9 @@ std::vector<NetDetailRecord> QueryManager::QueryNetDetail(
     rec.snd_packets_rate = row[i] ? std::atof(row[i]) : 0;
     records.push_back(rec);
   }
+  const bool read_succeeded = ResultReadSucceeded(conn_, "query");
   mysql_free_result(result);
+  if (!read_succeeded) return records;
 #else
   (void)server_name;
   (void)time_range;
@@ -731,24 +833,29 @@ std::vector<NetDetailRecord> QueryManager::QueryNetDetail(
   (void)total_count;
 #endif
 
+#ifdef ENABLE_MYSQL
+  if (query_ok) *query_ok = true;
+#endif
   return records;
 }
 
 std::vector<DiskDetailRecord> QueryManager::QueryDiskDetail(
     const std::string& server_name, const TimeRange& time_range, int page,
-    int page_size, int* total_count) {
+    int page_size, int* total_count, bool* query_ok) {
   std::vector<DiskDetailRecord> records;
+  if (query_ok) *query_ok = false;
 
 #ifdef ENABLE_MYSQL
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!initialized_ || !conn_) {
+  std::unique_lock<std::timed_mutex> lock(mtx_, std::defer_lock);
+  if (!lock.try_lock_for(kQueryLockWait)) return records;
+  if (!EnsureConnectedLocked()) {
     return records;
   }
 
   if (!ValidateTimeRange(time_range)) {
     return records;
   }
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
@@ -761,11 +868,12 @@ std::vector<DiskDetailRecord> QueryManager::QueryDiskDetail(
             << "' AND '" << end_time << "'";
   if (total_count) {
     *total_count = GetTotalCount(count_sql.str());
+    if (*total_count < 0) return records;
   }
 
   // 查询数据
   const int64_t offset = std::min<int64_t>(
-      static_cast<int64_t>(page - 1) * page_size, 10000000);
+      static_cast<int64_t>(page - 1) * page_size, kMaxQueryOffset);
   std::ostringstream sql;
   sql << "SELECT server_name, disk_name, timestamp, read_bytes_per_sec, "
          "write_bytes_per_sec, read_iops, write_iops, avg_read_latency_ms, "
@@ -803,7 +911,9 @@ std::vector<DiskDetailRecord> QueryManager::QueryDiskDetail(
     rec.util_percent = row[i] ? std::atof(row[i]) : 0;
     records.push_back(rec);
   }
+  const bool read_succeeded = ResultReadSucceeded(conn_, "query");
   mysql_free_result(result);
+  if (!read_succeeded) return records;
 #else
   (void)server_name;
   (void)time_range;
@@ -812,24 +922,29 @@ std::vector<DiskDetailRecord> QueryManager::QueryDiskDetail(
   (void)total_count;
 #endif
 
+#ifdef ENABLE_MYSQL
+  if (query_ok) *query_ok = true;
+#endif
   return records;
 }
 
 std::vector<MemDetailRecord> QueryManager::QueryMemDetail(
     const std::string& server_name, const TimeRange& time_range, int page,
-    int page_size, int* total_count) {
+    int page_size, int* total_count, bool* query_ok) {
   std::vector<MemDetailRecord> records;
+  if (query_ok) *query_ok = false;
 
 #ifdef ENABLE_MYSQL
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!initialized_ || !conn_) {
+  std::unique_lock<std::timed_mutex> lock(mtx_, std::defer_lock);
+  if (!lock.try_lock_for(kQueryLockWait)) return records;
+  if (!EnsureConnectedLocked()) {
     return records;
   }
 
   if (!ValidateTimeRange(time_range)) {
     return records;
   }
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
@@ -842,11 +957,12 @@ std::vector<MemDetailRecord> QueryManager::QueryMemDetail(
             << "' AND '" << end_time << "'";
   if (total_count) {
     *total_count = GetTotalCount(count_sql.str());
+    if (*total_count < 0) return records;
   }
 
   // 查询数据
   const int64_t offset = std::min<int64_t>(
-      static_cast<int64_t>(page - 1) * page_size, 10000000);
+      static_cast<int64_t>(page - 1) * page_size, kMaxQueryOffset);
   std::ostringstream sql;
   sql << "SELECT server_name, timestamp, total, free, avail, buffers, "
          "cached, active, inactive, dirty "
@@ -883,7 +999,9 @@ std::vector<MemDetailRecord> QueryManager::QueryMemDetail(
     rec.dirty = row[i] ? std::atof(row[i]) : 0;
     records.push_back(rec);
   }
+  const bool read_succeeded = ResultReadSucceeded(conn_, "query");
   mysql_free_result(result);
+  if (!read_succeeded) return records;
 #else
   (void)server_name;
   (void)time_range;
@@ -892,24 +1010,29 @@ std::vector<MemDetailRecord> QueryManager::QueryMemDetail(
   (void)total_count;
 #endif
 
+#ifdef ENABLE_MYSQL
+  if (query_ok) *query_ok = true;
+#endif
   return records;
 }
 
 std::vector<SoftIrqDetailRecord> QueryManager::QuerySoftIrqDetail(
     const std::string& server_name, const TimeRange& time_range, int page,
-    int page_size, int* total_count) {
+    int page_size, int* total_count, bool* query_ok) {
   std::vector<SoftIrqDetailRecord> records;
+  if (query_ok) *query_ok = false;
 
 #ifdef ENABLE_MYSQL
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!initialized_ || !conn_) {
+  std::unique_lock<std::timed_mutex> lock(mtx_, std::defer_lock);
+  if (!lock.try_lock_for(kQueryLockWait)) return records;
+  if (!EnsureConnectedLocked()) {
     return records;
   }
 
   if (!ValidateTimeRange(time_range)) {
     return records;
   }
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   std::string start_time = FormatTime(time_range.start_time);
   std::string end_time = FormatTime(time_range.end_time);
@@ -922,11 +1045,12 @@ std::vector<SoftIrqDetailRecord> QueryManager::QuerySoftIrqDetail(
             << "' AND '" << end_time << "'";
   if (total_count) {
     *total_count = GetTotalCount(count_sql.str());
+    if (*total_count < 0) return records;
   }
 
   // 查询数据
   const int64_t offset = std::min<int64_t>(
-      static_cast<int64_t>(page - 1) * page_size, 10000000);
+      static_cast<int64_t>(page - 1) * page_size, kMaxQueryOffset);
   std::ostringstream sql;
   sql << "SELECT server_name, cpu_name, timestamp, hi, timer, net_tx, "
          "net_rx, block, sched "
@@ -962,7 +1086,9 @@ std::vector<SoftIrqDetailRecord> QueryManager::QuerySoftIrqDetail(
     rec.sched = row[i] ? std::stoll(row[i]) : 0;
     records.push_back(rec);
   }
+  const bool read_succeeded = ResultReadSucceeded(conn_, "query");
   mysql_free_result(result);
+  if (!read_succeeded) return records;
 #else
   (void)server_name;
   (void)time_range;
@@ -971,6 +1097,9 @@ std::vector<SoftIrqDetailRecord> QueryManager::QuerySoftIrqDetail(
   (void)total_count;
 #endif
 
+#ifdef ENABLE_MYSQL
+  if (query_ok) *query_ok = true;
+#endif
   return records;
 }
 

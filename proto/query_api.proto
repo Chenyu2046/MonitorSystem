@@ -7,8 +7,8 @@ import "google/protobuf/timestamp.proto";
 
 // 时间范围
 message TimeRange {
-    google.protobuf.Timestamp start_time = 1;
-    google.protobuf.Timestamp end_time = 2;
+    google.protobuf.Timestamp start_time = 1;  // 查询当前只支持整秒时间戳
+    google.protobuf.Timestamp end_time = 2;    // 非零 nanos 会被服务端拒绝
 }
 
 // 分页参数
@@ -42,12 +42,12 @@ message QueryPerformanceRequest {
 message QueryTrendRequest {
     string server_name = 1;
     TimeRange time_range = 2;
-    int32 interval_seconds = 3;  // 聚合间隔（秒），0表示不聚合
+    int32 interval_seconds = 3;  // 聚合间隔（秒）；服务端最小强制为300秒以限制结果集
 }
 
 // 异常查询请求
 message QueryAnomalyRequest {
-    string server_name = 1;       // 可选，空表示查询所有服务器
+    string server_name = 1;       // 必填，避免全历史表异常扫描
     TimeRange time_range = 2;
     float cpu_threshold = 3;      // CPU使用率阈值，默认80
     float mem_threshold = 4;      // 内存使用率阈值，默认90
@@ -64,7 +64,7 @@ message QueryScoreRankRequest {
 
 // 最新评分查询请求
 message QueryLatestScoreRequest {
-    // 无参数，返回所有服务器最新数据
+    // 无参数，最多返回 1000 台服务器的最新数据
 }
 
 // 详细数据查询请求
@@ -175,7 +175,7 @@ message QueryTrendResponse {
 // 异常查询响应
 message QueryAnomalyResponse {
     repeated AnomalyRecord anomalies = 1;
-    int32 total_count = 2;
+    int32 total_count = 2;  // 命中的原始采样行数；一行可生成多条异常记录
     int32 page = 3;
     int32 page_size = 4;
 }

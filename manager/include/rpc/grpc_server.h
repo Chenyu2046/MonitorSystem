@@ -54,6 +54,8 @@ class GrpcServerImpl : public monitor::proto::GrpcManager::Service {
  private:
   bool IsAuthorizedWorker(const ::grpc::ServerContext& context,
                           const std::string& hostname) const;
+  void PruneExpiredHostDataLocked(
+      std::chrono::system_clock::time_point now);
 
   std::mutex mtx_;
   std::unordered_map<std::string, HostData> host_data_;

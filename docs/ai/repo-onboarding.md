@@ -1,5 +1,15 @@
 # 1. Repo Overview
 
+> **生产现状修订（2026-07-15）**：本文早期的源码导览保留了初始化快照；以
+> `README.md`、`.trellis/tasks/07-14-production-p0p1-hardening/` 与当前源码为准。
+> 生产 Manager 必须启用 MySQL，并从环境变量读取数据库凭据和 mTLS 文件；Worker/
+> Manager 默认使用 mTLS。认证 hostname 同时必须位于 allowlist 与客户端证书 SAN，
+> 认证 hostname 是缓存、状态和数据库的唯一主键。入库采用有界串行事务、5 秒 MySQL
+> 超时、256 主机状态上限与 60 秒 TTL；Worker 参数可校验、支持 SIGINT/SIGTERM 停止，
+> eBPF 初始化或连续读取失败时会回退 `/proc/net/dev`。下文中描述明文 gRPC、静态 map
+> 数据竞争、每次写库新建连接、写库失败返回 OK 或没有信号处理的段落均为**已修复的历史
+> 风险**，不应作为当前行为引用。
+
 - 项目一句话定位  
   这是一个 Linux 分布式服务器性能监控系统，采用 `Worker 主动 Push -> Manager 接收/评分/入库/查询` 的运行模式。
 
@@ -93,7 +103,7 @@ sudo bash worker/scripts/load_modules.sh load
 ```
 
 - 配置文件位置  
-  这个仓库没有独立配置文件体系，配置硬编码在源码里：
+  生产数据库和 mTLS 配置从环境变量读取；源码仅保留监听地址、Worker 默认地址和默认间隔：
   - Manager gRPC 监听地址：`manager/src/main.cpp`
   - Manager MySQL 连接参数：`manager/src/main.cpp`、`manager/src/host_manager.cpp`
   - Worker 默认 manager 地址与推送间隔：`worker/src/main.cpp`
@@ -184,8 +194,8 @@ flowchart LR
 - 初始化了哪些资源  
   `MYSQL* conn_`、`initialized_`
 - 失败会怎样  
-  - 只打印警告
-  - QueryService 仍然会注册，但每个查询接口会因为 `query_manager_` 未初始化或空结果而不可用
+  - 初始化失败后 Manager 直接退出，不暴露一个无可用数据库的查询服务
+  - 已初始化后的查询会主动探测并重连；空结果仍是成功响应，断连或 SQL 失败才返回不可用
 
 ### 第 5 步：构建 `QueryServiceImpl`
 - 函数/文件位置  
@@ -211,8 +221,8 @@ flowchart LR
   - gRPC server runtime
   - Push 接收服务和 Query 查询服务都被挂上同一个 server
 - 失败会怎样  
-  - 代码没有检查 `BuildAndStart()` 返回空指针
-  - 如果端口绑定失败或服务初始化失败，存在空指针后续使用风险，待确认 gRPC 在该版本下的失败表现
+  - 检查 `BuildAndStart()` 的空指针并退出
+  - 端口绑定或服务初始化失败不会进入 `Wait()`
 
 ## 5.2 Worker: main -> ready
 
@@ -224,7 +234,7 @@ flowchart LR
 - 初始化了哪些资源  
   参数字符串和间隔整数
 - 失败会怎样  
-  `std::stoi` 对非法参数可能抛异常，当前未捕获
+  非数字尾缀、溢出或非正间隔会打印 usage 并退出，不会因 `std::stoi` 异常崩溃
 
 ### 第 2 步：构造 `MonitorPusher`
 - 函数/文件位置  
@@ -278,7 +288,7 @@ flowchart LR
 - 初始化了哪些资源  
   无新增资源
 - 失败会怎样  
-  只有被信号打断才会退出；当前没有优雅 shutdown 逻辑
+  捕获 `SIGINT`/`SIGTERM` 后调用 `pusher.Stop()`，等待推送线程退出
 
 # 6. Core Flows
 
@@ -295,7 +305,7 @@ flowchart LR
 ## 6.2 Manager 接收、评分、入库链路
 
 入口函数 -> 中间模块 -> 核心函数 -> 下游依赖 -> 返回结果  
-`GrpcServerImpl::SetMonitorInfo` -> `DataReceivedCallback` -> `HostManager::OnDataReceived` -> `CalcScore` + `WriteToMysql` -> MySQL `server_performance` / detail tables -> gRPC 返回 `Status::OK`
+`GrpcServerImpl::SetMonitorInfo` -> `DataReceivedCallback` -> `HostManager::OnDataReceived` -> `CalcScore` + `WriteToMysql` -> MySQL `server_performance` / detail tables -> 成功提交时返回 `Status::OK`，失败/过载/提交未知返回非 OK
 
 补充说明：
 - Push 服务入口：`manager/src/rpc/grpc_server.cpp:7`
@@ -341,8 +351,8 @@ flowchart LR
   - `HostManager::host_scores_`：当前在线主机分数快照，受 `mtx_` 保护
   - `GrpcServerImpl::host_data_`：按主机缓存最近一次 Push 的原始 `MonitorInfo`，受 `mtx_` 保护
   - `QueryManager::conn_`：单个 MySQL 连接，受 `mtx_` 保护
-  - `HostManager` 文件内多个 `static std::map`：保存上次采样，用于计算变化率  
-    包括 `last_perf_samples`、`last_net_samples`、`last_softirq_samples`、`last_mem_samples`、`last_disk_samples`
+  - `HostManager` 实例成员变化率缓存：保存上次采样，用于计算变化率；由有界事务锁保护，使用认证 hostname 建键并按 TTL 回收
+    包括 `last_perf_samples_`、`last_net_samples_`、`last_softirq_samples_`、`last_mem_samples_`、`last_disk_samples_`
   - Worker 各 monitor 内部缓存：
     - `CpuStatMonitor::cpu_stat_map_`
     - `CpuSoftIrqMonitor::cpu_softirqs_`
@@ -379,29 +389,29 @@ flowchart LR
 从工程风险角度看，这个仓库的主要风险不在“功能看不懂”，而在运行时和工程质量边界。
 
 - 并发风险  
-  - `GrpcServerImpl::SetMonitorInfo()` 可能被并发调用；它对 `host_data_` 加锁了，但回调 `callback_(*request)` 在锁外执行，回调内部再操作 `HostManager`，这一点本身可接受
-  - `HostManager::OnDataReceived()` 会更新多个文件级 `static std::map`，但这些 map 没有统一锁保护；如果 gRPC server 并发接收多个 worker，上述变化率缓存存在数据竞争风险
-  - `QueryManager` 通过 `mtx_` 串行化所有 MySQL 查询，线程安全较保守，但查询吞吐会被单连接瓶颈限制
+  - `GrpcServerImpl::SetMonitorInfo()` 可能被并发调用；它只在更新实时缓存时持锁，数据库回调在锁外执行
+  - `HostManager::OnDataReceived()` 的变化率基线由有界 `ingest_mtx_` 串行保护；慢事务期间最多等待 200ms，超时返回背压，Worker 在下一采样周期重试
+  - `QueryManager` 通过 `mtx_` 串行化所有 MySQL 查询，线程安全较保守，但查询吞吐仍受单连接瓶颈限制
 
 - 生命周期风险  
   - `manager/src/main.cpp` 中 `QueryServiceImpl` 持有裸指针 `QueryManager*`，当前对象生命周期由 `main` 栈帧保证；如果未来改成异步关闭或更复杂结构，需要重新审视
-  - `worker/src/main.cpp` 中 `MonitorPusher pusher` 启动线程后主线程永久 sleep，没有优雅停止逻辑，析构路径基本不可达
+  - `worker/src/main.cpp` 捕获 `SIGINT`/`SIGTERM` 并调用 `MonitorPusher::Stop()`；如果未来加入更多异步资源，仍需验证停止顺序
   - `HostManager` 后台线程只在析构时 `join`，当前也几乎不可达
 
 - 资源泄漏风险  
-  - `HostManager::WriteToMysql()` 每次上报都 `mysql_init + mysql_real_connect + mysql_close` 一次，虽然单次资源会关闭，但连接创建开销大，且失败重试策略粗糙
+  - `HostManager::WriteToMysql()` 复用单个 MySQL 连接并设置 5 秒连接/读/写超时；连接失败会关闭句柄并在下次采样重建，仍需在生产环境观测背压频率
   - `NetEbpfMonitor` 会创建 TC qdisc 并 attach ingress/egress；析构时 detach hook，但默认不删除 `clsact` qdisc，属于轻度残留风险
   - 大多数 `/dev/*` mmap 采集路径在成功路径会 `munmap + close`，这一点是好的
 
 - 错误处理风险  
   - 多个 monitor 采用静默失败，worker 仍会推送“部分字段缺失”的 `MonitorInfo`，没有统一健康告警
-  - `manager` 启动时未校验 `BuildAndStart()` 返回值
-  - `worker/src/main.cpp` 对 `std::stoi` 未捕获异常
-  - `QueryManager` 和 `HostManager::WriteToMysql()` 大量手写 SQL 字符串拼接，没有参数化，也没有转义
+  - `manager` 校验 `BuildAndStart()` 返回值，失败直接退出
+  - `worker/src/main.cpp` 捕获 `std::stoi` 异常并拒绝非法间隔
+  - `QueryManager` 和 `HostManager::WriteToMysql()` 仍使用手写 SQL，但字符串字段使用 MySQL 转义；数值遥测会拒绝 NaN/Inf
 
 - 配置风险  
-  - MySQL 用户名/密码/库名硬编码在源码中，部署切换必须重新编译或改源码
-  - 同一套 MySQL 默认值出现在 `manager/src/main.cpp` 和 `manager/src/host_manager.cpp` 两处，存在配置漂移风险
+  - MySQL 用户名/密码/库名及 mTLS 文件通过环境变量注入；缺失或非法配置会阻止进程启动
+  - 生产环境必须由部署系统维护环境变量与证书轮转，避免错误值导致启动失败
   - 是否启用 eBPF、是否启用 MySQL 由编译阶段决定，运行期不可切换
 
 - 可测试性风险  
@@ -453,10 +463,10 @@ flowchart LR
   优先 `eBPF`，依赖不满足时回退到 `/proc/net/dev`。  
   证据：`worker/CMakeLists.txt`、`worker/src/monitor/metric_collector.cpp`、`worker/src/monitor/net_ebpf_monitor.cpp`、`worker/src/monitor/net_monitor.cpp`
 
-- `manager` 的查询和写入都依赖 MySQL，但写入和查询没有共用同一个连接管理策略。  
+- `manager` 的查询和写入都依赖 MySQL，但使用各自独立的连接管理策略。
   证据：  
   - 查询侧：`QueryManager::Init()` 初始化单连接  
-  - 写入侧：`HostManager::WriteToMysql()` 每次调用单独创建和关闭连接
+  - 写入侧：`HostManager::WriteToMysql()` 复用单连接，失败时丢弃并在下次写入重建
 
 - 有一些历史代码未接入主链路：  
   `worker/src/rpc/grpc_manager_impl.cpp`、`manager/src/rpc/rpc_client.cpp`、`worker/src/monitor/user_monitor.cpp`。  

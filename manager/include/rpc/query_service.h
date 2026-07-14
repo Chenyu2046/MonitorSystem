@@ -75,8 +75,9 @@ class QueryServiceImpl : public monitor::proto::QueryService::Service {
 
  private:
   ::grpc::Status AuthorizeQuery(const ::grpc::ServerContext& context) const;
-  // 转换时间范围
-  TimeRange ConvertTimeRange(const ::monitor::proto::TimeRange& proto_range);
+  // 仅转换 protobuf 与本机 system_clock 都能表示的时间戳，避免极端秒值回绕。
+  bool ConvertTimeRange(const ::monitor::proto::TimeRange& proto_range,
+                        TimeRange* range);
 
   // 转换时间点到protobuf Timestamp
   void SetTimestamp(::google::protobuf::Timestamp* ts,

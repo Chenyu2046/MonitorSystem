@@ -258,7 +258,7 @@ sudo ./build/worker/worker manager.example.internal:50051
 
 Manager 端显示：
 ```
-Received monitor data from: server1
+Manager 已启动并等待 Worker 上报；正常成功上报不逐条打印，避免高频采样淹没错误日志。
 ```
 
 ### 5. 停止服务和卸载内核模块

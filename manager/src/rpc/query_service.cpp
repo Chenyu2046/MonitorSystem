@@ -1,21 +1,14 @@
 #include "rpc/query_service.h"
+#include "query_limits.h"
 
-#include <algorithm>
+#include <cmath>
+#include <ctime>
 #include <iostream>
 
 namespace monitor {
 
 namespace {
-constexpr int kMaxPageSize = 1000;
-constexpr int kMaxPage = 10000;
 constexpr int kMinTrendIntervalSeconds = 300;
-
-void NormalizePagination(int* page, int* page_size) {
-  if (*page < 1) *page = 1;
-  if (*page_size < 1) *page_size = 100;
-  *page = std::min(*page, kMaxPage);
-  *page_size = std::min(*page_size, kMaxPageSize);
-}
 }  // namespace
 
 QueryServiceImpl::QueryServiceImpl(
@@ -32,14 +25,30 @@ QueryServiceImpl::QueryServiceImpl(
                       "Query certificate is not authorized");
 }
 
-TimeRange QueryServiceImpl::ConvertTimeRange(
-    const ::monitor::proto::TimeRange& proto_range) {
-  TimeRange range;
-  range.start_time = std::chrono::system_clock::from_time_t(
+bool QueryServiceImpl::ConvertTimeRange(
+    const ::monitor::proto::TimeRange& proto_range, TimeRange* range) {
+  constexpr int64_t kMinTimestampSeconds = -62135596800LL;
+  constexpr int64_t kMaxTimestampSeconds = 253402300799LL;
+  const auto valid = [&](const google::protobuf::Timestamp& timestamp) {
+    if (timestamp.seconds() < kMinTimestampSeconds ||
+        timestamp.seconds() > kMaxTimestampSeconds || timestamp.nanos() != 0) {
+      return false;
+    }
+    // 当前 MySQL DATETIME 查询只保留秒精度，因此拒绝非零纳秒；protobuf 可表达
+    // 的年份范围也大于部分 C++ system_clock，需通过往返转换确认不会回绕。
+    const std::time_t seconds = static_cast<std::time_t>(timestamp.seconds());
+    if (static_cast<int64_t>(seconds) != timestamp.seconds()) return false;
+    return std::chrono::system_clock::to_time_t(
+               std::chrono::system_clock::from_time_t(seconds)) == seconds;
+  };
+  if (!range || !valid(proto_range.start_time()) || !valid(proto_range.end_time())) {
+    return false;
+  }
+  range->start_time = std::chrono::system_clock::from_time_t(
       proto_range.start_time().seconds());
-  range.end_time =
+  range->end_time =
       std::chrono::system_clock::from_time_t(proto_range.end_time().seconds());
-  return range;
+  return true;
 }
 
 void QueryServiceImpl::SetTimestamp(
@@ -65,7 +74,11 @@ void QueryServiceImpl::SetTimestamp(
   }
 
   // 验证时间范围
-  TimeRange time_range = ConvertTimeRange(request->time_range());
+  TimeRange time_range;
+  if (!ConvertTimeRange(request->time_range(), &time_range)) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "Invalid protobuf timestamp");
+  }
   if (!query_manager_->ValidateTimeRange(time_range)) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                         "Invalid time range: start_time > end_time");
@@ -73,11 +86,17 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   int total_count = 0;
+  bool query_ok = false;
   auto records = query_manager_->QueryPerformance(
-      request->server_name(), time_range, page, page_size, &total_count);
+      request->server_name(), time_range, page, page_size, &total_count,
+      &query_ok);
+  if (!query_ok) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "Performance query is unavailable");
+  }
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_records();
@@ -103,9 +122,16 @@ void QueryServiceImpl::SetTimestamp(
     proto_rec->set_rcv_rate(rec.rcv_rate);
     proto_rec->set_score(rec.score);
     proto_rec->set_cpu_percent_rate(rec.cpu_percent_rate);
+    proto_rec->set_usr_percent_rate(rec.usr_percent_rate);
+    proto_rec->set_system_percent_rate(rec.system_percent_rate);
+    proto_rec->set_io_wait_percent_rate(rec.io_wait_percent_rate);
     proto_rec->set_mem_used_percent_rate(rec.mem_used_percent_rate);
     proto_rec->set_disk_util_percent_rate(rec.disk_util_percent_rate);
     proto_rec->set_load_avg_1_rate(rec.load_avg_1_rate);
+    proto_rec->set_load_avg_3_rate(rec.load_avg_3_rate);
+    proto_rec->set_load_avg_15_rate(rec.load_avg_15_rate);
+    proto_rec->set_send_rate_rate(rec.send_rate_rate);
+    proto_rec->set_rcv_rate_rate(rec.rcv_rate_rate);
   }
 
   response->set_total_count(total_count);
@@ -127,7 +153,11 @@ void QueryServiceImpl::SetTimestamp(
                         "Query manager not initialized");
   }
 
-  TimeRange time_range = ConvertTimeRange(request->time_range());
+  TimeRange time_range;
+  if (!ConvertTimeRange(request->time_range(), &time_range)) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "Invalid protobuf timestamp");
+  }
   if (!query_manager_->ValidateTimeRange(time_range)) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                         "Invalid time range: start_time > end_time");
@@ -135,8 +165,13 @@ void QueryServiceImpl::SetTimestamp(
 
   const int interval_seconds = std::max(
       request->interval_seconds(), kMinTrendIntervalSeconds);
+  bool query_ok = false;
   auto records = query_manager_->QueryTrend(
-      request->server_name(), time_range, interval_seconds);
+      request->server_name(), time_range, interval_seconds, &query_ok);
+  if (!query_ok) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "Trend query is unavailable");
+  }
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_records();
@@ -155,9 +190,16 @@ void QueryServiceImpl::SetTimestamp(
     proto_rec->set_rcv_rate(rec.rcv_rate);
     proto_rec->set_score(rec.score);
     proto_rec->set_cpu_percent_rate(rec.cpu_percent_rate);
+    proto_rec->set_usr_percent_rate(rec.usr_percent_rate);
+    proto_rec->set_system_percent_rate(rec.system_percent_rate);
+    proto_rec->set_io_wait_percent_rate(rec.io_wait_percent_rate);
     proto_rec->set_mem_used_percent_rate(rec.mem_used_percent_rate);
     proto_rec->set_disk_util_percent_rate(rec.disk_util_percent_rate);
     proto_rec->set_load_avg_1_rate(rec.load_avg_1_rate);
+    proto_rec->set_load_avg_3_rate(rec.load_avg_3_rate);
+    proto_rec->set_load_avg_15_rate(rec.load_avg_15_rate);
+    proto_rec->set_send_rate_rate(rec.send_rate_rate);
+    proto_rec->set_rcv_rate_rate(rec.rcv_rate_rate);
   }
 
   response->set_interval_seconds(interval_seconds);
@@ -177,10 +219,29 @@ void QueryServiceImpl::SetTimestamp(
                         "Query manager not initialized");
   }
 
-  TimeRange time_range = ConvertTimeRange(request->time_range());
+  // 全局异常检索会绕开 (server_name, timestamp) 索引，导致 COUNT 和排序扫描
+  // 整个历史表；生产接口要求指定单个主机以维持索引查询路径。
+  if (request->server_name().empty()) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "server_name is required for anomaly queries");
+  }
+
+  TimeRange time_range;
+  if (!ConvertTimeRange(request->time_range(), &time_range)) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "Invalid protobuf timestamp");
+  }
   if (!query_manager_->ValidateTimeRange(time_range)) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                         "Invalid time range: start_time > end_time");
+  }
+
+  if (!std::isfinite(request->cpu_threshold()) ||
+      !std::isfinite(request->mem_threshold()) ||
+      !std::isfinite(request->disk_threshold()) ||
+      !std::isfinite(request->change_rate_threshold())) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "Anomaly thresholds must be finite");
   }
 
   AnomalyThresholds thresholds;
@@ -196,12 +257,17 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   int total_count = 0;
+  bool query_ok = false;
   auto records = query_manager_->QueryAnomaly(
       request->server_name(), time_range, thresholds, page, page_size,
-      &total_count);
+      &total_count, &query_ok);
+  if (!query_ok) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "Anomaly query is unavailable");
+  }
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_anomalies();
@@ -240,11 +306,17 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   int total_count = 0;
+  bool query_ok = false;
   auto records =
-      query_manager_->QueryScoreRank(order, page, page_size, &total_count);
+      query_manager_->QueryScoreRank(order, page, page_size, &total_count,
+                                     &query_ok);
+  if (!query_ok) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "Score rank query is unavailable");
+  }
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_servers();
@@ -281,7 +353,12 @@ void QueryServiceImpl::SetTimestamp(
   }
 
   ClusterStats stats;
-  auto records = query_manager_->QueryLatestScore(&stats);
+  bool query_ok = false;
+  auto records = query_manager_->QueryLatestScore(&stats, &query_ok);
+  if (!query_ok) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "Latest score query is unavailable");
+  }
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_servers();
@@ -322,7 +399,11 @@ void QueryServiceImpl::SetTimestamp(
                         "Query manager not initialized");
   }
 
-  TimeRange time_range = ConvertTimeRange(request->time_range());
+  TimeRange time_range;
+  if (!ConvertTimeRange(request->time_range(), &time_range)) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "Invalid protobuf timestamp");
+  }
   if (!query_manager_->ValidateTimeRange(time_range)) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                         "Invalid time range: start_time > end_time");
@@ -330,11 +411,17 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   int total_count = 0;
+  bool query_ok = false;
   auto records = query_manager_->QueryNetDetail(
-      request->server_name(), time_range, page, page_size, &total_count);
+      request->server_name(), time_range, page, page_size, &total_count,
+      &query_ok);
+  if (!query_ok) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "Network detail query is unavailable");
+  }
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_records();
@@ -370,7 +457,11 @@ void QueryServiceImpl::SetTimestamp(
                         "Query manager not initialized");
   }
 
-  TimeRange time_range = ConvertTimeRange(request->time_range());
+  TimeRange time_range;
+  if (!ConvertTimeRange(request->time_range(), &time_range)) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "Invalid protobuf timestamp");
+  }
   if (!query_manager_->ValidateTimeRange(time_range)) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                         "Invalid time range: start_time > end_time");
@@ -378,11 +469,17 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   int total_count = 0;
+  bool query_ok = false;
   auto records = query_manager_->QueryDiskDetail(
-      request->server_name(), time_range, page, page_size, &total_count);
+      request->server_name(), time_range, page, page_size, &total_count,
+      &query_ok);
+  if (!query_ok) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "Disk detail query is unavailable");
+  }
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_records();
@@ -417,7 +514,11 @@ void QueryServiceImpl::SetTimestamp(
                         "Query manager not initialized");
   }
 
-  TimeRange time_range = ConvertTimeRange(request->time_range());
+  TimeRange time_range;
+  if (!ConvertTimeRange(request->time_range(), &time_range)) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "Invalid protobuf timestamp");
+  }
   if (!query_manager_->ValidateTimeRange(time_range)) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                         "Invalid time range: start_time > end_time");
@@ -425,11 +526,17 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   int total_count = 0;
+  bool query_ok = false;
   auto records = query_manager_->QueryMemDetail(
-      request->server_name(), time_range, page, page_size, &total_count);
+      request->server_name(), time_range, page, page_size, &total_count,
+      &query_ok);
+  if (!query_ok) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "Memory detail query is unavailable");
+  }
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_records();
@@ -464,7 +571,11 @@ void QueryServiceImpl::SetTimestamp(
                         "Query manager not initialized");
   }
 
-  TimeRange time_range = ConvertTimeRange(request->time_range());
+  TimeRange time_range;
+  if (!ConvertTimeRange(request->time_range(), &time_range)) {
+    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                        "Invalid protobuf timestamp");
+  }
   if (!query_manager_->ValidateTimeRange(time_range)) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
                         "Invalid time range: start_time > end_time");
@@ -472,11 +583,17 @@ void QueryServiceImpl::SetTimestamp(
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
-  NormalizePagination(&page, &page_size);
+  NormalizeQueryPagination(&page, &page_size);
 
   int total_count = 0;
+  bool query_ok = false;
   auto records = query_manager_->QuerySoftIrqDetail(
-      request->server_name(), time_range, page, page_size, &total_count);
+      request->server_name(), time_range, page, page_size, &total_count,
+      &query_ok);
+  if (!query_ok) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "SoftIRQ detail query is unavailable");
+  }
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_records();

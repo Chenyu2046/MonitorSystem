@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <fstream>
 #include <sstream>
+#include <unordered_set>
 #include "monitor_info.grpc.pb.h"
 #include "monitor_info.pb.h"
 
@@ -69,8 +70,10 @@ static std::vector<NetStat> get_net_stats_from_proc() {
 void NetMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
     auto now = std::chrono::steady_clock::now();
     auto stats = get_net_stats_from_proc();
+    std::unordered_set<std::string> active_interfaces;
 
     for (const auto& stat : stats) {
+        active_interfaces.insert(stat.name);
         auto it = last_net_info_.find(stat.name);
         double rcv_rate = 0, rcv_packets_rate = 0, send_rate = 0, send_packets_rate = 0;
 
@@ -78,10 +81,24 @@ void NetMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
             const NetInfo& last = it->second;
             double dt = std::chrono::duration<double>(now - last.timepoint).count();
             if (dt > 0) {
-                rcv_rate = (stat.rcv_bytes - last.rcv_bytes) / 1000.0 / dt; // kB/s
-                rcv_packets_rate = (stat.rcv_packets - last.rcv_packets) / dt;
-                send_rate = (stat.snd_bytes - last.snd_bytes) / 1000.0 / dt; // kB/s
-                send_packets_rate = (stat.snd_packets - last.snd_packets) / dt;
+                // 网卡重建会让累计计数器回退；把当前值当作新计数周期起点，
+                // 避免无符号下溢生成极大速率。
+                const uint64_t rcv_bytes = stat.rcv_bytes >= last.rcv_bytes
+                                               ? stat.rcv_bytes - last.rcv_bytes
+                                               : stat.rcv_bytes;
+                const uint64_t rcv_packets = stat.rcv_packets >= last.rcv_packets
+                                                 ? stat.rcv_packets - last.rcv_packets
+                                                 : stat.rcv_packets;
+                const uint64_t snd_bytes = stat.snd_bytes >= last.snd_bytes
+                                               ? stat.snd_bytes - last.snd_bytes
+                                               : stat.snd_bytes;
+                const uint64_t snd_packets = stat.snd_packets >= last.snd_packets
+                                                 ? stat.snd_packets - last.snd_packets
+                                                 : stat.snd_packets;
+                rcv_rate = rcv_bytes / 1000.0 / dt; // kB/s
+                rcv_packets_rate = rcv_packets / dt;
+                send_rate = snd_bytes / 1000.0 / dt; // kB/s
+                send_packets_rate = snd_packets / dt;
             }
         }
 
@@ -103,6 +120,13 @@ void NetMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
             stat.name, stat.rcv_bytes, stat.rcv_packets, stat.snd_bytes, stat.snd_packets,
             stat.err_in, stat.err_out, stat.drop_in, stat.drop_out, now
         };
+    }
+    for (auto it = last_net_info_.begin(); it != last_net_info_.end();) {
+        if (active_interfaces.find(it->first) == active_interfaces.end()) {
+            it = last_net_info_.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 

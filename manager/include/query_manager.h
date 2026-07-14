@@ -62,9 +62,14 @@ struct PerformanceRecord {
   float score = 0;
   // 变化率
   float cpu_percent_rate = 0;
+  float usr_percent_rate = 0;
+  float system_percent_rate = 0;
+  float io_wait_percent_rate = 0;
   float mem_used_percent_rate = 0;
   float disk_util_percent_rate = 0;
   float load_avg_1_rate = 0;
+  float load_avg_3_rate = 0;
+  float load_avg_15_rate = 0;
   float send_rate_rate = 0;
   float rcv_rate_rate = 0;
 };
@@ -164,6 +169,8 @@ struct SoftIrqDetailRecord {
 // 查询管理器 - 封装MySQL查询逻辑
 class QueryManager {
  public:
+  // 所有 Query* 的 query_ok 表示数据库查询是否真正成功执行；空结果仍为 true，
+  // 未编译 MySQL 支持、断连或 SQL 失败则为 false，供 RPC 层区分“无数据”和“不可用”。
   QueryManager();
   ~QueryManager();
 
@@ -181,47 +188,51 @@ class QueryManager {
   std::vector<PerformanceRecord> QueryPerformance(const std::string& server_name,
                                                    const TimeRange& time_range,
                                                    int page, int page_size,
-                                                   int* total_count);
+                                                   int* total_count,
+                                                   bool* query_ok);
 
   // 变化率趋势查询（支持聚合）
   std::vector<PerformanceRecord> QueryTrend(const std::string& server_name,
                                              const TimeRange& time_range,
-                                             int interval_seconds);
+                                             int interval_seconds,
+                                             bool* query_ok);
 
   // 异常数据查询
   std::vector<AnomalyRecord> QueryAnomaly(const std::string& server_name,
                                            const TimeRange& time_range,
                                            const AnomalyThresholds& thresholds,
                                            int page, int page_size,
-                                           int* total_count);
+                                           int* total_count, bool* query_ok);
 
   // 评分排序查询
   std::vector<ServerScoreSummary> QueryScoreRank(SortOrder order, int page,
                                                   int page_size,
-                                                  int* total_count);
+                                                  int* total_count,
+                                                  bool* query_ok);
 
   // 最新评分查询
-  std::vector<ServerScoreSummary> QueryLatestScore(ClusterStats* stats);
+  std::vector<ServerScoreSummary> QueryLatestScore(ClusterStats* stats,
+                                                    bool* query_ok);
 
   // 详细数据查询
   std::vector<NetDetailRecord> QueryNetDetail(const std::string& server_name,
                                                const TimeRange& time_range,
                                                int page, int page_size,
-                                               int* total_count);
+                                               int* total_count, bool* query_ok);
 
   std::vector<DiskDetailRecord> QueryDiskDetail(const std::string& server_name,
                                                  const TimeRange& time_range,
                                                  int page, int page_size,
-                                                 int* total_count);
+                                                 int* total_count, bool* query_ok);
 
   std::vector<MemDetailRecord> QueryMemDetail(const std::string& server_name,
                                                const TimeRange& time_range,
                                                int page, int page_size,
-                                               int* total_count);
+                                               int* total_count, bool* query_ok);
 
   std::vector<SoftIrqDetailRecord> QuerySoftIrqDetail(
       const std::string& server_name, const TimeRange& time_range, int page,
-      int page_size, int* total_count);
+      int page_size, int* total_count, bool* query_ok);
 
  private:
   // 格式化时间为MySQL格式
@@ -236,9 +247,19 @@ class QueryManager {
   std::string EscapeSql(const std::string& value) const;
 
 #ifdef ENABLE_MYSQL
-  MYSQL* conn_ = nullptr;
+  bool EnsureConnectedLocked();
 #endif
-  std::mutex mtx_;
+
+#ifdef ENABLE_MYSQL
+  MYSQL* conn_ = nullptr;
+  std::string database_host_;
+  std::string database_user_;
+  std::string database_password_;
+  std::string database_name_;
+#endif
+  // 单个 MySQL 连接不允许并发使用；查询只在短暂窗口内等待此锁，防止断连重试
+  // 把同步 RPC 工作线程无限排队。
+  std::timed_mutex mtx_;
   bool initialized_ = false;
 };
 

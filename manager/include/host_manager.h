@@ -25,7 +25,13 @@ struct HostScore {
 // 管理多个远程主机的监控数据（推送模式）
 class HostManager {
  public:
-  enum class IngestResult { kPersisted, kFailed, kCommitUnknown, kResourceExhausted };
+  enum class IngestResult {
+    kPersisted,
+    kFailed,
+    kCommitUnknown,
+    kResourceExhausted,
+    kOverloaded,
+  };
   explicit HostManager(runtime_config::DatabaseConfig database_config);
   ~HostManager();
 
@@ -74,6 +80,7 @@ class HostManager {
     float mem_total = 0, mem_free = 0, mem_avail = 0;
     float net_in_rate = 0, net_out_rate = 0, score = 0;
   };
+  // 以已认证 hostname 为键限制采样状态，避免动态 IP 或异常客户端导致状态无界增长。
   static constexpr size_t kMaxTrackedHosts = 256;
   void RemoveHostState(const std::string& host_name);
   void ProcessLoop();
@@ -94,7 +101,7 @@ class HostManager {
 
   std::unordered_map<std::string, HostScore> host_scores_;
   std::mutex mtx_;
-  std::mutex ingest_mtx_;
+  std::timed_mutex ingest_mtx_;
   std::atomic<bool> running_;
   std::unique_ptr<std::thread> thread_;
   runtime_config::DatabaseConfig database_config_;

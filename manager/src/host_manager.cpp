@@ -1,8 +1,10 @@
 #include "host_manager.h"
 
+#include <cmath>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <sstream>
 
@@ -12,8 +14,28 @@
 
 namespace monitor {
 
+namespace {
+float FiniteFloatOrZero(double value) {
+  if (!std::isfinite(value) ||
+      value > std::numeric_limits<float>::max() ||
+      value < -std::numeric_limits<float>::max()) {
+    return 0;
+  }
+  return static_cast<float>(value);
+}
+}  // namespace
+
 #ifdef ENABLE_MYSQL
 namespace {
+constexpr unsigned int kMysqlTimeoutSeconds = 5;
+
+bool SetMysqlTimeouts(MYSQL* conn) {
+  return mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &kMysqlTimeoutSeconds) ==
+             0 &&
+         mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &kMysqlTimeoutSeconds) == 0 &&
+         mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &kMysqlTimeoutSeconds) == 0;
+}
+
 std::string EscapeSql(MYSQL* conn, const std::string& value) {
   std::string escaped(value.size() * 2 + 1, '\0');
   const unsigned long length = mysql_real_escape_string(
@@ -37,7 +59,7 @@ HostManager::~HostManager() {
 }
 
 void HostManager::Start() {
-  running_ = true;
+  if (running_.exchange(true)) return;
   thread_ = std::make_unique<std::thread>(&HostManager::ProcessLoop, this);
 }
 
@@ -65,7 +87,7 @@ void HostManager::ProcessLoop() {
     
     // 获取当前时间
     auto now = std::chrono::system_clock::now();
-    std::lock_guard<std::mutex> ingest_lock(ingest_mtx_);
+    std::lock_guard<std::timed_mutex> ingest_lock(ingest_mtx_);
     std::lock_guard<std::mutex> lock(mtx_);
     for (auto it = last_ingest_times_.begin(); it != last_ingest_times_.end();) {
       auto age = std::chrono::duration_cast<std::chrono::seconds>(
@@ -84,21 +106,19 @@ void HostManager::ProcessLoop() {
 // 计算主机的综合评分
 HostManager::IngestResult HostManager::OnDataReceived(
     const monitor::proto::MonitorInfo& info) {
-  std::lock_guard<std::mutex> ingest_lock(ingest_mtx_);
-  // 构建服务器唯一标识: hostname_ip
+  // 单连接事务必须串行，但给并发 Worker 一个短暂、有界的排队窗口；超过窗口才
+  // 返回背压，避免慢数据库时 gRPC 工作线程和内存无界堆积。
+  std::unique_lock<std::timed_mutex> ingest_lock(ingest_mtx_, std::defer_lock);
+  if (!ingest_lock.try_lock_for(std::chrono::milliseconds(200))) {
+    return IngestResult::kOverloaded;
+  }
+  // gRPC 已按客户端证书认证 hostname。状态和持久化只使用该 hostname；上报 IP
+  // 只是遥测属性，不能派生新的认证身份或额外占用主机配额。
   std::string host_name;
   if (info.has_host_info()) {
     const auto& host_info = info.host_info();
     std::string hostname = host_info.hostname();
-    std::string ip = host_info.ip_address();
-    
-    if (!hostname.empty() && !ip.empty()) {
-      host_name = hostname + "_" + ip;  // 格式: hostname_192.168.1.100
-    } else if (!hostname.empty()) {
-      host_name = hostname;
-    } else if (!ip.empty()) {
-      host_name = ip;
-    }
+    if (!hostname.empty()) host_name = hostname;
   }
   
   // 兼容旧版本：如果 host_info 为空，使用 name 字段
@@ -136,7 +156,8 @@ HostManager::IngestResult HostManager::OnDataReceived(
   const float previous_disk_util = had_disk_util ? disk_util_it->second : 0;
 #endif
 
-  double score = CalcScore(info);
+  const double calculated_score = CalcScore(info);
+  double score = std::isfinite(calculated_score) ? calculated_score : 0;
   auto now = std::chrono::system_clock::now();
 
   // 网络速率计算
@@ -145,6 +166,10 @@ HostManager::IngestResult HostManager::OnDataReceived(
     net_in_rate += net.rcv_rate();
     net_out_rate += net.send_rate();
   }
+  // 多接口有限 float 求和后也可能超过 float 表示范围；后续状态和 SQL 使用
+  // 统一的受限值，避免窄化得到 Inf。
+  net_in_rate = FiniteFloatOrZero(net_in_rate);
+  net_out_rate = FiniteFloatOrZero(net_out_rate);
 
   // 当前采样
   PerfSample curr;
@@ -170,15 +195,17 @@ HostManager::IngestResult HostManager::OnDataReceived(
     curr.mem_free = info.mem_info().free();
     curr.mem_avail = info.mem_info().avail();
   }
-  curr.net_in_rate = net_in_rate;
-  curr.net_out_rate = net_out_rate;
+  curr.net_in_rate = FiniteFloatOrZero(net_in_rate);
+  curr.net_out_rate = FiniteFloatOrZero(net_out_rate);
   curr.score = score;
 
   // 变化率计算
   PerfSample last = last_perf_samples_[host_name];
   auto rate = [](float now_val, float last_val) -> float {
     if (last_val == 0) return 0;
-    return (now_val - last_val) / last_val;
+    const float value = (now_val - last_val) / last_val;
+    // 即使输入均为有限数，极端量级相除也可能溢出；写库前将派生异常值归零。
+    return std::isfinite(value) ? value : 0;
   };
 
   float cpu_percent_rate = rate(curr.cpu_percent, last.cpu_percent);
@@ -349,6 +376,11 @@ HostManager::IngestResult HostManager::WriteToMysql(
       std::cerr << "mysql_init failed\n";
       return IngestResult::kFailed;
     }
+    if (!SetMysqlTimeouts(conn)) {
+      std::cerr << "Failed to configure MySQL timeouts\n";
+      mysql_close(conn);
+      return IngestResult::kFailed;
+    }
     if (!mysql_real_connect(conn, database_config_.host.c_str(),
                             database_config_.user.c_str(),
                             database_config_.password.c_str(),
@@ -382,7 +414,8 @@ HostManager::IngestResult HostManager::WriteToMysql(
   const auto& info = host_score.info;
   auto rate = [](float now_val, float last_val) -> float {
     if (last_val == 0) return 0;
-    return (now_val - last_val) / last_val;
+    const float value = (now_val - last_val) / last_val;
+    return std::isfinite(value) ? value : 0;
   };
 
   // ========== 1. 写入主表 server_performance ==========
@@ -400,10 +433,14 @@ HostManager::IngestResult HostManager::WriteToMysql(
       avail = info.mem_info().avail();
       mem_used_percent = info.mem_info().used_percent();
     }
+    double send_rate_sum = 0;
+    double rcv_rate_sum = 0;
     for (const auto& net : info.net_info()) {
-      send_rate += net.send_rate();
-      rcv_rate += net.rcv_rate();
+      send_rate_sum += net.send_rate();
+      rcv_rate_sum += net.rcv_rate();
     }
+    send_rate = FiniteFloatOrZero(send_rate_sum);
+    rcv_rate = FiniteFloatOrZero(rcv_rate_sum);
     if (info.cpu_stat_size() > 0) {
       const auto& cpu = info.cpu_stat(0);
       cpu_percent = cpu.cpu_percent();
@@ -429,7 +466,10 @@ HostManager::IngestResult HostManager::WriteToMysql(
     // 计算磁盘利用率变化率
     float disk_util_percent_rate = 0;
     if (last_disk_util_samples_.count(host_name) && last_disk_util_samples_[host_name] != 0) {
-      disk_util_percent_rate = (disk_util_percent - last_disk_util_samples_[host_name]) / last_disk_util_samples_[host_name];
+      disk_util_percent_rate = FiniteFloatOrZero(
+          (static_cast<double>(disk_util_percent) -
+           last_disk_util_samples_[host_name]) /
+          last_disk_util_samples_[host_name]);
     }
     last_disk_util_samples_[host_name] = disk_util_percent;
 
@@ -484,7 +524,9 @@ HostManager::IngestResult HostManager::WriteToMysql(
     
     // 计算错误/丢弃变化率
     auto rate_u64 = [](uint64_t now_val, uint64_t last_val) -> float {
-      if (last_val == 0) return 0;
+      // 网卡重置、驱动恢复或计数器回卷时，当前累计值会小于基线；该轮只刷新
+      // 基线，不能做无符号相减，否则会把极大伪变化率持久化。
+      if (last_val == 0 || now_val < last_val) return 0;
       return static_cast<float>(now_val - last_val) / static_cast<float>(last_val);
     };
     
