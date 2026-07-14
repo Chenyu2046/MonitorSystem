@@ -60,6 +60,7 @@ set(WORKER_SOURCES
     src/monitor/cpu_softirq_monitor.cpp
     src/monitor/cpu_stat_monitor.cpp
     src/monitor/mem_monitor.cpp
+    src/monitor/net_monitor.cpp
     src/monitor/disk_monitor.cpp
     src/monitor/host_info_monitor.cpp
     src/rpc/monitor_pusher.cpp
@@ -69,8 +70,6 @@ set(WORKER_SOURCES
 # 根据 eBPF 支持选择网络监控实现
 if(EBPF_FOUND)
     list(APPEND WORKER_SOURCES src/monitor/net_ebpf_monitor.cpp)
-else()
-    list(APPEND WORKER_SOURCES src/monitor/net_monitor.cpp)
 endif()
 
 # 可执行文件: worker (工作者服务器)

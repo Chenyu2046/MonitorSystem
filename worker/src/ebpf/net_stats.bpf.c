@@ -35,19 +35,20 @@ struct net_stats {
 };
 
 /* 
- * BPF Hash Map: key = ifindex (网卡索引), value = net_stats
- * 使用 ifindex 作为 key，用户空间通过 if_indextoname() 转换为网卡名
+ * Per-CPU BPF Hash Map: key = ifindex (网卡索引), value = net_stats
+ * 每个 CPU 维护自己的计数，避免热点网卡在高 PPS 场景竞争同一份 value。
+ * 用户空间读取后负责归并所有 CPU 的统计值。
  */
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(type, BPF_MAP_TYPE_PERCPU_HASH);
     __uint(max_entries, 64);        /* 最多支持 64 个网卡 */
     __type(key, __u32);             /* ifindex */
     __type(value, struct net_stats);
 } net_stats_map SEC(".maps");
 
 /*
- * 更新网卡统计数据
- * 使用原子操作确保多 CPU 并发安全
+ * 更新当前 CPU 上的网卡统计数据。
+ * Per-CPU map 为每个 CPU 提供独立 value，不需要跨 CPU 原子操作。
  */
 static __always_inline void update_stats(__u32 ifindex, __u32 len, bool is_rx)
 {
@@ -69,13 +70,13 @@ static __always_inline void update_stats(__u32 ifindex, __u32 len, bool is_rx)
         }
         bpf_map_update_elem(&net_stats_map, &ifindex, &new_stats, BPF_ANY);
     } else {
-        /* 使用原子操作更新已有统计 */
+        /* 更新当前 CPU 的本地计数 */
         if (is_rx) {
-            __sync_fetch_and_add(&stats->rcv_bytes, len);
-            __sync_fetch_and_add(&stats->rcv_packets, 1);
+            stats->rcv_bytes += len;
+            stats->rcv_packets += 1;
         } else {
-            __sync_fetch_and_add(&stats->snd_bytes, len);
-            __sync_fetch_and_add(&stats->snd_packets, 1);
+            stats->snd_bytes += len;
+            stats->snd_packets += 1;
         }
     }
 }
