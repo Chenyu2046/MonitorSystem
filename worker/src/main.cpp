@@ -1,4 +1,6 @@
+#include <csignal>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <chrono>
@@ -8,6 +10,10 @@
 
 constexpr char kDefaultManagerAddress[] = "localhost:50051";
 constexpr int kDefaultPushInterval = 10;  // 秒
+
+volatile std::sig_atomic_t g_stop_requested = 0;
+
+void RequestStop(int) { g_stop_requested = 1; }
 
 void PrintUsage(const char* program) {
   std::cout << "Usage: " << program << " <manager_address> [interval_seconds]"
@@ -26,9 +32,17 @@ int main(int argc, char* argv[]) {
     manager_address = argv[1];
   }
   if (argc > 2) {
-    interval_seconds = std::stoi(argv[2]);
-    if (interval_seconds <= 0) {
-      interval_seconds = kDefaultPushInterval;
+    try {
+      const std::string interval_arg = argv[2];
+      size_t parsed = 0;
+      interval_seconds = std::stoi(interval_arg, &parsed);
+      if (interval_seconds <= 0 || parsed != interval_arg.size()) {
+        throw std::invalid_argument("invalid interval");
+      }
+    } catch (const std::exception&) {
+      std::cerr << "Invalid interval_seconds: " << argv[2] << std::endl;
+      PrintUsage(argv[0]);
+      return 1;
     }
   }
 
@@ -47,16 +61,20 @@ int main(int argc, char* argv[]) {
               << std::endl;
   }
 
+  std::signal(SIGINT, RequestStop);
+  std::signal(SIGTERM, RequestStop);
+
   // 创建并启动推送器
   monitor::MonitorPusher pusher(manager_address, std::move(credentials),
                                  interval_seconds);
   pusher.Start();
 
-  // 主线程保持运行
-  std::cout << "Press Ctrl+C to exit." << std::endl;
-  while (true) {
-    std::this_thread::sleep_for(std::chrono::seconds(60));
+  while (!g_stop_requested) {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
   }
+
+  pusher.Stop();
+  std::cout << "Monitor Server stopped." << std::endl;
 
   return 0;
 }

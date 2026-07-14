@@ -221,69 +221,6 @@ HostManager::IngestResult HostManager::OnDataReceived(
     host_scores_[host_name] = HostScore{info, score, now};
   }
 
-  std::cout << "\n================== Received Data ==================" << std::endl;
-  std::cout << "Server: " << host_name << ", Score: " << score << std::endl;
-  
-  // CPU 详细信息
-  std::cout << "\n--- CPU ---" << std::endl;
-  std::cout << "  Usage: " << curr.cpu_percent << "%, "
-            << "User: " << curr.usr_percent << "%, "
-            << "System: " << curr.system_percent << "%" << std::endl;
-  std::cout << "  Nice: " << curr.nice_percent << "%, "
-            << "Idle: " << curr.idle_percent << "%, "
-            << "IOWait: " << curr.io_wait_percent << "%" << std::endl;
-  std::cout << "  IRQ: " << curr.irq_percent << "%, "
-            << "SoftIRQ: " << curr.soft_irq_percent << "%" << std::endl;
-  std::cout << "  Load: " << curr.load_avg_1 << "/" << curr.load_avg_3 << "/" << curr.load_avg_15 << std::endl;
-  
-  // 内存详细信息
-  std::cout << "\n--- Memory ---" << std::endl;
-  std::cout << "  Used: " << curr.mem_used_percent << "%, "
-            << "Total: " << curr.mem_total << " MB" << std::endl;
-  std::cout << "  Free: " << curr.mem_free << " MB, "
-            << "Avail: " << curr.mem_avail << " MB" << std::endl;
-  
-  // 网络详细信息
-  std::cout << "\n--- Network ---" << std::endl;
-  std::cout << "  In: " << net_in_rate << " kB/s, "
-            << "Out: " << net_out_rate << " kB/s" << std::endl;
-  for (int i = 0; i < info.net_info_size(); ++i) {
-    const auto& net = info.net_info(i);
-    std::cout << "  [" << net.name() << "] Recv: " << net.rcv_rate() << " kB/s, "
-              << "Send: " << net.send_rate() << " kB/s, "
-              << "Drops: " << net.drop_in() << "/" << net.drop_out() << std::endl;
-  }
-  
-  // 磁盘详细信息
-  std::cout << "\n--- Disk ---" << std::endl;
-  float max_disk_util = 0;
-  for (int i = 0; i < info.disk_info_size(); ++i) {
-    const auto& disk = info.disk_info(i);
-    std::cout << "  [" << disk.name() << "] "
-              << "Read: " << disk.read_bytes_per_sec() / 1024.0 << " KB/s, "
-              << "Write: " << disk.write_bytes_per_sec() / 1024.0 << " KB/s, "
-              << "Util: " << disk.util_percent() << "%" << std::endl;
-    if (disk.util_percent() > max_disk_util) max_disk_util = disk.util_percent();
-  }
-  if (info.disk_info_size() == 0) {
-    std::cout << "  No disk data" << std::endl;
-  }
-  
-  // 软中断信息
-  std::cout << "\n--- SoftIRQ ---" << std::endl;
-  std::cout << "  CPU cores with softirq data: " << info.soft_irq_size() << std::endl;
-  
-  // 变化率信息
-  std::cout << "\n--- Change Rates ---" << std::endl;
-  std::cout << "  CPU: " << cpu_percent_rate * 100 << "%, "
-            << "Mem: " << mem_used_percent_rate * 100 << "%, "
-            << "Load: " << load_avg_1_rate * 100 << "%" << std::endl;
-  std::cout << "  NetIn: " << net_in_rate_rate * 100 << "%, "
-            << "NetOut: " << net_out_rate_rate * 100 << "%" << std::endl;
-  
-  std::cout << "\n--- Database ---" << std::endl;
-  std::cout << "  Data saved to MySQL (monitor_db)" << std::endl;
-  std::cout << "====================================================\n" << std::endl;
   return IngestResult::kPersisted;
 }
 

@@ -1,0 +1,17 @@
+{
+  "id": "p1-worker-runtime-boundaries",
+  "name": "p1-worker-runtime-boundaries",
+  "title": "P1 worker runtime boundaries",
+  "description": "Harden Worker startup/shutdown and remove per-sample metric log floods.",
+  "status": "completed",
+  "package": "worker",
+  "priority": "P1",
+  "creator": "chenyu",
+  "assignee": "chenyu",
+  "createdAt": "2026-07-14",
+  "completedAt": "2026-07-14",
+  "base_branch": "codex/production-hardening",
+  "parent": "07-14-production-p0p1-hardening",
+  "relatedFiles": ["worker/src/main.cpp", "worker/src/rpc/monitor_pusher.cpp", "manager/src/host_manager.cpp"],
+  "notes": "Static runtime-boundary checks and final independent CR passed. A real Linux shutdown test remains deployment-environment verification."
+}
