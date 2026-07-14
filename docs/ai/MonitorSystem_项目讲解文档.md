@@ -1027,25 +1027,26 @@ CPU / MEM / LOAD / DISK / NET
 
 ## 9.1 安全性不足
 
-当前 gRPC 使用 insecure credentials，没有 TLS/mTLS。
+截至 2026-07 的生产加固版本，默认使用 mTLS，Manager 会校验客户端证书并按 SAN
+allowlist 区分 Worker 上报与查询客户端；数据库连接信息由运行时环境变量注入。仅设置
+`MONITOR_ALLOW_INSECURE_GRPC=1` 的本机联调才会启用明文通道。
 
 风险：
 
 ```text
-1. 数据明文传输
-2. Worker 身份不可校验
-3. 伪造 Worker 上报恶意指标
-4. Manager 查询接口缺少权限控制
+1. 部署侧错误设置本机明文逃生变量会关闭 TLS
+2. CA、证书轮换和吊销仍需要部署平台负责
+3. Worker SAN 与主机名映射需要由证书签发流程持续维护
+4. 请求大小、速率限制和审计日志仍待后续补齐
 ```
 
 优化：
 
 ```text
-1. gRPC TLS
-2. mTLS 双向认证
-3. Worker token / certificate
-4. 查询接口权限校验
-5. 请求签名和时间戳防重放
+1. 在 CI/部署单元禁止 `MONITOR_ALLOW_INSECURE_GRPC=1`
+2. 自动化证书轮换和吊销
+3. 请求大小、速率限制和审计日志
+4. 防重放标识与时钟偏差监控
 ```
 
 ---
@@ -1285,8 +1286,8 @@ Push 模型下 Worker 主动上报，Manager 不需要主动探测所有机器�
 主要短板有：
 
 ```text
-1. gRPC 没有 TLS/mTLS 和鉴权
-2. MySQL 配置硬编码
+1. mTLS 与 SAN 授权已落地，但证书轮换/吊销和部署侧禁用明文逃生仍待完善
+2. MySQL 凭据已改为运行时环境变量注入
 3. 写库是同步字符串拼接 SQL
 4. 没有连接池、批量写入和 prepared statement
 5. Worker 上报失败没有本地缓冲和重试补偿
@@ -1306,7 +1307,7 @@ P0: gRPC 增加 deadline，避免请求无限阻塞
 P0: MySQL prepared statement，避免字符串拼接 SQL
 P1: Manager 写库异步化，引入队列和连接池
 P1: Worker 增加失败重试、本地缓冲和指数退避
-P1: gRPC TLS/mTLS，增加 Worker 身份认证
+P1: 证书自动轮换、吊销和部署侧禁止明文逃生
 P2: 存储层替换为时序数据库
 P2: eBPF 扩展 TCP RTT、重传、丢包、连接维度指标
 P2: 增加告警规则、异常收敛和可视化面板
@@ -1456,4 +1457,3 @@ manager/sql/init_server_performance.sql
 > **基于 C++/gRPC/eBPF 的 Linux 分布式性能监控系统原型。重点展示 Linux 底层指标采集、Worker-Agent 分布式上报、Manager 健康评分和查询服务能力。**
 
 如果面试目标是 C++ 后端 / 基础架构 / Linux 系统方向，这个项目值得放；但一定要准备好工程短板和优化方案，主动把它讲成“系统方向项目 + 可生产化演进路线”，而不是硬吹成成熟监控平台。
-

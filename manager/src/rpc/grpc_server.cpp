@@ -4,6 +4,18 @@
 
 namespace monitor {
 
+GrpcServerImpl::GrpcServerImpl(runtime_config::AuthorizationConfig authorization)
+    : authorization_(std::move(authorization)) {}
+
+bool GrpcServerImpl::IsAuthorizedWorker(
+    const ::grpc::ServerContext& context, const std::string& hostname) const {
+  if (authorization_.allow_insecure) return true;
+  if (!runtime_config::PeerHasAllowedSan(context, authorization_.worker_sans)) {
+    return false;
+  }
+  return runtime_config::PeerHasAllowedSan(context, {hostname});
+}
+
 ::grpc::Status GrpcServerImpl::SetMonitorInfo(
     ::grpc::ServerContext* context,
     const ::monitor::proto::MonitorInfo* request,
@@ -12,13 +24,29 @@ namespace monitor {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Empty request");
   }
 
-  std::string hostname = request->name();
-  if (hostname.empty() && request->has_host_info()) {
+  std::string hostname;
+  if (request->has_host_info()) {
     hostname = request->host_info().hostname();
+    if (hostname.empty() && !request->host_info().ip_address().empty()) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "Host info with an IP address requires a hostname");
+    }
+    if (!hostname.empty() && !request->name().empty() &&
+        request->name() != hostname) {
+      return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                          "name and host_info.hostname must match");
+    }
+  }
+  if (hostname.empty()) {
+    hostname = request->name();
   }
 
   if (hostname.empty()) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Missing hostname");
+  }
+  if (!IsAuthorizedWorker(*context, hostname)) {
+    return grpc::Status(grpc::StatusCode::PERMISSION_DENIED,
+                        "Worker certificate is not authorized for this host");
   }
 
   // 存储数据
@@ -41,6 +69,12 @@ namespace monitor {
     ::grpc::ServerContext* context,
     const ::google::protobuf::Empty* request,
     ::monitor::proto::MonitorInfo* response) {
+  if (!authorization_.allow_insecure &&
+      !runtime_config::PeerHasAllowedSan(*context, authorization_.query_sans)) {
+    return grpc::Status(grpc::StatusCode::PERMISSION_DENIED,
+                        "Query certificate is not authorized");
+  }
+
   // 返回第一个主机的数据（或空）
   std::lock_guard<std::mutex> lock(mtx_);
   if (!host_data_.empty()) {

@@ -29,6 +29,7 @@ add_executable(manager ${MANAGER_SOURCES})
 
 target_include_directories(manager PUBLIC
     ${PROJECT_SOURCE_DIR}/manager/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 
 # 基础链接库

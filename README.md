@@ -113,12 +113,10 @@ sudo mysql -u root -p
 ```
 
 ```sql
--- 创建数据库
+-- 创建数据库和最小权限账户；密码由部署密钥系统生成，不要使用示例弱密码。
 CREATE DATABASE monitor_db;
-
--- 创建用户并授权
-CREATE USER 'monitor'@'localhost' IDENTIFIED BY 'monitor123';
-GRANT ALL PRIVILEGES ON monitor_db.* TO 'monitor'@'localhost';
+CREATE USER 'monitor'@'localhost' IDENTIFIED BY '<generated-secret>';
+GRANT SELECT, INSERT ON monitor_db.* TO 'monitor'@'localhost';
 FLUSH PRIVILEGES;
 EXIT;
 ```
@@ -126,22 +124,37 @@ EXIT;
 ### 3. 导入表结构
 
 ```bash
-mysql -u monitor -pmonitor123 monitor_db < manager/sql/init_server_performance.sql
+mysql -u monitor -p monitor_db < manager/sql/init_server_performance.sql
 ```
 
-### 4. 修改代码中的数据库配置
+### 4. 生产运行时配置（必需）
 
-在以下两个文件中修改数据库连接信息：
+Manager 和 Worker 默认使用 mTLS，且没有证书或数据库凭据会直接退出。将下列
+变量交给 systemd、Kubernetes Secret 或等价的密钥注入机制；不要写入代码、镜像或
+shell 历史。
 
-**文件**: `manager/src/main.cpp` 和 `manager/src/host_manager.cpp`
+```bash
+# Manager：数据库和 mTLS 服务端证书（CA 必须信任 Worker 客户端证书）
+export MONITOR_DB_HOST='127.0.0.1'
+export MONITOR_DB_USER='monitor'
+export MONITOR_DB_PASSWORD='<generated-secret>'
+export MONITOR_DB_NAME='monitor_db'
+export MONITOR_GRPC_TLS_CA_FILE='/etc/monitor/tls/ca.pem'
+export MONITOR_GRPC_TLS_CERT_FILE='/etc/monitor/tls/manager.pem'
+export MONITOR_GRPC_TLS_KEY_FILE='/etc/monitor/tls/manager-key.pem'
+export MONITOR_WORKER_SAN_ALLOWLIST='worker-a.example.internal,worker-b.example.internal'
+export MONITOR_QUERY_SAN_ALLOWLIST='monitor-query.example.internal'
 
-```cpp
-// 修改为你的 MySQL 配置
-const char* host = "localhost";
-const char* user = "monitor";        // 你的用户名
-const char* password = "monitor123"; // 你的密码
-const char* database = "monitor_db";
+# Worker：同一受信任 CA、Worker 客户端证书和私钥
+export MONITOR_GRPC_TLS_CA_FILE='/etc/monitor/tls/ca.pem'
+export MONITOR_GRPC_TLS_CERT_FILE='/etc/monitor/tls/worker.pem'
+export MONITOR_GRPC_TLS_KEY_FILE='/etc/monitor/tls/worker-key.pem'
 ```
+
+Manager 证书的 SAN 必须包含 Worker 使用的 Manager 主机名或 IP；Worker 证书必须由
+Manager 配置的 CA 信任，且其 SAN 必须同时位于 Worker allowlist 并等于上报的主机名。
+查询客户端必须使用位于 Query allowlist 的独立证书。仅限本机临时联调时，才可显式设置
+`MONITOR_ALLOW_INSECURE_GRPC=1`。生产部署禁止设置该变量。
 
 ### 数据库表说明
 
@@ -182,6 +195,7 @@ make
 ### 1. 启动 Manager（管理端服务器）
 
 ```bash
+# 先按上节注入 Manager 的数据库与 mTLS 变量
 ./build/manager/manager
 ```
 
@@ -205,11 +219,11 @@ ls /dev/cpu_stat_monitor /dev/cpu_softirq_monitor
 ### 3. 启动 Worker（被监控机器）
 
 ```bash
-# 需要 sudo 权限以加载 eBPF 程序
-sudo ./build/worker/worker <manager_ip>:50051
+# 先按上节注入 Worker 的 mTLS 变量；需要 sudo 权限以加载 eBPF 程序
+sudo ./build/worker/worker <manager_dns_or_ip>:50051
 
 # 示例
-sudo ./build/worker/worker 192.168.1.100:50051
+sudo ./build/worker/worker manager.example.internal:50051
 ```
 
 ### 4. 验证运行

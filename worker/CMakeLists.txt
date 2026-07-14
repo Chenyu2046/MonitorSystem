@@ -77,6 +77,7 @@ add_executable(worker ${WORKER_SOURCES})
 
 target_include_directories(worker PUBLIC
     ${PROJECT_SOURCE_DIR}/worker/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 
 # 基础链接库

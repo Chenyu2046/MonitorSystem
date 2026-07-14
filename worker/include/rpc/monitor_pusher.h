@@ -27,6 +27,7 @@ class MonitorPusher {
    * @param interval_seconds 推送间隔（秒），默认 10 秒
    */
   explicit MonitorPusher(const std::string& manager_address,
+                         std::shared_ptr<grpc::ChannelCredentials> credentials,
                          int interval_seconds = 10);
   ~MonitorPusher();
 

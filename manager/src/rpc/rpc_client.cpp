@@ -1,13 +1,20 @@
 #include "rpc/rpc_client.h"
 
+#include "runtime_config.h"
+
 #include <iostream>
 
 namespace monitor {
 
 RpcClient::RpcClient(const std::string& host_address)
     : host_address_(host_address) {
-  auto channel =
-      grpc::CreateChannel(host_address, grpc::InsecureChannelCredentials());
+  std::string error;
+  auto credentials = runtime_config::BuildClientCredentials(&error);
+  if (!credentials) {
+    std::cerr << error << std::endl;
+    return;
+  }
+  auto channel = grpc::CreateChannel(host_address, std::move(credentials));
   stub_ptr_ = monitor::proto::GrpcManager::NewStub(channel);
 }
 
@@ -16,7 +23,7 @@ RpcClient::~RpcClient() {}
 // SetMonitorInfo 已移除 - Server 端现在本地采集数据
 
 bool RpcClient::GetMonitorInfo(monitor::proto::MonitorInfo* monitor_info) {
-  if (!monitor_info) {
+  if (!monitor_info || !stub_ptr_) {
     return false;
   }
 

@@ -4,6 +4,7 @@
 #include <chrono>
 
 #include "rpc/monitor_pusher.h"
+#include "runtime_config.h"
 
 constexpr char kDefaultManagerAddress[] = "localhost:50051";
 constexpr int kDefaultPushInterval = 10;  // 秒
@@ -35,8 +36,20 @@ int main(int argc, char* argv[]) {
   std::cout << "Manager address: " << manager_address << std::endl;
   std::cout << "Push interval: " << interval_seconds << " seconds" << std::endl;
 
+  std::string error;
+  auto credentials = monitor::runtime_config::BuildClientCredentials(&error);
+  if (!credentials) {
+    std::cerr << error << std::endl;
+    return 1;
+  }
+  if (monitor::runtime_config::AllowInsecureGrpc()) {
+    std::cerr << "WARNING: MONITOR_ALLOW_INSECURE_GRPC=1 is for local development only"
+              << std::endl;
+  }
+
   // 创建并启动推送器
-  monitor::MonitorPusher pusher(manager_address, interval_seconds);
+  monitor::MonitorPusher pusher(manager_address, std::move(credentials),
+                                 interval_seconds);
   pusher.Start();
 
   // 主线程保持运行

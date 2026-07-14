@@ -4,8 +4,19 @@
 
 namespace monitor {
 
-QueryServiceImpl::QueryServiceImpl(QueryManager* query_manager)
-    : query_manager_(query_manager) {}
+QueryServiceImpl::QueryServiceImpl(
+    QueryManager* query_manager, runtime_config::AuthorizationConfig authorization)
+    : query_manager_(query_manager), authorization_(std::move(authorization)) {}
+
+::grpc::Status QueryServiceImpl::AuthorizeQuery(
+    const ::grpc::ServerContext& context) const {
+  if (authorization_.allow_insecure ||
+      runtime_config::PeerHasAllowedSan(context, authorization_.query_sans)) {
+    return grpc::Status::OK;
+  }
+  return grpc::Status(grpc::StatusCode::PERMISSION_DENIED,
+                      "Query certificate is not authorized");
+}
 
 TimeRange QueryServiceImpl::ConvertTimeRange(
     const ::monitor::proto::TimeRange& proto_range) {
@@ -31,7 +42,8 @@ void QueryServiceImpl::SetTimestamp(
     ::grpc::ServerContext* context,
     const ::monitor::proto::QueryPerformanceRequest* request,
     ::monitor::proto::QueryPerformanceResponse* response) {
-  (void)context;
+  const auto auth_status = AuthorizeQuery(*context);
+  if (!auth_status.ok()) return auth_status;
 
   if (!query_manager_) {
     return grpc::Status(grpc::StatusCode::UNAVAILABLE,
@@ -94,7 +106,8 @@ void QueryServiceImpl::SetTimestamp(
     ::grpc::ServerContext* context,
     const ::monitor::proto::QueryTrendRequest* request,
     ::monitor::proto::QueryTrendResponse* response) {
-  (void)context;
+  const auto auth_status = AuthorizeQuery(*context);
+  if (!auth_status.ok()) return auth_status;
 
   if (!query_manager_) {
     return grpc::Status(grpc::StatusCode::UNAVAILABLE,
@@ -141,7 +154,8 @@ void QueryServiceImpl::SetTimestamp(
     ::grpc::ServerContext* context,
     const ::monitor::proto::QueryAnomalyRequest* request,
     ::monitor::proto::QueryAnomalyResponse* response) {
-  (void)context;
+  const auto auth_status = AuthorizeQuery(*context);
+  if (!auth_status.ok()) return auth_status;
 
   if (!query_manager_) {
     return grpc::Status(grpc::StatusCode::UNAVAILABLE,
@@ -198,7 +212,8 @@ void QueryServiceImpl::SetTimestamp(
     ::grpc::ServerContext* context,
     const ::monitor::proto::QueryScoreRankRequest* request,
     ::monitor::proto::QueryScoreRankResponse* response) {
-  (void)context;
+  const auto auth_status = AuthorizeQuery(*context);
+  if (!auth_status.ok()) return auth_status;
 
   if (!query_manager_) {
     return grpc::Status(grpc::StatusCode::UNAVAILABLE,
@@ -243,7 +258,8 @@ void QueryServiceImpl::SetTimestamp(
     ::grpc::ServerContext* context,
     const ::monitor::proto::QueryLatestScoreRequest* request,
     ::monitor::proto::QueryLatestScoreResponse* response) {
-  (void)context;
+  const auto auth_status = AuthorizeQuery(*context);
+  if (!auth_status.ok()) return auth_status;
   (void)request;
 
   if (!query_manager_) {
@@ -285,7 +301,8 @@ void QueryServiceImpl::SetTimestamp(
     ::grpc::ServerContext* context,
     const ::monitor::proto::QueryDetailRequest* request,
     ::monitor::proto::QueryNetDetailResponse* response) {
-  (void)context;
+  const auto auth_status = AuthorizeQuery(*context);
+  if (!auth_status.ok()) return auth_status;
 
   if (!query_manager_) {
     return grpc::Status(grpc::StatusCode::UNAVAILABLE,
@@ -333,7 +350,8 @@ void QueryServiceImpl::SetTimestamp(
     ::grpc::ServerContext* context,
     const ::monitor::proto::QueryDetailRequest* request,
     ::monitor::proto::QueryDiskDetailResponse* response) {
-  (void)context;
+  const auto auth_status = AuthorizeQuery(*context);
+  if (!auth_status.ok()) return auth_status;
 
   if (!query_manager_) {
     return grpc::Status(grpc::StatusCode::UNAVAILABLE,
@@ -380,7 +398,8 @@ void QueryServiceImpl::SetTimestamp(
     ::grpc::ServerContext* context,
     const ::monitor::proto::QueryDetailRequest* request,
     ::monitor::proto::QueryMemDetailResponse* response) {
-  (void)context;
+  const auto auth_status = AuthorizeQuery(*context);
+  if (!auth_status.ok()) return auth_status;
 
   if (!query_manager_) {
     return grpc::Status(grpc::StatusCode::UNAVAILABLE,
@@ -427,7 +446,8 @@ void QueryServiceImpl::SetTimestamp(
     ::grpc::ServerContext* context,
     const ::monitor::proto::QueryDetailRequest* request,
     ::monitor::proto::QuerySoftIrqDetailResponse* response) {
-  (void)context;
+  const auto auth_status = AuthorizeQuery(*context);
+  if (!auth_status.ok()) return auth_status;
 
   if (!query_manager_) {
     return grpc::Status(grpc::StatusCode::UNAVAILABLE,

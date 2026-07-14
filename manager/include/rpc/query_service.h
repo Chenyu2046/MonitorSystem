@@ -8,13 +8,15 @@
 #include "query_api.grpc.pb.h"
 #include "query_api.pb.h"
 #include "query_manager.h"
+#include "runtime_config.h"
 
 namespace monitor {
 
 // gRPC 查询服务实现类
 class QueryServiceImpl : public monitor::proto::QueryService::Service {
  public:
-  explicit QueryServiceImpl(QueryManager* query_manager);
+  QueryServiceImpl(QueryManager* query_manager,
+                   runtime_config::AuthorizationConfig authorization);
   virtual ~QueryServiceImpl() = default;
 
   // 时间段性能数据查询
@@ -72,6 +74,7 @@ class QueryServiceImpl : public monitor::proto::QueryService::Service {
       ::monitor::proto::QuerySoftIrqDetailResponse* response) override;
 
  private:
+  ::grpc::Status AuthorizeQuery(const ::grpc::ServerContext& context) const;
   // 转换时间范围
   TimeRange ConvertTimeRange(const ::monitor::proto::TimeRange& proto_range);
 
@@ -80,6 +83,7 @@ class QueryServiceImpl : public monitor::proto::QueryService::Service {
                     const std::chrono::system_clock::time_point& tp);
 
   QueryManager* query_manager_;
+  runtime_config::AuthorizationConfig authorization_;
 };
 
 }  // namespace monitor

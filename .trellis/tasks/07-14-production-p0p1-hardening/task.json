@@ -1,0 +1,28 @@
+{
+  "id": "production-p0p1-hardening",
+  "name": "production-p0p1-hardening",
+  "title": "Production P0/P1 hardening",
+  "description": "Close the confirmed production P0 and P1 security, integrity, concurrency, and resource-bound defects through independently reviewed and pushed child tasks.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": "manager, worker, proto, docs",
+  "package": "manager",
+  "priority": "P0",
+  "creator": "chenyu",
+  "assignee": "chenyu",
+  "createdAt": "2026-07-14",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/production-hardening",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-14-p0-secure-transport-secrets"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

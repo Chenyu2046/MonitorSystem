@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "monitor_info.pb.h"
+#include "runtime_config.h"
 
 namespace monitor {
 
@@ -22,7 +23,7 @@ struct HostScore {
 // 管理多个远程主机的监控数据（推送模式）
 class HostManager {
  public:
-  HostManager();
+  explicit HostManager(runtime_config::DatabaseConfig database_config);
   ~HostManager();
 
   // 启动后台处理线程
@@ -59,6 +60,7 @@ class HostManager {
   std::mutex mtx_;
   std::atomic<bool> running_;
   std::unique_ptr<std::thread> thread_;
+  runtime_config::DatabaseConfig database_config_;
 };
 
 }  // namespace monitor

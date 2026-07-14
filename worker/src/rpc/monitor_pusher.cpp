@@ -2,17 +2,18 @@
 
 #include <iostream>
 #include <chrono>
+#include <utility>
 
 namespace monitor {
 
 MonitorPusher::MonitorPusher(const std::string& manager_address,
+                             std::shared_ptr<grpc::ChannelCredentials> credentials,
                              int interval_seconds)
     : manager_address_(manager_address),
       interval_seconds_(interval_seconds),
       running_(false) {
   // 创建 gRPC channel 和 stub
-  auto channel = grpc::CreateChannel(manager_address,
-                                     grpc::InsecureChannelCredentials());
+  auto channel = grpc::CreateChannel(manager_address, std::move(credentials));
   stub_ = monitor::proto::GrpcManager::NewStub(channel);
 
   // 创建指标采集器

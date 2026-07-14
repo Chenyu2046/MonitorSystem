@@ -14,11 +14,6 @@ namespace monitor {
 
 #ifdef ENABLE_MYSQL
 namespace {
-const char* MYSQL_HOST = "127.0.0.1";
-const char* MYSQL_USER = "monitor";
-const char* MYSQL_PASS = "monitor123";
-const char* MYSQL_DB = "monitor_db";
-
 // 用于详细表变化率计算的历史数据
 struct NetDetailSample {
   float rcv_bytes_rate = 0;
@@ -85,7 +80,8 @@ struct PerfSample {
 };
 static std::map<std::string, PerfSample> last_perf_samples;
 
-HostManager::HostManager() : running_(false) {
+HostManager::HostManager(runtime_config::DatabaseConfig database_config)
+    : running_(false), database_config_(std::move(database_config)) {
 }
 
 HostManager::~HostManager() {
@@ -401,8 +397,10 @@ void HostManager::WriteToMysql(
     std::cerr << "mysql_init failed\n";
     return;
   }
-  if (!mysql_real_connect(conn, MYSQL_HOST, MYSQL_USER, MYSQL_PASS, MYSQL_DB, 0,
-                          NULL, 0)) {
+  if (!mysql_real_connect(conn, database_config_.host.c_str(),
+                          database_config_.user.c_str(),
+                          database_config_.password.c_str(),
+                          database_config_.database.c_str(), 0, NULL, 0)) {
     std::cerr << "mysql_real_connect failed: " << mysql_error(conn) << "\n";
     mysql_close(conn);
     return;

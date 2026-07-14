@@ -11,6 +11,7 @@
 
 #include "monitor_info.grpc.pb.h"
 #include "monitor_info.pb.h"
+#include "runtime_config.h"
 
 namespace monitor {
 
@@ -25,7 +26,7 @@ using DataReceivedCallback = std::function<void(const monitor::proto::MonitorInf
 // gRPC 服务实现类 - 接收工作者推送的监控数据
 class GrpcServerImpl : public monitor::proto::GrpcManager::Service {
  public:
-  GrpcServerImpl() = default;
+  explicit GrpcServerImpl(runtime_config::AuthorizationConfig authorization);
   virtual ~GrpcServerImpl() = default;
 
   // 接收工作者推送的监控数据
@@ -50,9 +51,13 @@ class GrpcServerImpl : public monitor::proto::GrpcManager::Service {
   bool GetHostData(const std::string& hostname, HostData* data);
 
  private:
+  bool IsAuthorizedWorker(const ::grpc::ServerContext& context,
+                          const std::string& hostname) const;
+
   std::mutex mtx_;
   std::unordered_map<std::string, HostData> host_data_;
   DataReceivedCallback callback_;
+  runtime_config::AuthorizationConfig authorization_;
 };
 
 }  // namespace monitor
