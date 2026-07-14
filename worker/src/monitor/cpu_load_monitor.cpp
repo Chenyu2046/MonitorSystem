@@ -15,6 +15,8 @@ static bool ReadLoadFromProc(float* load1, float* load3, float* load15) {
     FILE* fp = fopen("/proc/loadavg", "r");
     if (!fp) return false;
     
+    // fscanf 读取三个浮点数，分别对应 1 分钟、5 分钟、15 分钟的平均负载；
+    // 返回值为成功读取的项数，应该是 3
     int ret = fscanf(fp, "%f %f %f", load1, load3, load15);
     fclose(fp);
     return ret == 3;

@@ -106,16 +106,20 @@ void HostManager::Stop() {
 
 void HostManager::ProcessLoop() {
   while (running_) {
+    // 每隔 60 秒检查 host_scores_ 中的主机数据是否过期
     std::this_thread::sleep_for(std::chrono::seconds(60));
     
+    // 获取当前时间
     auto now = std::chrono::system_clock::now();
     std::lock_guard<std::mutex> lock(mtx_);
+    // 遍历 host_scores_，移除过期的主机数据
     for (auto it = host_scores_.begin(); it != host_scores_.end();) {
       auto age = std::chrono::duration_cast<std::chrono::seconds>(
           now - it->second.timestamp).count();
+      // 如果某个主机的最新数据超过 60 秒没有更新，就认为它已经不活跃了，从 host_scores_ 中移除
       if (age > 60) {
         std::cout << "Removing stale host: " << it->first << std::endl;
-        it = host_scores_.erase(it);
+        it = host_scores_.erase(it); // erase 返回下一个迭代器
       } else {
         ++it;
       }
@@ -123,6 +127,7 @@ void HostManager::ProcessLoop() {
   }
 }
 
+// 计算主机的综合评分
 void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
   // 构建服务器唯一标识: hostname_ip
   std::string host_name;

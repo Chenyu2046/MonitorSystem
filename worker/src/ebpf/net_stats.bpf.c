@@ -54,6 +54,9 @@ static __always_inline void update_stats(__u32 ifindex, __u32 len, bool is_rx)
     struct net_stats *stats;
     struct net_stats new_stats = {};
 
+    // 根据当前包的 ifindex，在 net_stats_map 里查找这张网卡已有的统计数据。
+    // 如果查到了，就在原有统计上累加；
+    // 如果没查到，就说明第一次看到这张网卡，需要新建一条统计记录。 
     stats = bpf_map_lookup_elem(&net_stats_map, &ifindex);
     if (!stats) {
         /* 首次看到此网卡，初始化统计 */

@@ -18,7 +18,8 @@ class MetricCollector {
   void CollectAll(monitor::proto::MonitorInfo* monitor_info);
 
  private:
-  std::vector<std::unique_ptr<MonitorInter>> monitors_;
+  // monitors 里面要放指向Monitorinter的子类对象的 unique_ptr, make_unique 返回的是 unique_ptr 的实例
+  std::vector<std::unique_ptr<MonitorInter>> monitors_; 
   std::string hostname_;
 };
 
