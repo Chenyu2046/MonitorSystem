@@ -57,6 +57,7 @@ class HostManager {
 
   std::unordered_map<std::string, HostScore> host_scores_;
   std::mutex mtx_;
+  std::mutex processing_mtx_;
   std::atomic<bool> running_;
   std::unique_ptr<std::thread> thread_;
 };

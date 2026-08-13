@@ -5,6 +5,7 @@ set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 set(CMAKE_CXX_STANDARD 17)
 
 option(BUILD_MANAGER "Build manager server (requires MySQL)" ON)
+option(BUILD_BENCHMARK "Build the gRPC benchmark client" ON)
 
 # Proto 定义（必须先编译）
 add_subdirectory(proto)
@@ -15,4 +16,8 @@ add_subdirectory(worker)
 # Manager - 管理者服务器，部署在管理端，接收数据、存储、提供查询服务
 if(BUILD_MANAGER)
     add_subdirectory(manager)
+endif()
+
+if(BUILD_BENCHMARK)
+    add_subdirectory(benchmark)
 endif()

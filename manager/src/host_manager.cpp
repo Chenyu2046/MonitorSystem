@@ -1,5 +1,6 @@
 #include "host_manager.h"
 
+#include <cstdlib>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -18,6 +19,45 @@ const char* MYSQL_HOST = "127.0.0.1";
 const char* MYSQL_USER = "monitor";
 const char* MYSQL_PASS = "monitor123";
 const char* MYSQL_DB = "monitor_db";
+
+const char* GetEnvOrDefault(const char* name, const char* default_value) {
+  const char* value = std::getenv(name);
+  return value && value[0] != '\0' ? value : default_value;
+}
+
+bool IsMetricsLogEnabled() {
+  const char* value = std::getenv("MONITOR_VERBOSE_METRICS");
+  return !value || std::string(value) != "0";
+}
+
+MYSQL* mysql_conn = nullptr;
+
+MYSQL* GetMysqlConnection() {
+  if (mysql_conn) return mysql_conn;
+
+  mysql_conn = mysql_init(nullptr);
+  if (!mysql_conn) {
+    std::cerr << "mysql_init failed\n";
+    return nullptr;
+  }
+  if (!mysql_real_connect(
+          mysql_conn, GetEnvOrDefault("MONITOR_MYSQL_HOST", MYSQL_HOST),
+          GetEnvOrDefault("MONITOR_MYSQL_USER", MYSQL_USER),
+          GetEnvOrDefault("MONITOR_MYSQL_PASSWORD", MYSQL_PASS),
+          GetEnvOrDefault("MONITOR_MYSQL_DATABASE", MYSQL_DB), 0, nullptr, 0)) {
+    std::cerr << "mysql_real_connect failed: " << mysql_error(mysql_conn) << "\n";
+    mysql_close(mysql_conn);
+    mysql_conn = nullptr;
+  }
+  return mysql_conn;
+}
+
+void CloseMysqlConnection() {
+  if (mysql_conn) {
+    mysql_close(mysql_conn);
+    mysql_conn = nullptr;
+  }
+}
 
 // 用于详细表变化率计算的历史数据
 struct NetDetailSample {
@@ -90,6 +130,9 @@ HostManager::HostManager() : running_(false) {
 
 HostManager::~HostManager() {
   Stop();
+#ifdef ENABLE_MYSQL
+  CloseMysqlConnection();
+#endif
 }
 
 void HostManager::Start() {
@@ -129,6 +172,9 @@ void HostManager::ProcessLoop() {
 
 // 计算主机的综合评分
 void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
+  // 变化率历史和写库辅助状态由多个 gRPC 回调共享，必须整体串行化。
+  std::lock_guard<std::mutex> processing_lock(processing_mtx_);
+
   // 构建服务器唯一标识: hostname_ip
   std::string host_name;
   if (info.has_host_info()) {
@@ -234,6 +280,7 @@ void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
                mem_used_percent_rate, mem_total_rate, mem_free_rate,
                mem_avail_rate, net_in_rate_rate, net_out_rate_rate, 0, 0);
 
+  if (IsMetricsLogEnabled()) {
   std::cout << "\n================== Received Data ==================" << std::endl;
   std::cout << "Server: " << host_name << ", Score: " << score << std::endl;
   
@@ -297,6 +344,7 @@ void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
   std::cout << "\n--- Database ---" << std::endl;
   std::cout << "  Data saved to MySQL (monitor_db)" << std::endl;
   std::cout << "====================================================\n" << std::endl;
+  }
 }
 
 std::unordered_map<std::string, HostScore> HostManager::GetAllHostScores() {
@@ -396,17 +444,8 @@ void HostManager::WriteToMysql(
     float mem_avail_rate, float net_in_rate_rate, float net_out_rate_rate,
     float net_in_drop_rate_rate, float net_out_drop_rate_rate) {
 #ifdef ENABLE_MYSQL
-  MYSQL* conn = mysql_init(NULL);
-  if (!conn) {
-    std::cerr << "mysql_init failed\n";
-    return;
-  }
-  if (!mysql_real_connect(conn, MYSQL_HOST, MYSQL_USER, MYSQL_PASS, MYSQL_DB, 0,
-                          NULL, 0)) {
-    std::cerr << "mysql_real_connect failed: " << mysql_error(conn) << "\n";
-    mysql_close(conn);
-    return;
-  }
+  MYSQL* conn = GetMysqlConnection();
+  if (!conn) return;
 
   // 时间戳
   std::time_t t = std::chrono::system_clock::to_time_t(host_score.timestamp);
@@ -702,7 +741,6 @@ void HostManager::WriteToMysql(
     last = curr;
   }
 
-  mysql_close(conn);
 #else
   (void)host_name; (void)host_score; (void)net_in_rate; (void)net_out_rate;
   (void)cpu_percent_rate; (void)usr_percent_rate; (void)system_percent_rate;
