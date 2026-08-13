@@ -2,6 +2,7 @@
 #include <grpcpp/server_builder.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -16,6 +17,11 @@ constexpr char kDefaultMysqlHost[] = "127.0.0.1";
 constexpr char kDefaultMysqlUser[] = "monitor";
 constexpr char kDefaultMysqlPass[] = "monitor123";
 constexpr char kDefaultMysqlDb[] = "monitor_db";
+
+const char* GetEnvOrDefault(const char* name, const char* default_value) {
+  const char* value = std::getenv(name);
+  return value && value[0] != '\0' ? value : default_value;
+}
 
 int main(int argc, char* argv[]) {
   std::string listen_address = kDefaultListenAddress;
@@ -44,8 +50,10 @@ int main(int argc, char* argv[]) {
   // 创建 QueryManager 并初始化
   monitor::QueryManager query_mgr;
 #ifdef ENABLE_MYSQL
-  if (query_mgr.Init(kDefaultMysqlHost, kDefaultMysqlUser, kDefaultMysqlPass,
-                     kDefaultMysqlDb)) {
+  if (query_mgr.Init(GetEnvOrDefault("MONITOR_MYSQL_HOST", kDefaultMysqlHost),
+                     GetEnvOrDefault("MONITOR_MYSQL_USER", kDefaultMysqlUser),
+                     GetEnvOrDefault("MONITOR_MYSQL_PASSWORD", kDefaultMysqlPass),
+                     GetEnvOrDefault("MONITOR_MYSQL_DATABASE", kDefaultMysqlDb))) {
     std::cout << "QueryManager initialized successfully" << std::endl;
   } else {
     std::cerr << "Warning: QueryManager initialization failed, "

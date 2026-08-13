@@ -45,3 +45,6 @@ manager/manager
 # Libraries
 *.a
 *.so
+
+# Local benchmark output
+benchmark/results/

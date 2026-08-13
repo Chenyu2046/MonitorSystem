@@ -1,0 +1,42 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: monitor_db
+      MYSQL_USER: benchmark
+      MYSQL_PASSWORD: benchmark_only_password
+      MYSQL_ROOT_PASSWORD: benchmark_root_only_password
+    volumes:
+      - ./manager/sql/init_server_performance.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pbenchmark_root_only_password"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  manager:
+    image: monitor-system-benchmark:local
+    build:
+      context: .
+      dockerfile: Dockerfile.benchmark
+    command: ["/app/build/manager/manager", "0.0.0.0:50051"]
+    environment:
+      MONITOR_MYSQL_HOST: mysql
+      MONITOR_MYSQL_USER: benchmark
+      MONITOR_MYSQL_PASSWORD: benchmark_only_password
+      MONITOR_MYSQL_DATABASE: monitor_db
+      MONITOR_VERBOSE_METRICS: "0"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  loadgen:
+    image: monitor-system-benchmark:local
+    build:
+      context: .
+      dockerfile: Dockerfile.benchmark
+    entrypoint: ["/app/build/benchmark/push_benchmark"]
+    volumes:
+      - ./benchmark/results:/results
+    depends_on:
+      - manager
