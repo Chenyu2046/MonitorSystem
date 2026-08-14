@@ -302,12 +302,6 @@ web-server_10.0.0.5
 
 
 
-
-## 📄 许可证
-
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
-
-
 学cpp基础，可以把最近开发的这个编程练习平台利用起来 
 
 cppagancoding.top
