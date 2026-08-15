@@ -2,8 +2,10 @@ name: Profile README polish (one-shot)
 
 on:
   push:
-    branches: [main]
-    paths: ['.github/workflows/profile-readme-once.yml']
+    branches:
+      - main
+    paths:
+      - .github/workflows/profile-readme-once.yml
 
 permissions:
   contents: write
@@ -12,17 +14,22 @@ jobs:
   polish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Insert engineering snapshot
-        shell: python
+        shell: bash
         run: |
+          python3 <<'PY'
           from pathlib import Path
-          p = Path('README.md')
-          text = p.read_text(encoding='utf-8')
-          start = '<!-- profile-intro:start -->'; end = '<!-- profile-intro:end -->'
-          block = '''<!-- profile-intro:start -->
+
+          p = Path("README.md")
+          text = p.read_text(encoding="utf-8")
+          start = "<!-- profile-intro:start -->"
+          end = "<!-- profile-intro:end -->"
+          block = """<!-- profile-intro:start -->
 
 > **工程概览** — 面向多机 Linux 环境的分布式性能监控系统，以 C++17 构建 Worker / Manager 数据链路，通过 eBPF 与内核模块采集系统指标，并使用 gRPC Push、MySQL 持久化和查询接口形成从采集、传输到分析的完整闭环。
 
@@ -34,13 +41,23 @@ jobs:
 
 `C++17` · `Linux` · `eBPF` · `Kernel Module` · `gRPC` · `Protobuf` · `MySQL` · `CMake`
 
-<!-- profile-intro:end -->'''
+<!-- profile-intro:end -->"""
+
           if start in text and end in text:
-              a=text.index(start); b=text.index(end,a)+len(end); text=text[:a]+block+text[b:]
+              a = text.index(start)
+              b = text.index(end, a) + len(end)
+              text = text[:a] + block + text[b:]
           else:
-              lines=text.splitlines(keepends=True); idx=next((i+1 for i,l in enumerate(lines) if l.startswith('# ')),0); lines.insert(idx,'\n'+block+'\n\n'); text=''.join(lines)
-          p.write_text(text, encoding='utf-8')
+              lines = text.splitlines(keepends=True)
+              idx = next((i + 1 for i, line in enumerate(lines) if line.startswith("# ")), 0)
+              lines.insert(idx, "\n" + block + "\n\n")
+              text = "".join(lines)
+
+          p.write_text(text, encoding="utf-8")
+          PY
+
       - name: Commit README and cleanup
+        shell: bash
         run: |
           rm -f .github/profile-description.txt .github/workflows/profile-readme-once.yml
           git config user.name "github-actions[bot]"
