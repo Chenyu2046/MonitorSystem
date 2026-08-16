@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 
 namespace {
@@ -11,6 +12,11 @@ monitor::diagnostics::ObservabilityConfig MakeObservabilityConfig(
   monitor::diagnostics::ObservabilityConfig config;
   if (interval_seconds > 0) {
     config.normal_interval_ms = interval_seconds * 1000;
+  }
+  if (const char* object_dir = std::getenv("KERNSCOPE_EBPF_OBJECT_DIR")) {
+    if (*object_dir != '\0') {
+      config.ebpf_object_dir = object_dir;
+    }
   }
   return config;
 }
@@ -26,7 +32,8 @@ MonitorPusher::MonitorPusher(const std::string& manager_address,
       running_(false),
       observability_config_(MakeObservabilityConfig(interval_seconds)),
       anomaly_detector_(observability_config_),
-      state_machine_(observability_config_) {
+      state_machine_(observability_config_),
+      probe_controller_(observability_config_.ebpf_object_dir) {
   // 创建 gRPC channel 和 stub
   auto channel =
       grpc::CreateChannel(manager_address, grpc::InsecureChannelCredentials());
@@ -78,6 +85,8 @@ bool MonitorPusher::PushOnce() {
   const auto anomaly = anomaly_detector_.Evaluate(info);
   state_machine_.Update(anomaly);
   probe_controller_.Apply(state_machine_.state());
+  diagnostics::DiagnosticSnapshot diagnostic_snapshot;
+  probe_controller_.CollectSnapshot(&diagnostic_snapshot);
 
   // 打印采集到的所有指标
   std::cout << "\n================== Collected Metrics =================="

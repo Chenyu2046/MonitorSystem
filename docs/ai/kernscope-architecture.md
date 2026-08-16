@@ -18,7 +18,7 @@ eBPF 深度诊断 / On-CPU / Off-CPU Profiling
 可解释根因定位
 ```
 
-Phase 0 只调整项目定位和架构文档。Phase 1 增加了 Worker 侧的自适应观测控制，但未实现真实诊断 Probe；未实现的后续能力明确标记为目标。
+Phase 0 只调整项目定位和架构文档。Phase 1 增加了 Worker 侧的自适应观测控制，Phase 2 增加了受限 eBPF 诊断 Probe 的加载、生命周期和 map 聚合；尚未完成的后续能力明确标记为目标。
 
 ## 当前运行时基线
 
@@ -53,8 +53,8 @@ Manager 当前保留主机状态、健康评分、MySQL 持久化、历史查询
 | 层次 | 目标职责 | 当前状态 |
 |---|---|---|
 | Base Metrics | 采集 CPU、内存、磁盘、网络、SoftIRQ | 已有并保留 |
-| Adaptive Observability | 根据异常趋势调整采样周期和观测深度 | Phase 1 已实现状态机、异常评分和期望 Probe 规划 |
-| eBPF Diagnostics | TCP、Block I/O、Scheduler 聚合诊断 | 目标，未实现 |
+| Adaptive Observability | 根据异常趋势调整采样周期和观测深度 | Phase 1 已实现状态机、异常评分和 Probe 规划 |
+| eBPF Diagnostics | TCP、Block I/O、Scheduler 聚合诊断 | Phase 2 已实现独立对象加载、attach、map 聚合和不可用降级；Linux/BTF 功能验证待执行 |
 | Profiling | On-CPU、Off-CPU、Stack、Symbolizer | 目标，未实现 |
 | Evidence / RCA | Manager 侧证据构建、规则诊断、Incident | 目标，未实现 |
 | Persistence / Query | 新增诊断数据的存储与查询 | 目标，原有链路保留 |

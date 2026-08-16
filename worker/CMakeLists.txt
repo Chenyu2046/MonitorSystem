@@ -48,12 +48,18 @@ endif()
 if(EBPF_FOUND)
     set(EBPF_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf)
     set(EBPF_SKEL_H ${CMAKE_CURRENT_SOURCE_DIR}/include/monitor/net_stats.skel.h)
+    set(EBPF_PROGRAM_SRCS
+        ${EBPF_SRC_DIR}/net_stats.bpf.c
+        ${EBPF_SRC_DIR}/tcp_diag.bpf.c
+        ${EBPF_SRC_DIR}/block_io_diag.bpf.c
+        ${EBPF_SRC_DIR}/sched_diag.bpf.c
+    )
     
     add_custom_command(
         OUTPUT ${EBPF_SKEL_H}
         COMMAND make -C ${EBPF_SRC_DIR}
         COMMAND ${CMAKE_COMMAND} -E copy ${EBPF_SRC_DIR}/.output/net_stats.skel.h ${EBPF_SKEL_H}
-        DEPENDS ${EBPF_SRC_DIR}/net_stats.bpf.c
+        DEPENDS ${EBPF_PROGRAM_SRCS}
         COMMENT "Building eBPF program and generating skeleton"
     )
     add_custom_target(ebpf_skeleton DEPENDS ${EBPF_SKEL_H})

@@ -10,6 +10,7 @@ namespace {
 
 using monitor::diagnostics::AnomalyDetector;
 using monitor::diagnostics::AnomalyResult;
+using monitor::diagnostics::DiagnosticSnapshot;
 using monitor::diagnostics::ObservabilityConfig;
 using monitor::diagnostics::ObservabilityState;
 using monitor::diagnostics::ObservabilityStateMachine;
@@ -109,18 +110,21 @@ void TestRecoveryHysteresis() {
 
 void TestProbeController() {
   ProbeController controller;
-  controller.Apply(ObservabilityState::kNormal);
+  assert(controller.Apply(ObservabilityState::kNormal));
   assert(controller.DesiredProbes().empty());
   assert(controller.ApplyCount() == 1);
-  controller.Apply(ObservabilityState::kNormal);
+  assert(controller.Apply(ObservabilityState::kNormal));
   assert(controller.ApplyCount() == 1);
-  controller.Apply(ObservabilityState::kSuspect);
+  assert(!controller.Apply(ObservabilityState::kSuspect));
   assert(controller.DesiredProbes().count(ProbeKind::kTcp) == 1);
   assert(controller.DesiredProbes().count(ProbeKind::kBlockIo) == 1);
-  controller.Apply(ObservabilityState::kDiagnostic);
+  assert(!controller.Apply(ObservabilityState::kDiagnostic));
   assert(controller.DesiredProbes().count(ProbeKind::kScheduler) == 1);
-  controller.Apply(ObservabilityState::kCooldown);
+  assert(controller.Apply(ObservabilityState::kCooldown));
   assert(controller.DesiredProbes().empty());
+  DiagnosticSnapshot snapshot;
+  assert(controller.CollectSnapshot(&snapshot));
+  assert(!controller.Status(ProbeKind::kTcp).attached);
 }
 
 }  // namespace

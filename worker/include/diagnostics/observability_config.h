@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 namespace monitor::diagnostics {
 
 struct ObservabilityConfig {
@@ -19,6 +21,7 @@ struct ObservabilityConfig {
   int profiling_duration_sec = 15;
   int profiling_max_duration_sec = 30;
   int cooldown_sec = 30;
+  std::string ebpf_object_dir = "worker/src/ebpf/.output";
 
   double cpu_warning_percent = 70.0;
   double cpu_critical_percent = 90.0;

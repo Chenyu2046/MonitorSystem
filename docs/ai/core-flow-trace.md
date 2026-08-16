@@ -17,7 +17,7 @@
 | 7 | `MonitorInter::UpdateOnce` 系列 | `worker/src/monitor/*.cpp` | 从系统采集具体指标 | `MonitorInfo*` | protobuf 子字段 |
 | 8 | `AnomalyDetector::Evaluate` | `worker/src/diagnostics/anomaly_detector.cpp` | 根据现有基础指标生成信号和整体异常分数 | `MonitorInfo` | `AnomalyResult` |
 | 9 | `ObservabilityStateMachine::Update` | `worker/src/diagnostics/observability_state.cpp` | 以连续样本和恢复条件更新观测状态 | `AnomalyResult` | `ObservabilityState` |
-| 10 | `ProbeController::Apply` | `worker/src/diagnostics/probe_controller.cpp` | 规划当前状态的期望 Probe 集合；Phase 1 不执行真实 attach | `ObservabilityState` | desired Probe set |
+| 10 | `ProbeController::Apply` | `worker/src/diagnostics/probe_controller.cpp` | 按状态加载/卸载独立 eBPF 对象；对象、内核或 BTF 不可用时记录状态并降级 | `ObservabilityState` | Probe status |
 | 11 | `GrpcManager::Stub::SetMonitorInfo` | 由 `proto/monitor_info.proto` 生成 | 通过 gRPC 把 `MonitorInfo` 发给 manager | `MonitorInfo` | `google.protobuf.Empty` 或错误状态 |
 | 12 | `GrpcServerImpl::SetMonitorInfo` | `manager/src/rpc/grpc_server.cpp` | 校验请求、缓存原始数据、触发回调 | `MonitorInfo* request` | gRPC `Status` |
 | 13 | `HostManager::OnDataReceived` | `manager/src/host_manager.cpp` | 构造 host 标识，计算评分和变化率，更新内存态，写库 | `const MonitorInfo& info` | `host_scores_` 更新，MySQL 写入 |
@@ -101,13 +101,14 @@ CPU/softirq 采集中的 `open + mmap` 成功路径会 `munmap + close`，基本
 
 worker 参数解析、线程创建、gRPC server 创建都没有异常/失败兜底。MySQL 插入错误缺少统一检查。更关键的是 manager 写库失败不会反馈到 worker，因为 `GrpcServerImpl::SetMonitorInfo` 回调执行完仍返回 `OK`，这会让上游误以为端到端成功。
 
-## 7. Phase 1 Adaptive Observability
+## 7. Adaptive Observability and eBPF Diagnostics
 
-`MonitorPusher::PushOnce()` 在基础指标采集完成后执行三步控制逻辑：
+`MonitorPusher::PushOnce()` 在基础指标采集完成后执行四步控制逻辑：
 
 1. `AnomalyDetector::Evaluate()` 从当前 `MonitorInfo` 读取 CPU、IOWait、Load、Memory、Disk、Network PPS 和 Network SoftIRQ，生成每个信号的归一化分数及整体分数。
 2. `ObservabilityStateMachine::Update()` 使用连续样本确认、进入/退出阈值和恢复计数，在 `NORMAL`、`SUSPECT`、`DIAGNOSTIC`、`PROFILING`、`COOLDOWN` 之间转换。
-3. `ProbeController::Apply()` 根据状态更新期望 Probe 集合。Phase 1 只规划集合并验证幂等性，真实 eBPF attach/detach 属于 Phase 2。
+3. `ProbeController::Apply()` 根据状态加载/卸载 TCP、Block I/O、Scheduler 三类独立 eBPF 对象；每个对象单独记录 `requested`、`available`、`attached` 和错误码，加载失败不会终止基础指标 Worker。
+4. `ProbeController::CollectSnapshot()` 读取已 attach 对象的有界 map，并聚合 Per-CPU 值；当前快照是诊断内部数据，既有 `MonitorInfo`/Manager 持久化协议仍保持不变。
 
 状态机当前采样周期为：`NORMAL` 使用配置的基础 interval，`SUSPECT` 使用 suspect interval，`DIAGNOSTIC`、`PROFILING` 和 `COOLDOWN` 使用 diagnostic interval。`MonitorPusher::WaitForNextSample()` 按当前状态等待，因此不会再固定使用启动参数作为所有状态的周期。
 
