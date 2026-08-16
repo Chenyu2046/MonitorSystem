@@ -1,39 +1,59 @@
-# Linux 服务器性能监控系统
+# KernScope
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/)
 [![gRPC](https://img.shields.io/badge/gRPC-1.50+-green.svg)](https://grpc.io/)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://www.linux.org/)
 
-分布式服务器性能监控系统，采用 Push 模式架构，支持多服务器性能数据采集、存储和查询。基于内核模块和 eBPF 技术实现高效的系统指标采集。
+> **eBPF 驱动的 Linux 内核性能诊断系统**
+
+KernScope 从现有的分布式服务器监控链路演进而来：Worker 负责低开销采集，Manager 负责接收、评分、持久化和查询；后续在这条稳定链路上增加异常触发的自适应观测、eBPF 深度诊断、Profiling 和可解释根因分析。
+
+本仓库当前仍保留内部 `monitor` namespace、`monitor.proto` package、原有 unary `SetMonitorInfo` RPC、MySQL 表和 benchmark。项目展示层先统一使用 KernScope，运行时能力按 Phase 增量演进。
 
 ## ✨ 特性
 
-- 🚀 **高效采集** - 基于内核模块和 eBPF 的低开销数据采集
-- 📊 **全面监控** - CPU、内存、磁盘、网络、软中断等全方位指标
-- 🔄 **Push 模式** - Worker 主动推送，降低 Manager 负载
-- 📈 **健康评分** - 多维度加权评分算法，快速评估服务器状态
-- 🔍 **丰富查询** - 9 个 gRPC 查询接口，支持历史数据、趋势分析、异常检测
-- 💾 **数据持久化** - MySQL 存储历史数据
+- 🚀 **低开销基础观测** - 通过 procfs、内核模块和 eBPF 采集 CPU、内存、磁盘、网络、软中断等指标
+- 🔄 **Worker-Agent + Manager** - Worker 主动 Push，Manager 统一评分、存储和查询
+- ⚡ **TC eBPF 网络数据面** - 保留基于 Per-CPU Hash Map 的收发字节与报文聚合
+- 📈 **健康评分与历史查询** - 保留现有多维评分、MySQL 持久化和 9 个查询接口
+- 🧭 **演进方向** - Monitoring → Anomaly Detection → Adaptive Observability → Kernel Diagnostics / Profiling → Evidence Correlation → Root Cause
+
+> Adaptive Observability、TCP/Block I/O/Scheduler Diagnostics、On-CPU/Off-CPU Profiling 和 Root Cause Engine 是后续 Phase 的目标能力；它们未在 Phase 0 中伪装成已完成运行时功能。
 
 ## 📐 系统架构
 
+当前可验证的运行时链路见 [核心流程追踪](docs/ai/core-flow-trace.md)。Phase 0 只更新项目定位和架构说明，不改变这条业务链路。
+
 ```
-┌─────────────────┐     gRPC Push      ┌─────────────────┐
-│     Worker      │ ─────────────────► │     Manager     │
-│  (被监控服务器)  │   MonitorInfo      │   (管理服务器)   │
-│                 │   每10秒推送        │                 │
-│  - CPU 采集     │                    │  - 数据接收     │
-│  - 内存采集     │                    │  - 评分计算     │
-│  - 磁盘采集     │                    │  - MySQL 存储   │
-│  - 网络采集     │                    │  - 查询服务     │
-└─────────────────┘                    └─────────────────┘
-        │                                      │
-        │ 内核模块/eBPF                         │ QueryService
-        ▼                                      ▼
-   /dev/cpu_stat_monitor                  9个查询接口
-   /dev/cpu_softirq_monitor
+┌──────────────────────┐      gRPC unary Push       ┌──────────────────────┐
+│ Worker-Agent         │ ─────────────────────────► │ Manager              │
+│                      │       MonitorInfo         │                      │
+│ procfs / kernel      │                            │ 接收 / 评分 / 缓存    │
+│ module / TC eBPF     │                            │ MySQL / QueryService  │
+│ MetricCollector      │                            │                      │
+└──────────────────────┘                            └──────────────────────┘
+          │                                                     │
+          └── /dev/cpu_*、/proc/*、TC eBPF map ───────► MySQL / 查询 API
 ```
+
+KernScope 的目标演进链路：
+
+```text
+Monitoring
+    ↓
+Anomaly Detection
+    ↓
+Adaptive Observability
+    ↓
+Kernel Diagnostics / Profiling
+    ↓
+Evidence Correlation
+    ↓
+Root Cause
+```
+
+详细的当前基线、目标边界和 Phase 计划见 [KernScope 架构说明](docs/ai/kernscope-architecture.md)。
 
 ## 📁 项目结构
 
