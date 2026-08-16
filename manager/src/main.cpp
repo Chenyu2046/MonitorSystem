@@ -62,7 +62,7 @@ int main(int argc, char* argv[]) {
 #endif
 
   // 创建查询服务
-  monitor::QueryServiceImpl query_service(&query_mgr);
+  monitor::QueryServiceImpl query_service(&query_mgr, &mgr);
 
   // 启动 gRPC 服务器
   grpc::ServerBuilder builder;

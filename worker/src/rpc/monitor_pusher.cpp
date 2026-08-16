@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 namespace {
 
@@ -31,6 +33,111 @@ monitor::diagnostics::ProfileType SelectProfileType(
     }
   }
   return monitor::diagnostics::ProfileType::kOnCpu;
+}
+
+monitor::proto::ObservabilityState ToProtoState(
+    monitor::diagnostics::ObservabilityState state) {
+  switch (state) {
+    case monitor::diagnostics::ObservabilityState::kNormal:
+      return monitor::proto::OBSERVABILITY_NORMAL;
+    case monitor::diagnostics::ObservabilityState::kSuspect:
+      return monitor::proto::OBSERVABILITY_SUSPECT;
+    case monitor::diagnostics::ObservabilityState::kDiagnostic:
+      return monitor::proto::OBSERVABILITY_DIAGNOSTIC;
+    case monitor::diagnostics::ObservabilityState::kProfiling:
+      return monitor::proto::OBSERVABILITY_PROFILING;
+    case monitor::diagnostics::ObservabilityState::kCooldown:
+      return monitor::proto::OBSERVABILITY_COOLDOWN;
+  }
+  return monitor::proto::OBSERVABILITY_NORMAL;
+}
+
+monitor::proto::DiagnosticDomain ToProtoDomain(
+    monitor::diagnostics::AnomalyDomain domain) {
+  switch (domain) {
+    case monitor::diagnostics::AnomalyDomain::kCpu:
+      return monitor::proto::DOMAIN_CPU;
+    case monitor::diagnostics::AnomalyDomain::kMemory:
+      return monitor::proto::DOMAIN_MEMORY;
+    case monitor::diagnostics::AnomalyDomain::kDisk:
+      return monitor::proto::DOMAIN_DISK;
+    case monitor::diagnostics::AnomalyDomain::kNetwork:
+      return monitor::proto::DOMAIN_NETWORK;
+    case monitor::diagnostics::AnomalyDomain::kScheduler:
+      return monitor::proto::DOMAIN_SCHEDULER;
+  }
+  return monitor::proto::DOMAIN_UNKNOWN;
+}
+
+void FillDiagnosticProto(
+    const monitor::diagnostics::AnomalyResult& anomaly,
+    monitor::diagnostics::ObservabilityState state,
+    const monitor::diagnostics::DiagnosticSnapshot& snapshot,
+    monitor::proto::DiagnosticSnapshot* diagnostic) {
+  diagnostic->Clear();
+  diagnostic->set_state(ToProtoState(state));
+  diagnostic->set_anomaly_score(anomaly.overall_score);
+
+  for (const auto& signal : anomaly.signals) {
+    auto* proto_signal = diagnostic->add_signals();
+    proto_signal->set_domain(ToProtoDomain(signal.domain));
+    proto_signal->set_metric(signal.metric);
+    proto_signal->set_value(signal.value);
+    proto_signal->set_anomaly_score(signal.score);
+  }
+
+  for (const auto& sample : snapshot.tcp) {
+    auto* signal = diagnostic->add_signals();
+    signal->set_domain(monitor::proto::DOMAIN_NETWORK);
+    signal->set_metric("tcp_retransmissions");
+    signal->set_value(static_cast<double>(sample.retransmissions));
+    signal->set_unit("count");
+  }
+  for (const auto& sample : snapshot.block_io) {
+    if (sample.count == 0) {
+      continue;
+    }
+    auto* signal = diagnostic->add_signals();
+    signal->set_domain(monitor::proto::DOMAIN_DISK);
+    signal->set_metric("block_io_avg_latency_ms");
+    signal->set_value(static_cast<double>(sample.total_latency_ns) /
+                      static_cast<double>(sample.count) / 1000000.0);
+    signal->set_unit("ms");
+  }
+
+  std::vector<monitor::diagnostics::OnCpuProfileSample> on_cpu =
+      snapshot.profiling.on_cpu;
+  std::sort(on_cpu.begin(), on_cpu.end(),
+            [](const auto& left, const auto& right) {
+              return left.samples > right.samples;
+            });
+  constexpr std::size_t kTopProfileCount = 20;
+  for (std::size_t index = 0; index < std::min(kTopProfileCount, on_cpu.size());
+       ++index) {
+    const auto& sample = on_cpu[index];
+    auto* entry = diagnostic->add_oncpu_profiles();
+    entry->set_pid(static_cast<std::int32_t>(sample.tgid));
+    entry->set_tid(static_cast<std::int32_t>(sample.pid));
+    entry->set_samples(sample.samples);
+    entry->set_user_stack_id(sample.user_stack_id);
+    entry->set_kernel_stack_id(sample.kernel_stack_id);
+  }
+
+  std::vector<monitor::diagnostics::OffCpuProfileSample> off_cpu =
+      snapshot.profiling.off_cpu;
+  std::sort(off_cpu.begin(), off_cpu.end(),
+            [](const auto& left, const auto& right) {
+              return left.total_duration_ns > right.total_duration_ns;
+            });
+  for (std::size_t index = 0;
+       index < std::min(kTopProfileCount, off_cpu.size()); ++index) {
+    const auto& sample = off_cpu[index];
+    auto* entry = diagnostic->add_offcpu_profiles();
+    entry->set_pid(static_cast<std::int32_t>(sample.pid));
+    entry->set_samples(sample.samples);
+    entry->set_total_offcpu_ns(sample.total_duration_ns);
+    entry->set_kernel_stack_id(sample.kernel_stack_id);
+  }
 }
 
 }  // namespace
@@ -101,6 +208,8 @@ bool MonitorPusher::PushOnce() {
   probe_controller_.Apply(state_machine_.state(), SelectProfileType(anomaly));
   diagnostics::DiagnosticSnapshot diagnostic_snapshot;
   probe_controller_.CollectSnapshot(&diagnostic_snapshot);
+  FillDiagnosticProto(anomaly, state_machine_.state(), diagnostic_snapshot,
+                      info.mutable_diagnostic());
 
   // 打印采集到的所有指标
   std::cout << "\n================== Collected Metrics =================="

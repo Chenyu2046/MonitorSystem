@@ -17,14 +17,14 @@ KernScope 从现有的分布式服务器监控链路演进而来：Worker 负责
 - 🔄 **Worker-Agent + Manager** - Worker 主动 Push，Manager 统一评分、存储和查询
 - ⚡ **TC eBPF 网络数据面** - 保留基于 Per-CPU Hash Map 的收发字节与报文聚合
 - 📈 **健康评分与历史查询** - 保留现有多维评分、MySQL 持久化和 9 个查询接口
-- 🧭 **诊断控制层** - Phase 1 已加入异常评分、状态防抖、动态采样周期；Phase 2 加入受限诊断 Probe，Phase 3 加入限时 Profiling 基线
+- 🧭 **诊断控制层** - Phase 1 已加入异常评分、状态防抖、动态采样周期；Phase 2 加入受限诊断 Probe，Phase 3 加入限时 Profiling，Phase 4 加入 Evidence/RCA/Incident 内存闭环
 - 🛣️ **后续演进方向** - Monitoring → Anomaly Detection → Adaptive Observability → Kernel Diagnostics / Profiling → Evidence Correlation → Root Cause
 
-> Phase 3 已加入 On-CPU/Off-CPU 的独立采样对象、有限 Stack Map、ProfileSession 硬超时/RAII 清理和地址/module+offset 回退；证据关联和 Root Cause Engine 留在后续 Phase。Linux perf/BTF 功能验证仍需 Linux 构建机执行，未验证能力不会在 README 中伪装成已完成运行时功能。
+> Phase 4 已加入 `MonitorInfo.diagnostic` field 10、EvidenceBuilder、多证据 RootCauseEngine、有界 IncidentStore 和三类 Incident 查询 RPC；诊断 Incident 当前只保存在 Manager 内存，MySQL 诊断表留待后续阶段。Linux perf/BTF 和完整 gRPC/CTest 验证仍需 Linux 构建机执行，未验证能力不会在 README 中伪装成已完成运行时功能。
 
 ## 📐 系统架构
 
-当前可验证的运行时链路见 [核心流程追踪](docs/ai/core-flow-trace.md)。Phase 1 在基础上报链路中加入 Worker 侧自适应观测控制，Phase 2/3 在其上增加独立诊断与限时 Profiling，不改变既有 MonitorInfo、unary RPC、Manager 和 MySQL 语义。
+当前可验证的运行时链路见 [核心流程追踪](docs/ai/core-flow-trace.md)。Phase 1/2/3/4 在既有上报链路上增量加入自适应观测、诊断、Profiling 和 Evidence/RCA；旧 MonitorInfo field 1~9、unary RPC、Manager 评分和 MySQL 基础表语义保持不变。
 
 ```
 ┌──────────────────────┐      gRPC unary Push       ┌──────────────────────┐

@@ -2,12 +2,16 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include "diagnostics/incident_store.h"
 
 #include "monitor_info.pb.h"
 
@@ -38,6 +42,19 @@ class HostManager {
   // 获取最优主机
   std::string GetBestHost();
 
+  std::vector<diagnostics::IncidentRecord> GetIncidents(
+      const std::string& server_name = {},
+      std::chrono::system_clock::time_point start_time =
+          std::chrono::system_clock::time_point::min(),
+      std::chrono::system_clock::time_point end_time =
+          std::chrono::system_clock::time_point::max(),
+      const std::string& root_cause = {},
+      const std::string& severity = {}) const;
+  std::optional<diagnostics::IncidentRecord> GetIncident(
+      std::uint64_t incident_id) const;
+  std::vector<diagnostics::IncidentRecord> GetActiveIncidents(
+      const std::string& server_name = {}) const;
+
  private:
   void ProcessLoop();
   double CalcScore(const monitor::proto::MonitorInfo& info);
@@ -60,6 +77,9 @@ class HostManager {
   std::mutex processing_mtx_;
   std::atomic<bool> running_;
   std::unique_ptr<std::thread> thread_;
+  diagnostics::EvidenceBuilder evidence_builder_;
+  diagnostics::RootCauseEngine root_cause_engine_;
+  diagnostics::IncidentStore incident_store_;
 };
 
 }  // namespace monitor

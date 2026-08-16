@@ -2,6 +2,7 @@ syntax = "proto3";
 package monitor.proto;
 
 import "google/protobuf/timestamp.proto";
+import "diagnostic.proto";
 
 // ========== 基础类型 ==========
 
@@ -72,6 +73,37 @@ message QueryDetailRequest {
     string server_name = 1;
     TimeRange time_range = 2;
     Pagination pagination = 3;
+}
+
+message GetIncidentsRequest {
+    string server_name = 1;
+    TimeRange time_range = 2;
+    string root_cause = 3;
+    string severity = 4;
+    Pagination pagination = 5;
+}
+
+message GetIncidentsResponse {
+    repeated Incident incidents = 1;
+    int32 total_count = 2;
+    int32 page = 3;
+    int32 page_size = 4;
+}
+
+message GetIncidentDetailRequest {
+    uint64 incident_id = 1;
+}
+
+message GetIncidentDetailResponse {
+    Incident incident = 1;
+}
+
+message GetActiveDiagnosisRequest {
+    string server_name = 1;
+}
+
+message GetActiveDiagnosisResponse {
+    repeated Incident incidents = 1;
 }
 
 // ========== 数据记录 ==========
@@ -348,4 +380,7 @@ service QueryService {
     rpc QueryDiskDetail(QueryDetailRequest) returns (QueryDiskDetailResponse);
     rpc QueryMemDetail(QueryDetailRequest) returns (QueryMemDetailResponse);
     rpc QuerySoftIrqDetail(QueryDetailRequest) returns (QuerySoftIrqDetailResponse);
+    rpc GetIncidents(GetIncidentsRequest) returns (GetIncidentsResponse);
+    rpc GetIncidentDetail(GetIncidentDetailRequest) returns (GetIncidentDetailResponse);
+    rpc GetActiveDiagnosis(GetActiveDiagnosisRequest) returns (GetActiveDiagnosisResponse);
 }

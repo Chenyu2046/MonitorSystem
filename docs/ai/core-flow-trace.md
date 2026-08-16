@@ -2,7 +2,7 @@
 
 ## 1. 链路总览
 
-`worker main` -> `MonitorPusher::Start` -> `MonitorPusher::PushLoop` -> `MonitorPusher::PushOnce` -> `MetricCollector::CollectAll` -> `AnomalyDetector::Evaluate` -> `ObservabilityStateMachine::Update` -> `ProbeController::Apply` -> `GrpcManager::SetMonitorInfo` -> `GrpcServerImpl::SetMonitorInfo` -> `HostManager::OnDataReceived` -> `HostManager::CalcScore` -> `HostManager::WriteToMysql` -> `MySQL`
+`worker main` -> `MonitorPusher::Start` -> `MonitorPusher::PushLoop` -> `MonitorPusher::PushOnce` -> `MetricCollector::CollectAll` -> `AnomalyDetector::Evaluate` -> `ObservabilityStateMachine::Update` -> `ProbeController::Apply` -> `MonitorInfo.diagnostic` -> `GrpcManager::SetMonitorInfo` -> `GrpcServerImpl::SetMonitorInfo` -> `HostManager::OnDataReceived` -> `EvidenceBuilder` -> `RootCauseEngine` -> `IncidentStore` / `HostManager::CalcScore` -> `MySQL`
 
 ## 2. 逐层调用表
 
@@ -20,8 +20,11 @@
 | 10 | `ProbeController::Apply` | `worker/src/diagnostics/probe_controller.cpp` | 按状态加载/卸载独立 eBPF 对象；对象、内核或 BTF 不可用时记录状态并降级 | `ObservabilityState` | Probe status |
 | 11 | `GrpcManager::Stub::SetMonitorInfo` | 由 `proto/monitor_info.proto` 生成 | 通过 gRPC 把 `MonitorInfo` 发给 manager | `MonitorInfo` | `google.protobuf.Empty` 或错误状态 |
 | 12 | `GrpcServerImpl::SetMonitorInfo` | `manager/src/rpc/grpc_server.cpp` | 校验请求、缓存原始数据、触发回调 | `MonitorInfo* request` | gRPC `Status` |
-| 13 | `HostManager::OnDataReceived` | `manager/src/host_manager.cpp` | 构造 host 标识，计算评分和变化率，更新内存态，写库 | `const MonitorInfo& info` | `host_scores_` 更新，MySQL 写入 |
-| 14 | `HostManager::CalcScore` / `WriteToMysql` | `manager/src/host_manager.cpp` | 计算健康分并写主表和详情表 | `MonitorInfo`、变化率 | MySQL rows |
+| 13 | `HostManager::OnDataReceived` | `manager/src/host_manager.cpp` | 构造 host 标识，计算评分/变化率，并把诊断快照交给证据与根因模块 | `const MonitorInfo& info` | `host_scores_`、IncidentStore |
+| 14 | `EvidenceBuilder::Build` | `manager/src/diagnostics/evidence_builder.cpp` | 将基础指标、诊断信号和 Top-N profile 转为带来源的 Evidence | `MonitorInfo` | `vector<Evidence>` |
+| 15 | `RootCauseEngine::Evaluate` | `manager/src/diagnostics/root_cause_engine.cpp` | 使用多证据规则计算可解释 confidence，不把单阈值伪装成根因 | `vector<Evidence>` | `vector<RootCause>` |
+| 16 | `IncidentStore::Observe` | `manager/src/diagnostics/incident_store.cpp` | 更新活动 Incident，恢复后进入有界历史缓存，保留原始 Evidence | `Evidence`、`RootCause` | active/history Incident |
+| 17 | `HostManager::CalcScore` / `WriteToMysql` | `manager/src/host_manager.cpp` | 保留原健康分与主表/详情表写入语义 | `MonitorInfo`、变化率 | MySQL rows |
 
 ## 3. 数据流
 
@@ -109,7 +112,9 @@ worker 参数解析、线程创建、gRPC server 创建都没有异常/失败兜
 2. `ObservabilityStateMachine::Update()` 使用连续样本确认、进入/退出阈值和恢复计数，在 `NORMAL`、`SUSPECT`、`DIAGNOSTIC`、`PROFILING`、`COOLDOWN` 之间转换。
 3. `ProbeController::Apply()` 根据状态加载/卸载 TCP、Block I/O、Scheduler 三类独立 eBPF 对象；每个对象单独记录 `requested`、`available`、`attached` 和错误码，加载失败不会终止基础指标 Worker。
 4. `PROFILING` 状态创建单一 `ProfileSession`，按异常信号选择 On-CPU 或 Off-CPU，并由硬超时和 RAII 清理资源。
-5. `ProbeController::CollectSnapshot()` 读取已 attach 对象的有界 map，并聚合 Per-CPU 值；当前快照是诊断内部数据，既有 `MonitorInfo`/Manager 持久化协议仍保持不变。
+5. `ProbeController::CollectSnapshot()` 读取已 attach 对象的有界 map，并聚合 Per-CPU 值；Worker 将异常信号和 Top-N profile ID 写入新增 `MonitorInfo.diagnostic` field 10，旧 field 1~9 语义保持不变。
+
+Phase 4 在 `MonitorInfo.diagnostic` field 10 中追加异常信号和 Top-N profile ID。Manager 侧只在内存中保留最多 256 条已结束 Incident，并通过新增 QueryService RPC 提供 Incident 查询；旧 field 1~9、旧查询和 MySQL 表不变。
 
 状态机当前采样周期为：`NORMAL` 使用配置的基础 interval，`SUSPECT` 使用 suspect interval，`DIAGNOSTIC`、`PROFILING` 和 `COOLDOWN` 使用 diagnostic interval。`MonitorPusher::WaitForNextSample()` 按当前状态等待，因此不会再固定使用启动参数作为所有状态的周期。
 

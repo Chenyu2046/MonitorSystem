@@ -8,6 +8,7 @@ import "cpu_stat.proto";
 import "cpu_softirq.proto";
 import "cpu_load.proto";
 import "disk_info.proto";
+import "diagnostic.proto";
 
 // message MemInfo {
 //   int64 total = 1;
@@ -92,6 +93,7 @@ message MonitorInfo{
   MemInfo mem_info = 7;
   repeated NetInfo net_info = 8;
   repeated DiskInfo disk_info = 9;
+  DiagnosticSnapshot diagnostic = 10;
 }
 
 service GrpcManager {

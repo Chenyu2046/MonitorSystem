@@ -18,7 +18,7 @@ eBPF 深度诊断 / On-CPU / Off-CPU Profiling
 可解释根因定位
 ```
 
-Phase 0 只调整项目定位和架构文档。Phase 1 增加了 Worker 侧的自适应观测控制，Phase 2 增加了受限 eBPF 诊断 Probe 的加载、生命周期和 map 聚合；尚未完成的后续能力明确标记为目标。
+Phase 0 只调整项目定位和架构文档。Phase 1 增加了 Worker 侧的自适应观测控制，Phase 2 增加了受限 eBPF 诊断 Probe，Phase 3 增加了限时 Profiling，Phase 4 增加了 Manager 侧 Evidence/RCA/Incident 内存闭环；尚未完成的后续能力明确标记为目标。
 
 ## 当前运行时基线
 
@@ -56,8 +56,8 @@ Manager 当前保留主机状态、健康评分、MySQL 持久化、历史查询
 | Adaptive Observability | 根据异常趋势调整采样周期和观测深度 | Phase 1 已实现状态机、异常评分和 Probe 规划 |
 | eBPF Diagnostics | TCP、Block I/O、Scheduler 聚合诊断 | Phase 2 已实现独立对象加载、attach、map 聚合和不可用降级；Linux/BTF 功能验证待执行 |
 | Profiling | On-CPU、Off-CPU、Stack、Symbolizer | Phase 3 已加入有界 Stack Map、ProfileSession、采样聚合和地址/module+offset 回退；Linux perf/BPF 功能验证待执行 |
-| Evidence / RCA | Manager 侧证据构建、规则诊断、Incident | 目标，未实现 |
-| Persistence / Query | 新增诊断数据的存储与查询 | 目标，原有链路保留 |
+| Evidence / RCA | Manager 侧证据构建、规则诊断、Incident | Phase 4 已实现多证据规则、可解释 confidence 和有界 IncidentStore |
+| Persistence / Query | 新增诊断数据的存储与查询 | Phase 4 已追加 diagnostic field 10 和三类内存查询 RPC；MySQL 诊断表待后续阶段 |
 
 设计约束：
 
