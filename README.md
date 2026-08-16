@@ -17,13 +17,14 @@ KernScope 从现有的分布式服务器监控链路演进而来：Worker 负责
 - 🔄 **Worker-Agent + Manager** - Worker 主动 Push，Manager 统一评分、存储和查询
 - ⚡ **TC eBPF 网络数据面** - 保留基于 Per-CPU Hash Map 的收发字节与报文聚合
 - 📈 **健康评分与历史查询** - 保留现有多维评分、MySQL 持久化和 9 个查询接口
-- 🧭 **演进方向** - Monitoring → Anomaly Detection → Adaptive Observability → Kernel Diagnostics / Profiling → Evidence Correlation → Root Cause
+- 🧭 **诊断控制层** - Phase 1 已加入异常评分、状态防抖、动态采样周期和 Probe 期望集合规划
+- 🛣️ **后续演进方向** - Monitoring → Anomaly Detection → Adaptive Observability → Kernel Diagnostics / Profiling → Evidence Correlation → Root Cause
 
-> Adaptive Observability、TCP/Block I/O/Scheduler Diagnostics、On-CPU/Off-CPU Profiling 和 Root Cause Engine 是后续 Phase 的目标能力；它们未在 Phase 0 中伪装成已完成运行时功能。
+> Phase 1 的 ProbeController 目前只规划期望 Probe 集合，真实 TCP/Block I/O/Scheduler attach、On-CPU/Off-CPU Profiling 和 Root Cause Engine 留在后续 Phase；未实现能力不会在 README 中伪装成已完成运行时功能。
 
 ## 📐 系统架构
 
-当前可验证的运行时链路见 [核心流程追踪](docs/ai/core-flow-trace.md)。Phase 0 只更新项目定位和架构说明，不改变这条业务链路。
+当前可验证的运行时链路见 [核心流程追踪](docs/ai/core-flow-trace.md)。Phase 1 在基础上报链路中加入 Worker 侧自适应观测控制，不改变既有 MonitorInfo、unary RPC、Manager 和 MySQL 语义。
 
 ```
 ┌──────────────────────┐      gRPC unary Push       ┌──────────────────────┐

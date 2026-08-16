@@ -1,7 +1,21 @@
 #include "rpc/monitor_pusher.h"
 
-#include <iostream>
+#include <algorithm>
 #include <chrono>
+#include <iostream>
+
+namespace {
+
+monitor::diagnostics::ObservabilityConfig MakeObservabilityConfig(
+    int interval_seconds) {
+  monitor::diagnostics::ObservabilityConfig config;
+  if (interval_seconds > 0) {
+    config.normal_interval_ms = interval_seconds * 1000;
+  }
+  return config;
+}
+
+}  // namespace
 
 namespace monitor {
 
@@ -9,19 +23,20 @@ MonitorPusher::MonitorPusher(const std::string& manager_address,
                              int interval_seconds)
     : manager_address_(manager_address),
       interval_seconds_(interval_seconds),
-      running_(false) {
+      running_(false),
+      observability_config_(MakeObservabilityConfig(interval_seconds)),
+      anomaly_detector_(observability_config_),
+      state_machine_(observability_config_) {
   // 创建 gRPC channel 和 stub
-  auto channel = grpc::CreateChannel(manager_address,
-                                     grpc::InsecureChannelCredentials());
+  auto channel =
+      grpc::CreateChannel(manager_address, grpc::InsecureChannelCredentials());
   stub_ = monitor::proto::GrpcManager::NewStub(channel);
 
   // 创建指标采集器
   collector_ = std::make_unique<MetricCollector>();
 }
 
-MonitorPusher::~MonitorPusher() {
-  Stop();
-}
+MonitorPusher::~MonitorPusher() { Stop(); }
 
 void MonitorPusher::Start() {
   if (running_) {
@@ -32,7 +47,9 @@ void MonitorPusher::Start() {
   // PushLoop 会循环调用 PushOnce，所以这里创建线程后，周期 Push 流程就开始了。
   thread_ = std::make_unique<std::thread>(&MonitorPusher::PushLoop, this);
   std::cout << "MonitorPusher started, pushing to " << manager_address_
-            << " every " << interval_seconds_ << " seconds" << std::endl;
+            << " with adaptive sampling (normal interval "
+            << observability_config_.normal_interval_ms / 1000 << " seconds)"
+            << std::endl;
 }
 
 void MonitorPusher::Stop() {
@@ -49,10 +66,7 @@ void MonitorPusher::PushLoop() {
                 << std::endl;
     }
 
-    // 等待指定间隔
-    for (int i = 0; i < interval_seconds_ && running_; ++i) {
-      std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
+    WaitForNextSample();
   }
 }
 
@@ -61,15 +75,20 @@ bool MonitorPusher::PushOnce() {
   monitor::proto::MonitorInfo info;
   collector_->CollectAll(&info);
 
+  const auto anomaly = anomaly_detector_.Evaluate(info);
+  state_machine_.Update(anomaly);
+  probe_controller_.Apply(state_machine_.state());
+
   // 打印采集到的所有指标
-  std::cout << "\n================== Collected Metrics ==================" << std::endl;
-  
+  std::cout << "\n================== Collected Metrics =================="
+            << std::endl;
+
   // 主机信息
   if (info.has_host_info()) {
     std::cout << "[Host] Hostname: " << info.host_info().hostname()
               << ", IP: " << info.host_info().ip_address() << std::endl;
   }
-  
+
   // CPU 统计信息 - 所有核心
   std::cout << "\n--- CPU Statistics ---" << std::endl;
   for (int i = 0; i < info.cpu_stat_size(); ++i) {
@@ -84,7 +103,7 @@ bool MonitorPusher::PushOnce() {
               << "IRQ: " << cpu.irq_percent() << "%, "
               << "SoftIRQ: " << cpu.soft_irq_percent() << "%" << std::endl;
   }
-  
+
   // CPU 负载
   if (info.has_cpu_load()) {
     std::cout << "\n--- CPU Load ---" << std::endl;
@@ -92,7 +111,7 @@ bool MonitorPusher::PushOnce() {
               << ", 5min: " << info.cpu_load().load_avg_3()
               << ", 15min: " << info.cpu_load().load_avg_15() << std::endl;
   }
-  
+
   // 内存信息 - 所有字段
   if (info.has_mem_info()) {
     const auto& mem = info.mem_info();
@@ -118,7 +137,7 @@ bool MonitorPusher::PushOnce() {
               << "SReclaimable: " << mem.sreclaimable() << " MB, "
               << "SUnreclaim: " << mem.sunreclaim() << " MB" << std::endl;
   }
-  
+
   // 网络信息 - 所有网卡所有字段
   if (info.net_info_size() > 0) {
     std::cout << "\n--- Network Info ---" << std::endl;
@@ -130,10 +149,11 @@ bool MonitorPusher::PushOnce() {
       std::cout << "  Send: " << net.send_rate() << " B/s ("
                 << net.send_packets_rate() << " pkt/s)" << std::endl;
       std::cout << "  Errors(in/out): " << net.err_in() << "/" << net.err_out()
-                << ", Drops(in/out): " << net.drop_in() << "/" << net.drop_out() << std::endl;
+                << ", Drops(in/out): " << net.drop_in() << "/" << net.drop_out()
+                << std::endl;
     }
   }
-  
+
   // 磁盘信息 - 所有磁盘所有字段
   if (info.disk_info_size() > 0) {
     std::cout << "\n--- Disk Info ---" << std::endl;
@@ -142,10 +162,13 @@ bool MonitorPusher::PushOnce() {
       std::cout << "[" << disk.name() << "]" << std::endl;
       std::cout << "  Read: " << disk.read_bytes_per_sec() / 1024.0 << " KB/s, "
                 << "IOPS: " << disk.read_iops() << ", "
-                << "Latency: " << disk.avg_read_latency_ms() << " ms" << std::endl;
-      std::cout << "  Write: " << disk.write_bytes_per_sec() / 1024.0 << " KB/s, "
+                << "Latency: " << disk.avg_read_latency_ms() << " ms"
+                << std::endl;
+      std::cout << "  Write: " << disk.write_bytes_per_sec() / 1024.0
+                << " KB/s, "
                 << "IOPS: " << disk.write_iops() << ", "
-                << "Latency: " << disk.avg_write_latency_ms() << " ms" << std::endl;
+                << "Latency: " << disk.avg_write_latency_ms() << " ms"
+                << std::endl;
       std::cout << "  Util: " << disk.util_percent() << "%, "
                 << "IO_InProgress: " << disk.io_in_progress() << std::endl;
       std::cout << "  Reads: " << disk.reads() << ", "
@@ -154,7 +177,7 @@ bool MonitorPusher::PushOnce() {
                 << "SectorsWritten: " << disk.sectors_written() << std::endl;
     }
   }
-  
+
   // 软中断信息 - 所有 CPU 核心
   if (info.soft_irq_size() > 0) {
     std::cout << "\n--- SoftIRQ Info ---" << std::endl;
@@ -173,8 +196,9 @@ bool MonitorPusher::PushOnce() {
                 << "RCU: " << sirq.rcu() << std::endl;
     }
   }
-  
-  std::cout << "========================================================\n" << std::endl;
+
+  std::cout << "========================================================\n"
+            << std::endl;
 
   // 推送数据
   grpc::ClientContext context;
@@ -183,11 +207,23 @@ bool MonitorPusher::PushOnce() {
   grpc::Status status = stub_->SetMonitorInfo(&context, info, &response);
 
   if (status.ok()) {
-    std::cout << ">>> Pushed monitor data to " << manager_address_ << " successfully <<<" << std::endl;
+    std::cout << ">>> Pushed monitor data to " << manager_address_
+              << " successfully <<<" << std::endl;
     return true;
   } else {
-    std::cerr << ">>> Push failed: " << status.error_message() << " <<<" << std::endl;
+    std::cerr << ">>> Push failed: " << status.error_message() << " <<<"
+              << std::endl;
     return false;
+  }
+}
+
+void MonitorPusher::WaitForNextSample() {
+  constexpr int kWaitSliceMs = 100;
+  const int interval_ms = state_machine_.CurrentIntervalMs();
+  for (int elapsed_ms = 0; running_ && elapsed_ms < interval_ms;
+       elapsed_ms += kWaitSliceMs) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(
+        std::min(kWaitSliceMs, interval_ms - elapsed_ms)));
   }
 }
 

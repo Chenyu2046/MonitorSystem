@@ -1,8 +1,8 @@
-# Core Flow Trace: Worker Push 监控数据上报与 Manager 入库链路
+# Core Flow Trace: Worker Adaptive Observability 与 Manager 入库链路
 
 ## 1. 链路总览
 
-`worker main` -> `MonitorPusher::Start` -> `MonitorPusher::PushLoop` -> `MonitorPusher::PushOnce` -> `MetricCollector::CollectAll` -> `MonitorInter::UpdateOnce` -> `GrpcManager::SetMonitorInfo` -> `GrpcServerImpl::SetMonitorInfo` -> `HostManager::OnDataReceived` -> `HostManager::CalcScore` -> `HostManager::WriteToMysql` -> `MySQL`
+`worker main` -> `MonitorPusher::Start` -> `MonitorPusher::PushLoop` -> `MonitorPusher::PushOnce` -> `MetricCollector::CollectAll` -> `AnomalyDetector::Evaluate` -> `ObservabilityStateMachine::Update` -> `ProbeController::Apply` -> `GrpcManager::SetMonitorInfo` -> `GrpcServerImpl::SetMonitorInfo` -> `HostManager::OnDataReceived` -> `HostManager::CalcScore` -> `HostManager::WriteToMysql` -> `MySQL`
 
 ## 2. 逐层调用表
 
@@ -11,15 +11,17 @@
 | 1 | `main` | `worker/src/main.cpp` | 解析 manager 地址和推送间隔，创建推送器 | `argv[1]` manager 地址，`argv[2]` interval | `MonitorPusher` 对象 |
 | 2 | `MonitorPusher::MonitorPusher` | `worker/src/rpc/monitor_pusher.cpp` | 创建 gRPC channel/stub 和 `MetricCollector` | `manager_address`、`interval_seconds` | `stub_`、`collector_` |
 | 3 | `MonitorPusher::Start` | `worker/src/rpc/monitor_pusher.cpp` | 启动后台推送线程 | 无业务输入 | `thread_` 开始运行 |
-| 4 | `MonitorPusher::PushLoop` | `worker/src/rpc/monitor_pusher.cpp` | 周期调用 `PushOnce`，按 interval sleep | `running_` 状态 | 多次 Push 调用 |
-| 5 | `MonitorPusher::PushOnce` | `worker/src/rpc/monitor_pusher.cpp` | 创建 `MonitorInfo`，采集指标，发起 gRPC Push | 空 `MonitorInfo` | gRPC `Status`，bool 成功/失败 |
+| 4 | `MonitorPusher::PushLoop` | `worker/src/rpc/monitor_pusher.cpp` | 周期调用 `PushOnce`，按当前状态等待下一轮 | `running_` 状态 | 多次 Push 调用 |
+| 5 | `MonitorPusher::PushOnce` | `worker/src/rpc/monitor_pusher.cpp` | 创建 `MonitorInfo`，编排采集、诊断控制和 gRPC Push | 空 `MonitorInfo` | gRPC `Status`，bool 成功/失败 |
 | 6 | `MetricCollector::CollectAll` | `worker/src/monitor/metric_collector.cpp` | 设置主机名，逐个 monitor 填充 protobuf | `MonitorInfo*` | 填满 CPU/Load/内存/磁盘/网络/主机信息 |
 | 7 | `MonitorInter::UpdateOnce` 系列 | `worker/src/monitor/*.cpp` | 从系统采集具体指标 | `MonitorInfo*` | protobuf 子字段 |
-| 8 | `GrpcManager::Stub::SetMonitorInfo` | 由 `proto/monitor_info.proto` 生成 | 通过 gRPC 把 `MonitorInfo` 发给 manager | `MonitorInfo` | `google.protobuf.Empty` 或错误状态 |
-| 9 | `GrpcServerImpl::SetMonitorInfo` | `manager/src/rpc/grpc_server.cpp` | 校验请求、缓存原始数据、触发回调 | `MonitorInfo* request` | gRPC `Status` |
-| 10 | `HostManager::OnDataReceived` | `manager/src/host_manager.cpp` | 构造 host 标识，计算评分和变化率，更新内存态，写库 | `const MonitorInfo& info` | `host_scores_` 更新，MySQL 写入 |
-| 11 | `HostManager::CalcScore` | `manager/src/host_manager.cpp` | 按 CPU/内存/负载/磁盘/网络权重算健康分 | `MonitorInfo` | `double score` |
-| 12 | `HostManager::WriteToMysql` | `manager/src/host_manager.cpp` | 写主表和详情表 | `host_name`、`HostScore`、变化率 | MySQL rows |
+| 8 | `AnomalyDetector::Evaluate` | `worker/src/diagnostics/anomaly_detector.cpp` | 根据现有基础指标生成信号和整体异常分数 | `MonitorInfo` | `AnomalyResult` |
+| 9 | `ObservabilityStateMachine::Update` | `worker/src/diagnostics/observability_state.cpp` | 以连续样本和恢复条件更新观测状态 | `AnomalyResult` | `ObservabilityState` |
+| 10 | `ProbeController::Apply` | `worker/src/diagnostics/probe_controller.cpp` | 规划当前状态的期望 Probe 集合；Phase 1 不执行真实 attach | `ObservabilityState` | desired Probe set |
+| 11 | `GrpcManager::Stub::SetMonitorInfo` | 由 `proto/monitor_info.proto` 生成 | 通过 gRPC 把 `MonitorInfo` 发给 manager | `MonitorInfo` | `google.protobuf.Empty` 或错误状态 |
+| 12 | `GrpcServerImpl::SetMonitorInfo` | `manager/src/rpc/grpc_server.cpp` | 校验请求、缓存原始数据、触发回调 | `MonitorInfo* request` | gRPC `Status` |
+| 13 | `HostManager::OnDataReceived` | `manager/src/host_manager.cpp` | 构造 host 标识，计算评分和变化率，更新内存态，写库 | `const MonitorInfo& info` | `host_scores_` 更新，MySQL 写入 |
+| 14 | `HostManager::CalcScore` / `WriteToMysql` | `manager/src/host_manager.cpp` | 计算健康分并写主表和详情表 | `MonitorInfo`、变化率 | MySQL rows |
 
 ## 3. 数据流
 
@@ -99,6 +101,16 @@ CPU/softirq 采集中的 `open + mmap` 成功路径会 `munmap + close`，基本
 
 worker 参数解析、线程创建、gRPC server 创建都没有异常/失败兜底。MySQL 插入错误缺少统一检查。更关键的是 manager 写库失败不会反馈到 worker，因为 `GrpcServerImpl::SetMonitorInfo` 回调执行完仍返回 `OK`，这会让上游误以为端到端成功。
 
-## 7. 面试版解释
+## 7. Phase 1 Adaptive Observability
+
+`MonitorPusher::PushOnce()` 在基础指标采集完成后执行三步控制逻辑：
+
+1. `AnomalyDetector::Evaluate()` 从当前 `MonitorInfo` 读取 CPU、IOWait、Load、Memory、Disk、Network PPS 和 Network SoftIRQ，生成每个信号的归一化分数及整体分数。
+2. `ObservabilityStateMachine::Update()` 使用连续样本确认、进入/退出阈值和恢复计数，在 `NORMAL`、`SUSPECT`、`DIAGNOSTIC`、`PROFILING`、`COOLDOWN` 之间转换。
+3. `ProbeController::Apply()` 根据状态更新期望 Probe 集合。Phase 1 只规划集合并验证幂等性，真实 eBPF attach/detach 属于 Phase 2。
+
+状态机当前采样周期为：`NORMAL` 使用配置的基础 interval，`SUSPECT` 使用 suspect interval，`DIAGNOSTIC`、`PROFILING` 和 `COOLDOWN` 使用 diagnostic interval。`MonitorPusher::WaitForNextSample()` 按当前状态等待，因此不会再固定使用启动参数作为所有状态的周期。
+
+## 8. 面试版解释
 
 这个项目最核心的链路是 worker 主动 push 监控数据到 manager。worker 启动时从命令行拿到 manager 地址和推送间隔，创建 `MonitorPusher`，后台线程周期执行 `PushOnce`。每次 push 会创建一个 `MonitorInfo` protobuf，由 `MetricCollector` 依次调用 CPU、内存、磁盘、网络、软中断、主机信息这些 monitor，从 `/proc`、内核模块 `/dev` 设备或 eBPF map 里采集数据并填充 protobuf。然后 worker 通过 gRPC 调用 `GrpcManager::SetMonitorInfo` 发给 manager。manager 的 `GrpcServerImpl::SetMonitorInfo` 先校验 hostname 并缓存原始数据，再通过回调进入 `HostManager::OnDataReceived`。这里会生成唯一主机名，基于 CPU、内存、负载、磁盘、网络算健康评分，维护内存里的最新主机状态，同时计算变化率并写入 MySQL 的主表和详情表。风险点主要是 MySQL 写失败不会反馈给 worker，变化率的静态 map 没有锁，以及 worker 缺少优雅退出和参数异常处理。

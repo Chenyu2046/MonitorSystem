@@ -16,6 +16,13 @@ endif()
 # eBPF 支持选项
 option(ENABLE_EBPF "Enable eBPF-based network monitoring" ON)
 
+set(DIAGNOSTICS_SOURCES
+    src/diagnostics/observability_config.cpp
+    src/diagnostics/anomaly_detector.cpp
+    src/diagnostics/observability_state.cpp
+    src/diagnostics/probe_controller.cpp
+)
+
 # 查找 libbpf
 if(ENABLE_EBPF)
     find_library(LIBBPF_LIBRARY bpf PATHS /usr/lib64 /usr/lib/x86_64-linux-gnu /usr/local/lib)
@@ -65,6 +72,7 @@ set(WORKER_SOURCES
     src/monitor/host_info_monitor.cpp
     src/rpc/monitor_pusher.cpp
     src/utils/read_file.cpp
+    ${DIAGNOSTICS_SOURCES}
 )
 
 # 根据 eBPF 支持选择网络监控实现
@@ -91,6 +99,18 @@ if(EBPF_FOUND)
 endif()
 
 target_link_libraries(worker PUBLIC ${WORKER_LIBS})
+
+if(BUILD_TESTING)
+    add_executable(diagnostics_test
+        tests/diagnostics_test.cpp
+        ${DIAGNOSTICS_SOURCES}
+    )
+    target_include_directories(diagnostics_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/worker/include
+    )
+    target_link_libraries(diagnostics_test PRIVATE monitor_proto)
+    add_test(NAME diagnostics_test COMMAND diagnostics_test)
+endif()
 
 # 内核模块构建（可选）
 add_custom_target(kernel_modules

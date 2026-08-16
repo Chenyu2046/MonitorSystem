@@ -18,7 +18,7 @@ eBPF 深度诊断 / On-CPU / Off-CPU Profiling
 可解释根因定位
 ```
 
-Phase 0 只调整项目定位和架构文档。未实现的后续能力明确标记为目标，不改变当前运行时行为。
+Phase 0 只调整项目定位和架构文档。Phase 1 增加了 Worker 侧的自适应观测控制，但未实现真实诊断 Probe；未实现的后续能力明确标记为目标。
 
 ## 当前运行时基线
 
@@ -44,16 +44,16 @@ Worker 当前保留以下基础能力：
 - TC ingress/egress + `BPF_MAP_TYPE_PERCPU_HASH` 的网络字节/报文聚合。
 - `MetricCollector` 作为统一采集入口。
 
-Manager 当前保留主机状态、健康评分、MySQL 持久化、历史查询、最优节点选择和现有 Query API。已有 `SetMonitorInfo` unary Push 链路不在 Phase 0 重构为 streaming。
+Manager 当前保留主机状态、健康评分、MySQL 持久化、历史查询、最优节点选择和现有 Query API。已有 `SetMonitorInfo` unary Push 链路仍不重构为 streaming。
 
 ## 目标架构边界
 
 后续 Phase 将在现有基础上增加以下边界：
 
-| 层次 | 目标职责 | Phase 0 状态 |
+| 层次 | 目标职责 | 当前状态 |
 |---|---|---|
 | Base Metrics | 采集 CPU、内存、磁盘、网络、SoftIRQ | 已有并保留 |
-| Adaptive Observability | 根据异常趋势调整采样周期和观测深度 | 目标，未实现 |
+| Adaptive Observability | 根据异常趋势调整采样周期和观测深度 | Phase 1 已实现状态机、异常评分和期望 Probe 规划 |
 | eBPF Diagnostics | TCP、Block I/O、Scheduler 聚合诊断 | 目标，未实现 |
 | Profiling | On-CPU、Off-CPU、Stack、Symbolizer | 目标，未实现 |
 | Evidence / RCA | Manager 侧证据构建、规则诊断、Incident | 目标，未实现 |
