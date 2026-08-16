@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 
 namespace monitor::diagnostics {
@@ -23,6 +24,13 @@ struct ObservabilityConfig {
   int profiling_sample_hz = 49;
   int cooldown_sec = 30;
   std::string ebpf_object_dir = "worker/src/ebpf/.output";
+
+  std::size_t sender_max_queue_items = 32;
+  std::size_t sender_max_queue_bytes = 4 * 1024 * 1024;
+  int sender_rpc_deadline_ms = 1500;
+  int sender_max_retries = 3;
+  int sender_retry_initial_ms = 100;
+  int sender_retry_max_ms = 1000;
 
   double cpu_warning_percent = 70.0;
   double cpu_critical_percent = 90.0;

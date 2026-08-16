@@ -394,14 +394,22 @@ ProbeController::~ProbeController() {
 bool ProbeController::Apply(ObservabilityState state, ProfileType profile_type,
                             ProfileSession::Clock::time_point now) {
   const bool profiling_requested = state == ObservabilityState::kProfiling;
+  if (!profiling_requested) {
+    profile_expired_ = false;
+  }
+  const bool profile_expired =
+      profile_session_ && profiling_requested && profile_session_->Expired(now);
   if (profile_session_ &&
       (!profiling_requested || profile_session_->type() != profile_type ||
-       profile_session_->Expired(now))) {
+       profile_expired)) {
     profile_session_->Close();
     profile_session_.reset();
   }
 
-  if (profiling_requested && !profile_session_) {
+  if (profile_expired) {
+    profile_expired_ = true;
+  }
+  if (profiling_requested && !profile_session_ && !profile_expired_) {
     profile_session_ = std::make_unique<ProfileSession>(
         next_profile_id_++, profile_type, profile_max_duration_, std::nullopt,
         [this] { DetachProfile(); });

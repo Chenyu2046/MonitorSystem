@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <random>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -154,7 +156,9 @@ MonitorPusher::MonitorPusher(const std::string& manager_address,
       state_machine_(observability_config_),
       probe_controller_(observability_config_.ebpf_object_dir,
                         observability_config_.profiling_sample_hz,
-                        observability_config_.profiling_max_duration_sec) {
+                        observability_config_.profiling_max_duration_sec),
+      send_queue_(observability_config_.sender_max_queue_items,
+                  observability_config_.sender_max_queue_bytes) {
   // 创建 gRPC channel 和 stub
   auto channel =
       grpc::CreateChannel(manager_address, grpc::InsecureChannelCredentials());
@@ -167,10 +171,14 @@ MonitorPusher::MonitorPusher(const std::string& manager_address,
 MonitorPusher::~MonitorPusher() { Stop(); }
 
 void MonitorPusher::Start() {
-  if (running_) {
+  std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+  bool expected = false;
+  if (!running_.compare_exchange_strong(expected, true)) {
     return;
   }
-  running_ = true;
+  send_queue_.Open();
+  sender_thread_ =
+      std::make_unique<std::thread>(&MonitorPusher::SendLoop, this);
   // 启动一个后台线程，在当前 MonitorPusher 对象上执行 PushLoop。
   // PushLoop 会循环调用 PushOnce，所以这里创建线程后，周期 Push 流程就开始了。
   thread_ = std::make_unique<std::thread>(&MonitorPusher::PushLoop, this);
@@ -181,16 +189,24 @@ void MonitorPusher::Start() {
 }
 
 void MonitorPusher::Stop() {
-  running_ = false;
+  std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+  if (!running_.exchange(false)) {
+    return;
+  }
+  stop_condition_.notify_all();
   if (thread_ && thread_->joinable()) {
     thread_->join();
+  }
+  send_queue_.Close();
+  if (sender_thread_ && sender_thread_->joinable()) {
+    sender_thread_->join();
   }
 }
 
 void MonitorPusher::PushLoop() {
   while (running_) {
     if (!PushOnce()) {
-      std::cerr << "Failed to push monitor data to " << manager_address_
+      std::cerr << "Dropped monitor data before send to " << manager_address_
                 << std::endl;
     }
 
@@ -332,20 +348,71 @@ bool MonitorPusher::PushOnce() {
   std::cout << "========================================================\n"
             << std::endl;
 
-  // 推送数据
-  grpc::ClientContext context;
-  google::protobuf::Empty response;
+  return send_queue_.Push(std::move(info));
+}
 
-  grpc::Status status = stub_->SetMonitorInfo(&context, info, &response);
+void MonitorPusher::SendLoop() {
+  monitor::proto::MonitorInfo info;
+  while (send_queue_.Pop(&info)) {
+    if (!SendWithRetry(info)) {
+      std::cerr << ">>> Push failed after retries to " << manager_address_
+                << " <<<" << std::endl;
+    }
+  }
+}
 
-  if (status.ok()) {
-    std::cout << ">>> Pushed monitor data to " << manager_address_
-              << " successfully <<<" << std::endl;
-    return true;
-  } else {
-    std::cerr << ">>> Push failed: " << status.error_message() << " <<<"
-              << std::endl;
-    return false;
+bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
+  int backoff_ms = observability_config_.sender_retry_initial_ms;
+  for (int attempt = 0; attempt <= observability_config_.sender_max_retries;
+       ++attempt) {
+    grpc::ClientContext context;
+    context.set_deadline(std::chrono::system_clock::now() +
+                         std::chrono::milliseconds(
+                             observability_config_.sender_rpc_deadline_ms));
+    google::protobuf::Empty response;
+    const grpc::Status status =
+        stub_->SetMonitorInfo(&context, info, &response);
+    if (status.ok()) {
+      return true;
+    }
+    if (!IsRetryable(status) ||
+        attempt == observability_config_.sender_max_retries) {
+      return false;
+    }
+
+    static thread_local std::mt19937 random_engine(
+        static_cast<std::mt19937::result_type>(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    const int max_backoff = observability_config_.sender_retry_max_ms;
+    const int jitter_limit =
+        std::min(max_backoff - backoff_ms, std::max(1, backoff_ms / 4));
+    std::uniform_int_distribution<int> jitter(0, jitter_limit);
+    const auto delay =
+        std::chrono::milliseconds(backoff_ms + jitter(random_engine));
+    if (WaitForRetry(delay)) {
+      return false;
+    }
+    backoff_ms = backoff_ms > max_backoff / 2
+                     ? max_backoff
+                     : std::min(max_backoff, backoff_ms * 2);
+  }
+  return false;
+}
+
+bool MonitorPusher::WaitForRetry(std::chrono::milliseconds delay) {
+  std::unique_lock<std::mutex> lock(stop_mutex_);
+  return stop_condition_.wait_for(lock, delay,
+                                  [this] { return !running_.load(); });
+}
+
+bool MonitorPusher::IsRetryable(const grpc::Status& status) {
+  switch (status.error_code()) {
+    case grpc::StatusCode::UNAVAILABLE:
+    case grpc::StatusCode::DEADLINE_EXCEEDED:
+    case grpc::StatusCode::RESOURCE_EXHAUSTED:
+      return true;
+    default:
+      return false;
   }
 }
 

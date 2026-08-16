@@ -2,7 +2,7 @@
 
 ## 1. 链路总览
 
-`worker main` -> `MonitorPusher::Start` -> `MonitorPusher::PushLoop` -> `MonitorPusher::PushOnce` -> `MetricCollector::CollectAll` -> `AnomalyDetector::Evaluate` -> `ObservabilityStateMachine::Update` -> `ProbeController::Apply` -> `MonitorInfo.diagnostic` -> `GrpcManager::SetMonitorInfo` -> `GrpcServerImpl::SetMonitorInfo` -> `HostManager::OnDataReceived` -> `EvidenceBuilder` -> `RootCauseEngine` -> `IncidentStore` / `HostManager::CalcScore` -> `MySQL`
+`worker main` -> `MonitorPusher::Start` -> `MonitorPusher::PushLoop` -> `MonitorPusher::PushOnce` -> `MetricCollector::CollectAll` -> `AnomalyDetector::Evaluate` -> `ObservabilityStateMachine::Update` -> `ProbeController::Apply` -> `MonitorInfo.diagnostic` -> `MonitorSendQueue` -> `MonitorPusher::SendLoop` -> `GrpcManager::SetMonitorInfo` -> `GrpcServerImpl::SetMonitorInfo` -> `HostManager::OnDataReceived` -> `EvidenceBuilder` -> `RootCauseEngine` -> `IncidentStore` / `HostManager::CalcScore` -> `MySQL`
 
 ## 2. 逐层调用表
 
@@ -10,21 +10,24 @@
 |---|---|---|---|---|---|
 | 1 | `main` | `worker/src/main.cpp` | 解析 manager 地址和推送间隔，创建推送器 | `argv[1]` manager 地址，`argv[2]` interval | `MonitorPusher` 对象 |
 | 2 | `MonitorPusher::MonitorPusher` | `worker/src/rpc/monitor_pusher.cpp` | 创建 gRPC channel/stub 和 `MetricCollector` | `manager_address`、`interval_seconds` | `stub_`、`collector_` |
-| 3 | `MonitorPusher::Start` | `worker/src/rpc/monitor_pusher.cpp` | 启动后台推送线程 | 无业务输入 | `thread_` 开始运行 |
-| 4 | `MonitorPusher::PushLoop` | `worker/src/rpc/monitor_pusher.cpp` | 周期调用 `PushOnce`，按当前状态等待下一轮 | `running_` 状态 | 多次 Push 调用 |
-| 5 | `MonitorPusher::PushOnce` | `worker/src/rpc/monitor_pusher.cpp` | 创建 `MonitorInfo`，编排采集、诊断控制和 gRPC Push | 空 `MonitorInfo` | gRPC `Status`，bool 成功/失败 |
-| 6 | `MetricCollector::CollectAll` | `worker/src/monitor/metric_collector.cpp` | 设置主机名，逐个 monitor 填充 protobuf | `MonitorInfo*` | 填满 CPU/Load/内存/磁盘/网络/主机信息 |
-| 7 | `MonitorInter::UpdateOnce` 系列 | `worker/src/monitor/*.cpp` | 从系统采集具体指标 | `MonitorInfo*` | protobuf 子字段 |
-| 8 | `AnomalyDetector::Evaluate` | `worker/src/diagnostics/anomaly_detector.cpp` | 根据现有基础指标生成信号和整体异常分数 | `MonitorInfo` | `AnomalyResult` |
-| 9 | `ObservabilityStateMachine::Update` | `worker/src/diagnostics/observability_state.cpp` | 以连续样本和恢复条件更新观测状态 | `AnomalyResult` | `ObservabilityState` |
-| 10 | `ProbeController::Apply` | `worker/src/diagnostics/probe_controller.cpp` | 按状态加载/卸载独立 eBPF 对象；对象、内核或 BTF 不可用时记录状态并降级 | `ObservabilityState` | Probe status |
-| 11 | `GrpcManager::Stub::SetMonitorInfo` | 由 `proto/monitor_info.proto` 生成 | 通过 gRPC 把 `MonitorInfo` 发给 manager | `MonitorInfo` | `google.protobuf.Empty` 或错误状态 |
-| 12 | `GrpcServerImpl::SetMonitorInfo` | `manager/src/rpc/grpc_server.cpp` | 校验请求、缓存原始数据、触发回调 | `MonitorInfo* request` | gRPC `Status` |
-| 13 | `HostManager::OnDataReceived` | `manager/src/host_manager.cpp` | 构造 host 标识，计算评分/变化率，并把诊断快照交给证据与根因模块 | `const MonitorInfo& info` | `host_scores_`、IncidentStore |
-| 14 | `EvidenceBuilder::Build` | `manager/src/diagnostics/evidence_builder.cpp` | 将基础指标、诊断信号和 Top-N profile 转为带来源的 Evidence | `MonitorInfo` | `vector<Evidence>` |
-| 15 | `RootCauseEngine::Evaluate` | `manager/src/diagnostics/root_cause_engine.cpp` | 使用多证据规则计算可解释 confidence，不把单阈值伪装成根因 | `vector<Evidence>` | `vector<RootCause>` |
-| 16 | `IncidentStore::Observe` | `manager/src/diagnostics/incident_store.cpp` | 更新活动 Incident，恢复后进入有界历史缓存，保留原始 Evidence | `Evidence`、`RootCause` | active/history Incident |
-| 17 | `HostManager::CalcScore` / `WriteToMysql` | `manager/src/host_manager.cpp` | 保留原健康分与主表/详情表写入语义 | `MonitorInfo`、变化率 | MySQL rows |
+| 3 | `MonitorPusher::Start` | `worker/src/rpc/monitor_pusher.cpp` | 启动采集线程和发送线程 | 无业务输入 | `thread_`、`sender_thread_` 开始运行 |
+| 4 | `MonitorPusher::PushLoop` | `worker/src/rpc/monitor_pusher.cpp` | 周期调用 `PushOnce`，按当前状态等待下一轮 | `running_` 状态 | 多次采集入队 |
+| 5 | `MonitorPusher::PushOnce` | `worker/src/rpc/monitor_pusher.cpp` | 创建 `MonitorInfo`，编排采集和诊断控制后写入有界队列 | 空 `MonitorInfo` | 入队成功/丢弃 |
+| 6 | `MonitorSendQueue::Push` | `worker/src/rpc/monitor_send_queue.cpp` | 按 item/byte 上限入队，队满时优先保留诊断数据 | `MonitorInfo` | 队列 item |
+| 7 | `MonitorPusher::SendLoop` | `worker/src/rpc/monitor_pusher.cpp` | 顺序取出队列数据并发送 | 队列 item | 发送结果 |
+| 8 | `MonitorPusher::SendWithRetry` | `worker/src/rpc/monitor_pusher.cpp` | 为每次 unary RPC 设置 deadline，只对指定状态指数退避重试 | `MonitorInfo` | gRPC `Status` |
+| 9 | `MetricCollector::CollectAll` | `worker/src/monitor/metric_collector.cpp` | 设置主机名，逐个 monitor 填充 protobuf | `MonitorInfo*` | 填满 CPU/Load/内存/磁盘/网络/主机信息 |
+| 10 | `MonitorInter::UpdateOnce` 系列 | `worker/src/monitor/*.cpp` | 从系统采集具体指标 | `MonitorInfo*` | protobuf 子字段 |
+| 11 | `AnomalyDetector::Evaluate` | `worker/src/diagnostics/anomaly_detector.cpp` | 根据现有基础指标生成信号和整体异常分数 | `MonitorInfo` | `AnomalyResult` |
+| 12 | `ObservabilityStateMachine::Update` | `worker/src/diagnostics/observability_state.cpp` | 以连续样本和恢复条件更新观测状态 | `AnomalyResult` | `ObservabilityState` |
+| 13 | `ProbeController::Apply` | `worker/src/diagnostics/probe_controller.cpp` | 按状态加载/卸载独立 eBPF 对象；对象、内核或 BTF 不可用时记录状态并降级 | `ObservabilityState` | Probe status |
+| 14 | `GrpcManager::Stub::SetMonitorInfo` | 由 `proto/monitor_info.proto` 生成 | 通过 gRPC 把 `MonitorInfo` 发给 manager；每次调用有 deadline | `MonitorInfo` | `google.protobuf.Empty` 或错误状态 |
+| 15 | `GrpcServerImpl::SetMonitorInfo` | `manager/src/rpc/grpc_server.cpp` | 校验请求、缓存原始数据、触发回调 | `MonitorInfo* request` | gRPC `Status` |
+| 16 | `HostManager::OnDataReceived` | `manager/src/host_manager.cpp` | 构造 host 标识，计算评分/变化率，并把诊断快照交给证据与根因模块 | `const MonitorInfo& info` | `host_scores_`、IncidentStore |
+| 17 | `EvidenceBuilder::Build` | `manager/src/diagnostics/evidence_builder.cpp` | 将基础指标、诊断信号和 Top-N profile 转为带来源的 Evidence | `MonitorInfo` | `vector<Evidence>` |
+| 18 | `RootCauseEngine::Evaluate` | `manager/src/diagnostics/root_cause_engine.cpp` | 使用多证据规则计算可解释 confidence，不把单阈值伪装成根因 | `vector<Evidence>` | `vector<RootCause>` |
+| 19 | `IncidentStore::Observe` | `manager/src/diagnostics/incident_store.cpp` | 更新活动 Incident，恢复后进入有界历史缓存，保留原始 Evidence | `Evidence`、`RootCause` | active/history Incident |
+| 20 | `HostManager::CalcScore` / `WriteToMysql` | `manager/src/host_manager.cpp` | 保留原健康分与主表/详情表写入语义 | `MonitorInfo`、变化率 | MySQL rows |
 
 ## 3. 数据流
 
@@ -52,6 +55,8 @@
 
 - `MonitorPusher::running_`：`Start()` 置为 `true`，`Stop()` 置为 `false`
 - `MonitorPusher::thread_`：保存后台 push 线程
+- `MonitorPusher::sender_thread_`：保存顺序发送线程
+- `MonitorPusher::send_queue_`：按 item/byte 上限缓存待发送 `MonitorInfo`；诊断数据优先于普通周期数据
 - `MetricCollector::monitors_`：构造时保存多个 `unique_ptr<MonitorInter>`
 - `CpuStatMonitor::cpu_stat_map_`：保存上次 CPU tick，用于计算 CPU 百分比
 - `CpuSoftIrqMonitor::cpu_softirqs_`：保存上次软中断计数和时间点
@@ -78,7 +83,7 @@
 | `/dev/cpu_softirq_monitor` 不存在 | `CpuSoftIrqMonitor::UpdateOnce` 静默 return | softirq 数据缺失不明显 |
 | `/proc/*` 读取失败 | 多数路径返回空数据或不填字段 | manager 会用默认 0 参与评分，可能误判健康 |
 | eBPF 初始化失败 | `NetEbpfMonitor` 打日志，`loaded_ = false` | 如果编译期启用 eBPF，运行期失败后该 monitor 不自动退到 `/proc/net/dev` |
-| gRPC `SetMonitorInfo` 失败 | worker 打印 `status.error_message()` 并返回 false | 没有重连退避、队列缓存或数据补偿 |
+| gRPC `SetMonitorInfo` 失败 | 每次调用有 deadline；`UNAVAILABLE`、`DEADLINE_EXCEEDED`、`RESOURCE_EXHAUSTED` 按指数退避有限重试 | 非重试状态直接丢弃；队列满时可能丢弃普通数据；WAL/补传未实现 |
 | manager 收到空 request | 返回 `INVALID_ARGUMENT` | 正常 |
 | manager 收到空 hostname | 返回 `INVALID_ARGUMENT` 或 `OnDataReceived` 内 return | 该批数据丢弃 |
 | `mysql_init` 失败 | 打印错误并 return | gRPC 仍返回 OK，worker 认为 Push 成功 |
@@ -115,6 +120,8 @@ worker 参数解析、线程创建、gRPC server 创建都没有异常/失败兜
 5. `ProbeController::CollectSnapshot()` 读取已 attach 对象的有界 map，并聚合 Per-CPU 值；Worker 将异常信号和 Top-N profile ID 写入新增 `MonitorInfo.diagnostic` field 10，旧 field 1~9 语义保持不变。
 
 Phase 4 在 `MonitorInfo.diagnostic` field 10 中追加异常信号和 Top-N profile ID。Manager 侧只在内存中保留最多 256 条已结束 Incident，并通过新增 QueryService RPC 提供 Incident 查询；旧 field 1~9、旧查询和 MySQL 表不变。
+
+Phase 5 在不改变 unary RPC 协议的前提下，将 Worker 发送拆为采集线程和顺序发送线程。`MonitorSendQueue` 同时限制 item 数和序列化字节数；队满时优先移除普通基础指标，诊断/Profiling 快照优先保留。`SendWithRetry` 为每次 RPC 设置 deadline，只重试 `UNAVAILABLE`、`DEADLINE_EXCEEDED` 和 `RESOURCE_EXHAUSTED`，使用带 jitter 的指数退避。WAL、ACK 序号和断线补传仍未实现。
 
 状态机当前采样周期为：`NORMAL` 使用配置的基础 interval，`SUSPECT` 使用 suspect interval，`DIAGNOSTIC`、`PROFILING` 和 `COOLDOWN` 使用 diagnostic interval。`MonitorPusher::WaitForNextSample()` 按当前状态等待，因此不会再固定使用启动参数作为所有状态的周期。
 

@@ -1,5 +1,7 @@
 #include <cassert>
 #include <chrono>
+#include <string>
+#include <utility>
 
 #include "diagnostics/anomaly_detector.h"
 #include "diagnostics/observability_config.h"
@@ -7,6 +9,7 @@
 #include "diagnostics/probe_controller.h"
 #include "diagnostics/profile_session.h"
 #include "diagnostics/symbolizer.h"
+#include "rpc/monitor_send_queue.h"
 
 namespace {
 
@@ -161,6 +164,51 @@ void TestSymbolizerFallback() {
   assert(!symbolizer.SymbolizeUser(1, 0x1234).empty());
 }
 
+void TestMonitorSendQueuePriority() {
+  monitor::MonitorSendQueue queue(2, 1024);
+  queue.Open();
+
+  monitor::proto::MonitorInfo base_one;
+  base_one.set_name("base-one");
+  monitor::proto::MonitorInfo base_two;
+  base_two.set_name("base-two");
+  monitor::proto::MonitorInfo diagnostic;
+  diagnostic.set_name("diagnostic");
+  diagnostic.mutable_diagnostic()->set_state(
+      monitor::proto::OBSERVABILITY_DIAGNOSTIC);
+
+  assert(queue.Push(std::move(base_one)));
+  assert(queue.Push(std::move(base_two)));
+  assert(queue.Push(std::move(diagnostic)));
+  assert(queue.dropped_count() == 1);
+
+  monitor::proto::MonitorInfo output;
+  assert(queue.Pop(&output));
+  assert(output.name() == "base-two");
+  queue.Close();
+  assert(queue.Pop(&output));
+  assert(output.name() == "diagnostic");
+  assert(!queue.Pop(&output));
+
+  monitor::MonitorSendQueue byte_limited(2, 1);
+  byte_limited.Open();
+  monitor::proto::MonitorInfo oversized;
+  oversized.set_name("x");
+  assert(!byte_limited.Push(std::move(oversized)));
+  assert(byte_limited.dropped_count() == 1);
+  byte_limited.Close();
+
+  monitor::MonitorSendQueue drain(2, 1024);
+  drain.Open();
+  monitor::proto::MonitorInfo pending;
+  pending.set_name("pending");
+  assert(drain.Push(std::move(pending)));
+  drain.Close();
+  assert(drain.Pop(&output));
+  assert(output.name() == "pending");
+  assert(!drain.Pop(&output));
+}
+
 }  // namespace
 
 int main() {
@@ -170,5 +218,6 @@ int main() {
   TestProbeController();
   TestProfileSession();
   TestSymbolizerFallback();
+  TestMonitorSendQueuePriority();
   return 0;
 }

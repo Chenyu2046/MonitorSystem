@@ -65,6 +65,7 @@ class ProbeController {
   std::unique_ptr<Runtime> runtime_;
   std::uint64_t next_profile_id_ = 1;
   std::unique_ptr<ProfileSession> profile_session_;
+  bool profile_expired_ = false;
 };
 
 }  // namespace monitor::diagnostics

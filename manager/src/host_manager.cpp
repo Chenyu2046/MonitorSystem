@@ -31,6 +31,11 @@ const char* DiagnosticStateName(monitor::proto::ObservabilityState state) {
   return "UNKNOWN";
 }
 
+bool IsMetricsLogEnabled() {
+  const char* value = std::getenv("MONITOR_VERBOSE_METRICS");
+  return !value || std::string(value) != "0";
+}
+
 }  // namespace
 
 #ifdef ENABLE_MYSQL
@@ -43,11 +48,6 @@ const char* MYSQL_DB = "monitor_db";
 const char* GetEnvOrDefault(const char* name, const char* default_value) {
   const char* value = std::getenv(name);
   return value && value[0] != '\0' ? value : default_value;
-}
-
-bool IsMetricsLogEnabled() {
-  const char* value = std::getenv("MONITOR_VERBOSE_METRICS");
-  return !value || std::string(value) != "0";
 }
 
 MYSQL* mysql_conn = nullptr;

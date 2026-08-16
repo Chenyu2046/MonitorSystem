@@ -18,7 +18,7 @@ eBPF 深度诊断 / On-CPU / Off-CPU Profiling
 可解释根因定位
 ```
 
-Phase 0 只调整项目定位和架构文档。Phase 1 增加了 Worker 侧的自适应观测控制，Phase 2 增加了受限 eBPF 诊断 Probe，Phase 3 增加了限时 Profiling，Phase 4 增加了 Manager 侧 Evidence/RCA/Incident 内存闭环；尚未完成的后续能力明确标记为目标。
+Phase 0 只调整项目定位和架构文档。Phase 1 增加了 Worker 侧的自适应观测控制，Phase 2 增加了受限 eBPF 诊断 Probe，Phase 3 增加了限时 Profiling，Phase 4 增加了 Manager 侧 Evidence/RCA/Incident 内存闭环，Phase 5 增加了 Worker unary Push 的 deadline、有限重试和有界发送队列；尚未完成的后续能力明确标记为目标。
 
 ## 当前运行时基线
 
@@ -58,6 +58,7 @@ Manager 当前保留主机状态、健康评分、MySQL 持久化、历史查询
 | Profiling | On-CPU、Off-CPU、Stack、Symbolizer | Phase 3 已加入有界 Stack Map、ProfileSession、采样聚合和地址/module+offset 回退；Linux perf/BPF 功能验证待执行 |
 | Evidence / RCA | Manager 侧证据构建、规则诊断、Incident | Phase 4 已实现多证据规则、可解释 confidence 和有界 IncidentStore |
 | Persistence / Query | 新增诊断数据的存储与查询 | Phase 4 已追加 diagnostic field 10 和三类内存查询 RPC；MySQL 诊断表待后续阶段 |
+| Reliability | Worker 发送队列、deadline、重试和退避 | Phase 5 已实现 unary Push 可靠发送；WAL、批量补传和端到端 ACK 待后续 P2 |
 
 设计约束：
 

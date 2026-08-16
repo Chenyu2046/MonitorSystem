@@ -1,7 +1,10 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -12,6 +15,7 @@
 #include "diagnostics/observability_state.h"
 #include "diagnostics/probe_controller.h"
 #include "monitor/metric_collector.h"
+#include "rpc/monitor_send_queue.h"
 
 #include "monitor_info.grpc.pb.h"
 #include "monitor_info.pb.h"
@@ -45,8 +49,12 @@ class MonitorPusher {
 
  private:
   void PushLoop();
+  void SendLoop();
   bool PushOnce();
   void WaitForNextSample();
+  bool SendWithRetry(const monitor::proto::MonitorInfo& info);
+  bool WaitForRetry(std::chrono::milliseconds delay);
+  static bool IsRetryable(const grpc::Status& status);
 
   std::string manager_address_;
   int interval_seconds_;
@@ -58,6 +66,11 @@ class MonitorPusher {
   diagnostics::AnomalyDetector anomaly_detector_;
   diagnostics::ObservabilityStateMachine state_machine_;
   diagnostics::ProbeController probe_controller_;
+  MonitorSendQueue send_queue_;
+  std::unique_ptr<std::thread> sender_thread_;
+  std::mutex lifecycle_mutex_;
+  std::mutex stop_mutex_;
+  std::condition_variable stop_condition_;
 };
 
 }  // namespace monitor

@@ -9,6 +9,10 @@ bool ObservabilityConfig::IsValid() const {
          profiling_duration_sec > 0 && profiling_max_duration_sec > 0 &&
          profiling_sample_hz > 0 && cooldown_sec > 0 &&
          profiling_duration_sec <= profiling_max_duration_sec &&
+         sender_max_queue_items > 0 && sender_max_queue_bytes > 0 &&
+         sender_rpc_deadline_ms > 0 && sender_max_retries >= 0 &&
+         sender_retry_initial_ms > 0 &&
+         sender_retry_max_ms >= sender_retry_initial_ms &&
          suspect_enter_score > recovery_score &&
          diagnostic_enter_score > suspect_enter_score &&
          profiling_enter_score >= diagnostic_enter_score &&

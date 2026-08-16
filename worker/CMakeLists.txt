@@ -81,6 +81,7 @@ set(WORKER_SOURCES
     src/monitor/disk_monitor.cpp
     src/monitor/host_info_monitor.cpp
     src/rpc/monitor_pusher.cpp
+    src/rpc/monitor_send_queue.cpp
     src/utils/read_file.cpp
     ${DIAGNOSTICS_SOURCES}
 )
@@ -113,6 +114,7 @@ target_link_libraries(worker PUBLIC ${WORKER_LIBS})
 if(BUILD_TESTING)
     add_executable(diagnostics_test
         tests/diagnostics_test.cpp
+        src/rpc/monitor_send_queue.cpp
         ${DIAGNOSTICS_SOURCES}
     )
     target_include_directories(diagnostics_test PRIVATE
