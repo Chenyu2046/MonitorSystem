@@ -103,12 +103,13 @@ worker 参数解析、线程创建、gRPC server 创建都没有异常/失败兜
 
 ## 7. Adaptive Observability and eBPF Diagnostics
 
-`MonitorPusher::PushOnce()` 在基础指标采集完成后执行四步控制逻辑：
+`MonitorPusher::PushOnce()` 在基础指标采集完成后执行五步控制逻辑：
 
 1. `AnomalyDetector::Evaluate()` 从当前 `MonitorInfo` 读取 CPU、IOWait、Load、Memory、Disk、Network PPS 和 Network SoftIRQ，生成每个信号的归一化分数及整体分数。
 2. `ObservabilityStateMachine::Update()` 使用连续样本确认、进入/退出阈值和恢复计数，在 `NORMAL`、`SUSPECT`、`DIAGNOSTIC`、`PROFILING`、`COOLDOWN` 之间转换。
 3. `ProbeController::Apply()` 根据状态加载/卸载 TCP、Block I/O、Scheduler 三类独立 eBPF 对象；每个对象单独记录 `requested`、`available`、`attached` 和错误码，加载失败不会终止基础指标 Worker。
-4. `ProbeController::CollectSnapshot()` 读取已 attach 对象的有界 map，并聚合 Per-CPU 值；当前快照是诊断内部数据，既有 `MonitorInfo`/Manager 持久化协议仍保持不变。
+4. `PROFILING` 状态创建单一 `ProfileSession`，按异常信号选择 On-CPU 或 Off-CPU，并由硬超时和 RAII 清理资源。
+5. `ProbeController::CollectSnapshot()` 读取已 attach 对象的有界 map，并聚合 Per-CPU 值；当前快照是诊断内部数据，既有 `MonitorInfo`/Manager 持久化协议仍保持不变。
 
 状态机当前采样周期为：`NORMAL` 使用配置的基础 interval，`SUSPECT` 使用 suspect interval，`DIAGNOSTIC`、`PROFILING` 和 `COOLDOWN` 使用 diagnostic interval。`MonitorPusher::WaitForNextSample()` 按当前状态等待，因此不会再固定使用启动参数作为所有状态的周期。
 

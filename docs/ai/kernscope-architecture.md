@@ -55,7 +55,7 @@ Manager 当前保留主机状态、健康评分、MySQL 持久化、历史查询
 | Base Metrics | 采集 CPU、内存、磁盘、网络、SoftIRQ | 已有并保留 |
 | Adaptive Observability | 根据异常趋势调整采样周期和观测深度 | Phase 1 已实现状态机、异常评分和 Probe 规划 |
 | eBPF Diagnostics | TCP、Block I/O、Scheduler 聚合诊断 | Phase 2 已实现独立对象加载、attach、map 聚合和不可用降级；Linux/BTF 功能验证待执行 |
-| Profiling | On-CPU、Off-CPU、Stack、Symbolizer | 目标，未实现 |
+| Profiling | On-CPU、Off-CPU、Stack、Symbolizer | Phase 3 已加入有界 Stack Map、ProfileSession、采样聚合和地址/module+offset 回退；Linux perf/BPF 功能验证待执行 |
 | Evidence / RCA | Manager 侧证据构建、规则诊断、Incident | 目标，未实现 |
 | Persistence / Query | 新增诊断数据的存储与查询 | 目标，原有链路保留 |
 

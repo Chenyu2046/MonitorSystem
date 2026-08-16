@@ -5,6 +5,8 @@
 #include "diagnostics/observability_config.h"
 #include "diagnostics/observability_state.h"
 #include "diagnostics/probe_controller.h"
+#include "diagnostics/profile_session.h"
+#include "diagnostics/symbolizer.h"
 
 namespace {
 
@@ -16,6 +18,9 @@ using monitor::diagnostics::ObservabilityState;
 using monitor::diagnostics::ObservabilityStateMachine;
 using monitor::diagnostics::ProbeController;
 using monitor::diagnostics::ProbeKind;
+using monitor::diagnostics::ProfileSession;
+using monitor::diagnostics::ProfileType;
+using monitor::diagnostics::Symbolizer;
 
 monitor::proto::MonitorInfo MakeBaseInfo() {
   monitor::proto::MonitorInfo info;
@@ -125,6 +130,35 @@ void TestProbeController() {
   DiagnosticSnapshot snapshot;
   assert(controller.CollectSnapshot(&snapshot));
   assert(!controller.Status(ProbeKind::kTcp).attached);
+
+  const auto start = ProfileSession::Clock::now();
+  assert(!controller.Apply(ObservabilityState::kProfiling, ProfileType::kOnCpu,
+                           start));
+  assert(controller.DesiredProbes().count(ProbeKind::kOnCpuProfile) == 1);
+  assert(!controller.Apply(ObservabilityState::kProfiling, ProfileType::kOnCpu,
+                           start + std::chrono::seconds(31)));
+  assert(controller.DesiredProbes().count(ProbeKind::kOnCpuProfile) == 0);
+}
+
+void TestProfileSession() {
+  bool detached = false;
+  ProfileSession session(1, ProfileType::kOnCpu, std::chrono::seconds(2),
+                         std::nullopt, [&] { detached = true; });
+  const auto start = ProfileSession::Clock::now();
+  session.Start(start);
+  assert(session.active());
+  assert(!session.Expired(start + std::chrono::seconds(1)));
+  assert(session.Expired(start + std::chrono::seconds(2)));
+  session.Close();
+  assert(!session.active());
+  assert(detached);
+}
+
+void TestSymbolizerFallback() {
+  Symbolizer symbolizer;
+  assert(!symbolizer.LoadKernelSymbols("missing-kallsyms"));
+  assert(symbolizer.SymbolizeKernel(0x1234) == "0x1234");
+  assert(!symbolizer.SymbolizeUser(1, 0x1234).empty());
 }
 
 }  // namespace
@@ -134,5 +168,7 @@ int main() {
   TestStateMachineTransitions();
   TestRecoveryHysteresis();
   TestProbeController();
+  TestProfileSession();
+  TestSymbolizerFallback();
   return 0;
 }

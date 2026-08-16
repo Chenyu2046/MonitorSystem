@@ -7,7 +7,7 @@ bool ObservabilityConfig::IsValid() const {
          diagnostic_interval_ms > 0 && anomaly_enter_count > 0 &&
          diagnostic_enter_count > 0 && anomaly_exit_count > 0 &&
          profiling_duration_sec > 0 && profiling_max_duration_sec > 0 &&
-         cooldown_sec > 0 &&
+         profiling_sample_hz > 0 && cooldown_sec > 0 &&
          profiling_duration_sec <= profiling_max_duration_sec &&
          suspect_enter_score > recovery_score &&
          diagnostic_enter_score > suspect_enter_score &&

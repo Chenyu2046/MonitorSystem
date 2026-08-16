@@ -20,6 +20,7 @@ struct ObservabilityConfig {
 
   int profiling_duration_sec = 15;
   int profiling_max_duration_sec = 30;
+  int profiling_sample_hz = 49;
   int cooldown_sec = 30;
   std::string ebpf_object_dir = "worker/src/ebpf/.output";
 

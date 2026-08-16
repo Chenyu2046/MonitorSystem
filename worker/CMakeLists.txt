@@ -21,6 +21,8 @@ set(DIAGNOSTICS_SOURCES
     src/diagnostics/anomaly_detector.cpp
     src/diagnostics/observability_state.cpp
     src/diagnostics/probe_controller.cpp
+    src/diagnostics/profile_session.cpp
+    src/diagnostics/symbolizer.cpp
 )
 
 # 查找 libbpf
@@ -53,6 +55,8 @@ if(EBPF_FOUND)
         ${EBPF_SRC_DIR}/tcp_diag.bpf.c
         ${EBPF_SRC_DIR}/block_io_diag.bpf.c
         ${EBPF_SRC_DIR}/sched_diag.bpf.c
+        ${EBPF_SRC_DIR}/oncpu_profile.bpf.c
+        ${EBPF_SRC_DIR}/offcpu_profile.bpf.c
     )
     
     add_custom_command(

@@ -12,7 +12,7 @@ OUTPUT_DIR := .output
 SKEL_DIR := $(OUTPUT_DIR)
 
 # BPF 程序源文件
-BPF_SRCS := net_stats.bpf.c tcp_diag.bpf.c block_io_diag.bpf.c sched_diag.bpf.c
+BPF_SRCS := net_stats.bpf.c tcp_diag.bpf.c block_io_diag.bpf.c sched_diag.bpf.c oncpu_profile.bpf.c offcpu_profile.bpf.c
 BPF_OBJS := $(patsubst %.bpf.c,$(OUTPUT_DIR)/%.bpf.o,$(BPF_SRCS))
 BPF_SKELS := $(patsubst %.bpf.c,$(SKEL_DIR)/%.skel.h,$(BPF_SRCS))
 

@@ -21,6 +21,18 @@ monitor::diagnostics::ObservabilityConfig MakeObservabilityConfig(
   return config;
 }
 
+monitor::diagnostics::ProfileType SelectProfileType(
+    const monitor::diagnostics::AnomalyResult& anomaly) {
+  for (const auto& signal : anomaly.signals) {
+    if (signal.triggered &&
+        (signal.domain == monitor::diagnostics::AnomalyDomain::kDisk ||
+         signal.metric == "io_wait_percent")) {
+      return monitor::diagnostics::ProfileType::kOffCpu;
+    }
+  }
+  return monitor::diagnostics::ProfileType::kOnCpu;
+}
+
 }  // namespace
 
 namespace monitor {
@@ -33,7 +45,9 @@ MonitorPusher::MonitorPusher(const std::string& manager_address,
       observability_config_(MakeObservabilityConfig(interval_seconds)),
       anomaly_detector_(observability_config_),
       state_machine_(observability_config_),
-      probe_controller_(observability_config_.ebpf_object_dir) {
+      probe_controller_(observability_config_.ebpf_object_dir,
+                        observability_config_.profiling_sample_hz,
+                        observability_config_.profiling_max_duration_sec) {
   // 创建 gRPC channel 和 stub
   auto channel =
       grpc::CreateChannel(manager_address, grpc::InsecureChannelCredentials());
@@ -84,7 +98,7 @@ bool MonitorPusher::PushOnce() {
 
   const auto anomaly = anomaly_detector_.Evaluate(info);
   state_machine_.Update(anomaly);
-  probe_controller_.Apply(state_machine_.state());
+  probe_controller_.Apply(state_machine_.state(), SelectProfileType(anomaly));
   diagnostics::DiagnosticSnapshot diagnostic_snapshot;
   probe_controller_.CollectSnapshot(&diagnostic_snapshot);
 

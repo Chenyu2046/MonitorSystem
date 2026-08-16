@@ -1,16 +1,22 @@
 #include "diagnostics/probe_controller.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <utility>
 #include <vector>
 
 #ifdef ENABLE_EBPF
+#include <sys/ioctl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
 #include <array>
-#include <string>
+#include <cstring>
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
+#include <linux/perf_event.h>
 #endif
 
 namespace monitor::diagnostics {
@@ -40,9 +46,31 @@ struct SchedulerValue {
   std::uint64_t wakeups;
 };
 
+struct OnCpuKey {
+  std::uint32_t tgid;
+  std::uint32_t pid;
+  std::int32_t user_stack_id;
+  std::int32_t kernel_stack_id;
+};
+
+struct OnCpuValue {
+  std::uint64_t samples;
+};
+
+struct OffCpuKey {
+  std::uint32_t pid;
+  std::int32_t kernel_stack_id;
+};
+
+struct OffCpuValue {
+  std::uint64_t total_duration_ns;
+  std::uint64_t samples;
+};
+
 struct LoadedProbe {
   bpf_object* object = nullptr;
   std::vector<bpf_link*> links;
+  std::vector<int> perf_fds;
 };
 
 const char* ObjectName(ProbeKind kind) {
@@ -53,6 +81,10 @@ const char* ObjectName(ProbeKind kind) {
       return "block_io_diag.bpf.o";
     case ProbeKind::kScheduler:
       return "sched_diag.bpf.o";
+    case ProbeKind::kOnCpuProfile:
+      return "oncpu_profile.bpf.o";
+    case ProbeKind::kOffCpuProfile:
+      return "offcpu_profile.bpf.o";
   }
   return "";
 }
@@ -65,13 +97,90 @@ void DestroyLoadedProbe(LoadedProbe* probe) {
     bpf_link__destroy(link);
   }
   probe->links.clear();
+  for (const int fd : probe->perf_fds) {
+    close(fd);
+  }
+  probe->perf_fds.clear();
   if (probe->object) {
     bpf_object__close(probe->object);
     probe->object = nullptr;
   }
 }
 
-bool LoadProbe(const std::string& object_dir, ProbeKind kind,
+bool AttachGenericPrograms(bpf_object* object, LoadedProbe* loaded,
+                           int* error) {
+  bpf_program* program = nullptr;
+  bpf_object__for_each_program(program, object) {
+    bpf_link* link = bpf_program__attach(program);
+    const long attach_error = libbpf_get_error(link);
+    if (attach_error) {
+      if (error) {
+        *error = static_cast<int>(attach_error);
+      }
+      return false;
+    }
+    loaded->links.push_back(link);
+  }
+  return !loaded->links.empty();
+}
+
+bool AttachOnCpuProgram(bpf_object* object, int sample_hz, LoadedProbe* loaded,
+                        int* error) {
+  bpf_program* program = nullptr;
+  bpf_object__for_each_program(program, object) { break; }
+  if (!program) {
+    if (error) {
+      *error = -EINVAL;
+    }
+    return false;
+  }
+
+  const int possible_cpus = libbpf_num_possible_cpus();
+  if (possible_cpus <= 0) {
+    if (error) {
+      *error = -EINVAL;
+    }
+    return false;
+  }
+
+  perf_event_attr attr{};
+  attr.size = sizeof(attr);
+  attr.type = PERF_TYPE_SOFTWARE;
+  attr.config = PERF_COUNT_SW_CPU_CLOCK;
+  attr.freq = 1;
+  attr.sample_freq = static_cast<std::uint64_t>(sample_hz);
+  attr.disabled = 1;
+  attr.exclude_hv = 1;
+
+  for (int cpu = 0; cpu < possible_cpus; ++cpu) {
+    const int fd =
+        static_cast<int>(syscall(SYS_perf_event_open, &attr, -1, cpu, -1, 0));
+    if (fd < 0) {
+      if (error) {
+        *error = -errno;
+      }
+      return false;
+    }
+
+    bpf_link* link = bpf_program__attach_perf_event(program, fd);
+    const long attach_error = libbpf_get_error(link);
+    if (attach_error || ioctl(fd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
+      if (error) {
+        *error = attach_error ? static_cast<int>(attach_error) : -errno;
+      }
+      if (!attach_error) {
+        bpf_link__destroy(link);
+      }
+      close(fd);
+      return false;
+    }
+    loaded->links.push_back(link);
+    loaded->perf_fds.push_back(fd);
+  }
+  return true;
+}
+
+bool LoadProbe(const std::string& object_dir, ProbeKind kind, int sample_hz,
                LoadedProbe* loaded, int* error) {
   const std::string path = object_dir + "/" + ObjectName(kind);
   bpf_object* object = bpf_object__open_file(path.c_str(), nullptr);
@@ -92,28 +201,15 @@ bool LoadProbe(const std::string& object_dir, ProbeKind kind,
     return false;
   }
 
-  bpf_program* program = nullptr;
-  bpf_object__for_each_program(program, object) {
-    bpf_link* link = bpf_program__attach(program);
-    const long attach_error = libbpf_get_error(link);
-    if (attach_error) {
-      if (error) {
-        *error = static_cast<int>(attach_error);
-      }
-      for (bpf_link* attached : loaded->links) {
-        bpf_link__destroy(attached);
-      }
-      loaded->links.clear();
-      bpf_object__close(object);
-      return false;
-    }
-    loaded->links.push_back(link);
-  }
-
-  if (loaded->links.empty()) {
-    if (error) {
+  const bool attached =
+      kind == ProbeKind::kOnCpuProfile
+          ? AttachOnCpuProgram(object, sample_hz, loaded, error)
+          : AttachGenericPrograms(object, loaded, error);
+  if (!attached) {
+    if (error && *error == 0) {
       *error = -EINVAL;
     }
+    DestroyLoadedProbe(loaded);
     bpf_object__close(object);
     return false;
   }
@@ -204,22 +300,90 @@ bool ReadSchedulerMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
   return true;
 }
 
+bool ReadOnCpuMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
+  const int map_fd =
+      bpf_object__find_map_fd(loaded.object, "oncpu_stack_counts");
+  const int possible_cpus = libbpf_num_possible_cpus();
+  if (map_fd < 0 || possible_cpus <= 0) {
+    return false;
+  }
+
+  std::vector<OnCpuValue> per_cpu(static_cast<std::size_t>(possible_cpus));
+  OnCpuKey current_key{};
+  OnCpuKey next_key{};
+  const void* key = nullptr;
+  while (bpf_map_get_next_key(map_fd, key, &next_key) == 0) {
+    if (bpf_map_lookup_elem(map_fd, &next_key, per_cpu.data()) != 0) {
+      return false;
+    }
+    OnCpuProfileSample sample;
+    sample.tgid = next_key.tgid;
+    sample.pid = next_key.pid;
+    sample.user_stack_id = next_key.user_stack_id;
+    sample.kernel_stack_id = next_key.kernel_stack_id;
+    for (const auto& value : per_cpu) {
+      sample.samples += value.samples;
+    }
+    snapshot->profiling.on_cpu.push_back(sample);
+    current_key = next_key;
+    key = &current_key;
+  }
+  return true;
+}
+
+bool ReadOffCpuMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
+  const int map_fd = bpf_object__find_map_fd(loaded.object, "offcpu_aggregate");
+  const int possible_cpus = libbpf_num_possible_cpus();
+  if (map_fd < 0 || possible_cpus <= 0) {
+    return false;
+  }
+
+  std::vector<OffCpuValue> per_cpu(static_cast<std::size_t>(possible_cpus));
+  OffCpuKey current_key{};
+  OffCpuKey next_key{};
+  const void* key = nullptr;
+  while (bpf_map_get_next_key(map_fd, key, &next_key) == 0) {
+    if (bpf_map_lookup_elem(map_fd, &next_key, per_cpu.data()) != 0) {
+      return false;
+    }
+    OffCpuProfileSample sample;
+    sample.pid = next_key.pid;
+    sample.kernel_stack_id = next_key.kernel_stack_id;
+    for (const auto& value : per_cpu) {
+      sample.total_duration_ns += value.total_duration_ns;
+      sample.samples += value.samples;
+    }
+    snapshot->profiling.off_cpu.push_back(sample);
+    current_key = next_key;
+    key = &current_key;
+  }
+  return true;
+}
+
 #endif  // ENABLE_EBPF
 
 }  // namespace
 
 struct ProbeController::Runtime {
 #ifdef ENABLE_EBPF
-  std::array<LoadedProbe, 3> probes;
+  std::array<LoadedProbe, 5> probes;
 #endif
 };
 
-ProbeController::ProbeController(std::string object_dir)
+ProbeController::ProbeController(std::string object_dir, int profile_sample_hz,
+                                 int profile_max_duration_sec)
     : object_dir_(object_dir.empty() ? "worker/src/ebpf/.output"
                                      : std::move(object_dir)),
+      profile_sample_hz_(std::max(1, profile_sample_hz)),
+      profile_max_duration_(
+          std::chrono::seconds(std::max(1, profile_max_duration_sec))),
       runtime_(std::make_unique<Runtime>()) {}
 
 ProbeController::~ProbeController() {
+  if (profile_session_) {
+    profile_session_->Close();
+    profile_session_.reset();
+  }
 #ifdef ENABLE_EBPF
   for (auto& probe : runtime_->probes) {
     DestroyLoadedProbe(&probe);
@@ -227,8 +391,26 @@ ProbeController::~ProbeController() {
 #endif
 }
 
-bool ProbeController::Apply(ObservabilityState state) {
-  const auto desired = DesiredFor(state);
+bool ProbeController::Apply(ObservabilityState state, ProfileType profile_type,
+                            ProfileSession::Clock::time_point now) {
+  const bool profiling_requested = state == ObservabilityState::kProfiling;
+  if (profile_session_ &&
+      (!profiling_requested || profile_session_->type() != profile_type ||
+       profile_session_->Expired(now))) {
+    profile_session_->Close();
+    profile_session_.reset();
+  }
+
+  if (profiling_requested && !profile_session_) {
+    profile_session_ = std::make_unique<ProfileSession>(
+        next_profile_id_++, profile_type, profile_max_duration_, std::nullopt,
+        [this] { DetachProfile(); });
+    profile_session_->Start(now);
+  }
+
+  const bool profile_active =
+      profile_session_ && profile_session_->active() && profiling_requested;
+  const auto desired = DesiredFor(state, profile_type, profile_active);
   const bool changed = !initialized_ || desired != desired_probes_;
   if (!changed) {
     return true;
@@ -236,7 +418,8 @@ bool ProbeController::Apply(ObservabilityState state) {
 
   bool all_available = true;
   for (ProbeKind kind :
-       {ProbeKind::kTcp, ProbeKind::kBlockIo, ProbeKind::kScheduler}) {
+       {ProbeKind::kTcp, ProbeKind::kBlockIo, ProbeKind::kScheduler,
+        ProbeKind::kOnCpuProfile, ProbeKind::kOffCpuProfile}) {
     ProbeStatus& status = statuses_[Index(kind)];
     const bool requested = desired.find(kind) != desired.end();
     status.requested = requested;
@@ -254,8 +437,9 @@ bool ProbeController::Apply(ObservabilityState state) {
 #ifdef ENABLE_EBPF
     DestroyLoadedProbe(&runtime_->probes[Index(kind)]);
     status.last_error = 0;
-    status.attached = LoadProbe(
-        object_dir_, kind, &runtime_->probes[Index(kind)], &status.last_error);
+    status.attached =
+        LoadProbe(object_dir_, kind, profile_sample_hz_,
+                  &runtime_->probes[Index(kind)], &status.last_error);
     status.available = status.attached;
 #else
     status.available = false;
@@ -281,6 +465,10 @@ bool ProbeController::CollectSnapshot(DiagnosticSnapshot* snapshot) const {
   snapshot->tcp_available = Status(ProbeKind::kTcp).attached;
   snapshot->block_io_available = Status(ProbeKind::kBlockIo).attached;
   snapshot->scheduler_available = Status(ProbeKind::kScheduler).attached;
+  snapshot->profiling.on_cpu_available =
+      Status(ProbeKind::kOnCpuProfile).attached;
+  snapshot->profiling.off_cpu_available =
+      Status(ProbeKind::kOffCpuProfile).attached;
 
   bool success = true;
   if (snapshot->tcp_available) {
@@ -295,6 +483,16 @@ bool ProbeController::CollectSnapshot(DiagnosticSnapshot* snapshot) const {
   if (snapshot->scheduler_available) {
     success = ReadSchedulerMap(runtime_->probes[Index(ProbeKind::kScheduler)],
                                snapshot) &&
+              success;
+  }
+  if (snapshot->profiling.on_cpu_available) {
+    success = ReadOnCpuMap(runtime_->probes[Index(ProbeKind::kOnCpuProfile)],
+                           snapshot) &&
+              success;
+  }
+  if (snapshot->profiling.off_cpu_available) {
+    success = ReadOffCpuMap(runtime_->probes[Index(ProbeKind::kOffCpuProfile)],
+                            snapshot) &&
               success;
   }
   return success;
@@ -316,22 +514,50 @@ std::size_t ProbeController::Index(ProbeKind kind) {
       return 1;
     case ProbeKind::kScheduler:
       return 2;
+    case ProbeKind::kOnCpuProfile:
+      return 3;
+    case ProbeKind::kOffCpuProfile:
+      return 4;
   }
   return 0;
 }
 
-std::set<ProbeKind> ProbeController::DesiredFor(ObservabilityState state) {
+std::set<ProbeKind> ProbeController::DesiredFor(ObservabilityState state,
+                                                ProfileType profile_type,
+                                                bool profile_active) {
+  std::set<ProbeKind> desired;
   switch (state) {
     case ObservabilityState::kNormal:
     case ObservabilityState::kCooldown:
-      return {};
+      return desired;
     case ObservabilityState::kSuspect:
       return {ProbeKind::kTcp, ProbeKind::kBlockIo};
     case ObservabilityState::kDiagnostic:
-    case ObservabilityState::kProfiling:
       return {ProbeKind::kTcp, ProbeKind::kBlockIo, ProbeKind::kScheduler};
+    case ObservabilityState::kProfiling:
+      desired = {ProbeKind::kTcp, ProbeKind::kBlockIo, ProbeKind::kScheduler};
+      if (profile_active) {
+        desired.insert(profile_type == ProfileType::kOnCpu
+                           ? ProbeKind::kOnCpuProfile
+                           : ProbeKind::kOffCpuProfile);
+      }
+      return desired;
   }
-  return {};
+  return desired;
+}
+
+void ProbeController::DetachProfile() {
+#ifdef ENABLE_EBPF
+  DestroyLoadedProbe(&runtime_->probes[Index(ProbeKind::kOnCpuProfile)]);
+  DestroyLoadedProbe(&runtime_->probes[Index(ProbeKind::kOffCpuProfile)]);
+#endif
+  for (ProbeKind kind : {ProbeKind::kOnCpuProfile, ProbeKind::kOffCpuProfile}) {
+    ProbeStatus& status = statuses_[Index(kind)];
+    status.requested = false;
+    status.available = false;
+    status.attached = false;
+    status.last_error = 0;
+  }
 }
 
 }  // namespace monitor::diagnostics
