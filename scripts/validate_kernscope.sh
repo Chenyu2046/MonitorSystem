@@ -19,9 +19,10 @@ if ! command -v cmake >/dev/null 2>&1; then
   echo "NOT VERIFIED: cmake is not installed"
 else
   cmake -S "$root_dir" -B "$build_dir" \
-    -DBUILD_MANAGER=OFF \
+    -DBUILD_MANAGER=ON \
     -DBUILD_BENCHMARK=OFF \
-    -DENABLE_EBPF=OFF
+    -DENABLE_EBPF=OFF \
+    -DENABLE_MYSQL=OFF
   cmake --build "$build_dir"
   ctest --test-dir "$build_dir" --output-on-failure
   if [ "$diff_check_inconclusive" -eq 0 ]; then
