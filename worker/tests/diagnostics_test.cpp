@@ -210,6 +210,20 @@ void TestProfileStackFrames() {
   assert(entry.kernel_stack_size() == 1);
 }
 
+void TestProbeRuntimeStatusProto() {
+  monitor::proto::DiagnosticSnapshot diagnostic;
+  auto* status = diagnostic.add_probe_status();
+  status->set_probe("TCP");
+  status->set_requested(true);
+  status->set_available(false);
+  status->set_attached(false);
+  status->set_last_error(-95);
+  assert(diagnostic.probe_status_size() == 1);
+  assert(diagnostic.probe_status(0).requested());
+  assert(!diagnostic.probe_status(0).available());
+  assert(diagnostic.probe_status(0).last_error() == -95);
+}
+
 void TestMonitorSendQueuePriority() {
   monitor::MonitorSendQueue queue(2, 1024);
   queue.Open();
@@ -265,6 +279,7 @@ int main() {
   TestProfileSession();
   TestSymbolizerFallback();
   TestProfileStackFrames();
+  TestProbeRuntimeStatusProto();
   TestMonitorSendQueuePriority();
   return 0;
 }

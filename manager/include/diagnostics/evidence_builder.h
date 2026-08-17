@@ -20,6 +20,7 @@ enum class EvidenceType {
   kSoftirqNetRx,
   kSchedulerSwitches,
   kSchedulerWakeups,
+  kDiagnosticCapabilityDegraded,
   kMemoryAvailable,
   kOnCpuStack,
   kOffCpuStack,

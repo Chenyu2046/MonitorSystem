@@ -71,10 +71,27 @@ monitor::proto::DiagnosticDomain ToProtoDomain(
   return monitor::proto::DOMAIN_UNKNOWN;
 }
 
+const char* ProbeName(monitor::diagnostics::ProbeKind kind) {
+  switch (kind) {
+    case monitor::diagnostics::ProbeKind::kTcp:
+      return "TCP";
+    case monitor::diagnostics::ProbeKind::kBlockIo:
+      return "BLOCK_IO";
+    case monitor::diagnostics::ProbeKind::kScheduler:
+      return "SCHEDULER";
+    case monitor::diagnostics::ProbeKind::kOnCpuProfile:
+      return "ONCPU";
+    case monitor::diagnostics::ProbeKind::kOffCpuProfile:
+      return "OFFCPU";
+  }
+  return "UNKNOWN";
+}
+
 void FillDiagnosticProto(
     const monitor::diagnostics::AnomalyResult& anomaly,
     monitor::diagnostics::ObservabilityState state,
     const monitor::diagnostics::DiagnosticSnapshot& snapshot,
+    const monitor::diagnostics::ProbeController& probe_controller,
     const monitor::diagnostics::Symbolizer& symbolizer,
     monitor::proto::DiagnosticSnapshot* diagnostic) {
   diagnostic->Clear();
@@ -87,6 +104,20 @@ void FillDiagnosticProto(
     proto_signal->set_metric(signal.metric);
     proto_signal->set_value(signal.value);
     proto_signal->set_anomaly_score(signal.score);
+  }
+
+  for (const auto kind : {monitor::diagnostics::ProbeKind::kTcp,
+                          monitor::diagnostics::ProbeKind::kBlockIo,
+                          monitor::diagnostics::ProbeKind::kScheduler,
+                          monitor::diagnostics::ProbeKind::kOnCpuProfile,
+                          monitor::diagnostics::ProbeKind::kOffCpuProfile}) {
+    const auto& status = probe_controller.Status(kind);
+    auto* proto_status = diagnostic->add_probe_status();
+    proto_status->set_probe(ProbeName(kind));
+    proto_status->set_requested(status.requested);
+    proto_status->set_available(status.available);
+    proto_status->set_attached(status.attached);
+    proto_status->set_last_error(status.last_error);
   }
 
   for (const auto& sample : snapshot.tcp) {
@@ -261,7 +292,7 @@ bool MonitorPusher::PushOnce() {
   diagnostics::DiagnosticSnapshot diagnostic_snapshot;
   probe_controller_.CollectSnapshot(&diagnostic_snapshot);
   FillDiagnosticProto(anomaly, state_machine_.state(), diagnostic_snapshot,
-                      symbolizer_, info.mutable_diagnostic());
+                      probe_controller_, symbolizer_, info.mutable_diagnostic());
 
   // 打印采集到的所有指标
   std::cout << "\n================== Collected Metrics =================="

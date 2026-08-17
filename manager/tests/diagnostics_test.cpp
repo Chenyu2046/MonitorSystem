@@ -164,6 +164,25 @@ void TestLockContentionRuleIsReachable() {
   assert(found);
 }
 
+void TestProbeCapabilityDegradedEvidence() {
+  monitor::proto::MonitorInfo info;
+  auto* status = info.mutable_diagnostic()->add_probe_status();
+  status->set_probe("BLOCK_IO");
+  status->set_requested(true);
+  status->set_available(false);
+  status->set_attached(false);
+  status->set_last_error(-95);
+
+  monitor::diagnostics::EvidenceBuilder builder;
+  const auto evidence =
+      builder.Build(info, std::chrono::system_clock::now());
+  assert(evidence.size() == 1);
+  assert(evidence.front().type ==
+         monitor::diagnostics::EvidenceType::kDiagnosticCapabilityDegraded);
+  monitor::diagnostics::RootCauseEngine engine;
+  assert(engine.Evaluate(evidence).empty());
+}
+
 }  // namespace
 
 int main() {
@@ -171,5 +190,6 @@ int main() {
   TestDiskRuleAndIncidentStore();
   TestNetworkEvidenceRequiresAllSignals();
   TestLockContentionRuleIsReachable();
+  TestProbeCapabilityDegradedEvidence();
   return 0;
 }

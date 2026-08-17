@@ -51,6 +51,8 @@ diagnostics::EvidenceType ParseEvidenceType(const std::string& name) {
     return diagnostics::EvidenceType::kSchedulerSwitches;
   if (name == "scheduler_wakeups")
     return diagnostics::EvidenceType::kSchedulerWakeups;
+  if (name == "diagnostic_capability_degraded")
+    return diagnostics::EvidenceType::kDiagnosticCapabilityDegraded;
   if (name == "memory_available")
     return diagnostics::EvidenceType::kMemoryAvailable;
   if (name == "oncpu_stack") return diagnostics::EvidenceType::kOnCpuStack;
@@ -1129,7 +1131,7 @@ std::vector<diagnostics::IncidentRecord> QueryManager::QueryIncidents(
       diagnostics::Evidence evidence;
       evidence.type = diagnostics::EvidenceType::kCpuUsage;
       const std::string type_name = evidence_row[0] ? evidence_row[0] : "";
-      const std::array<std::pair<const char*, diagnostics::EvidenceType>, 14>
+      const std::array<std::pair<const char*, diagnostics::EvidenceType>, 15>
           evidence_names{
               {{"cpu_usage", diagnostics::EvidenceType::kCpuUsage},
                {"run_queue", diagnostics::EvidenceType::kRunQueue},
@@ -1145,6 +1147,8 @@ std::vector<diagnostics::IncidentRecord> QueryManager::QueryIncidents(
                 diagnostics::EvidenceType::kSchedulerSwitches},
                {"scheduler_wakeups",
                 diagnostics::EvidenceType::kSchedulerWakeups},
+               {"diagnostic_capability_degraded",
+                diagnostics::EvidenceType::kDiagnosticCapabilityDegraded},
                {"memory_available",
                 diagnostics::EvidenceType::kMemoryAvailable},
                {"oncpu_stack", diagnostics::EvidenceType::kOnCpuStack},

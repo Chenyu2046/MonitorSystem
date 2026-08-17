@@ -88,6 +88,8 @@ const char* EvidenceTypeName(EvidenceType type) {
       return "scheduler_switches";
     case EvidenceType::kSchedulerWakeups:
       return "scheduler_wakeups";
+    case EvidenceType::kDiagnosticCapabilityDegraded:
+      return "diagnostic_capability_degraded";
     case EvidenceType::kMemoryAvailable:
       return "memory_available";
     case EvidenceType::kOnCpuStack:
@@ -190,6 +192,15 @@ std::vector<Evidence> EvidenceBuilder::Build(
             "DiagnosticSnapshot.scheduler", signal.value(), signal.unit(),
             signal.anomaly_score(), timestamp, "scheduler wakeups",
             signal.target());
+      }
+    }
+    for (const auto& status : info.diagnostic().probe_status()) {
+      if (status.requested() &&
+          (!status.available() || !status.attached())) {
+        Add(&evidence, EvidenceType::kDiagnosticCapabilityDegraded,
+            "DiagnosticSnapshot.probe_status",
+            static_cast<double>(status.last_error()), "errno", 0.0, timestamp,
+            "requested probe unavailable: " + status.probe(), status.probe());
       }
     }
     if (info.diagnostic().oncpu_profiles_size() > 0) {

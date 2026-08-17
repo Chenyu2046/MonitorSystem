@@ -44,12 +44,21 @@ message ProfileEntry {
   int32 kernel_stack_id = 8;
 }
 
+message ProbeRuntimeStatus {
+  string probe = 1;
+  bool requested = 2;
+  bool available = 3;
+  bool attached = 4;
+  int32 last_error = 5;
+}
+
 message DiagnosticSnapshot {
   ObservabilityState state = 1;
   double anomaly_score = 2;
   repeated DiagnosticSignal signals = 3;
   repeated ProfileEntry oncpu_profiles = 4;
   repeated ProfileEntry offcpu_profiles = 5;
+  repeated ProbeRuntimeStatus probe_status = 6;
 }
 
 message Evidence {
