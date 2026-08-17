@@ -1,9 +1,12 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
 namespace monitor::diagnostics {
+
+constexpr std::size_t kMaxProfileStackDepth = 64;
 
 struct TcpDiagnosticSample {
   std::uint32_t tgid = 0;
@@ -31,6 +34,8 @@ struct OnCpuProfileSample {
   std::int32_t user_stack_id = -1;
   std::int32_t kernel_stack_id = -1;
   std::uint64_t samples = 0;
+  std::vector<std::uint64_t> user_stack;
+  std::vector<std::uint64_t> kernel_stack;
 };
 
 struct OffCpuProfileSample {
@@ -38,6 +43,7 @@ struct OffCpuProfileSample {
   std::int32_t kernel_stack_id = -1;
   std::uint64_t total_duration_ns = 0;
   std::uint64_t samples = 0;
+  std::vector<std::uint64_t> kernel_stack;
 };
 
 struct ProfileSnapshot {

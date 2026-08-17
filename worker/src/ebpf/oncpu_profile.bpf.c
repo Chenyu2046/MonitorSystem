@@ -5,6 +5,8 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+#define MAX_STACK_DEPTH 64
+
 struct oncpu_stack_key {
     __u32 tgid;
     __u32 pid;
@@ -20,7 +22,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_STACK_TRACE);
     __uint(max_entries, 16384);
     __type(key, __u32);
-    __type(value, __u64);
+    __type(value, __u64[MAX_STACK_DEPTH]);
 } oncpu_stack_traces SEC(".maps");
 
 struct {

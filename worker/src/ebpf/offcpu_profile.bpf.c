@@ -4,6 +4,8 @@
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 
+#define MAX_STACK_DEPTH 64
+
 struct offcpu_start_value {
     __u64 timestamp_ns;
     __s32 kernel_stack_id;
@@ -30,7 +32,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_STACK_TRACE);
     __uint(max_entries, 16384);
     __type(key, __u32);
-    __type(value, __u64);
+    __type(value, __u64[MAX_STACK_DEPTH]);
 } offcpu_stack_traces SEC(".maps");
 
 struct {

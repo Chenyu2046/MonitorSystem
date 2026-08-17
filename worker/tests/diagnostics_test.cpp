@@ -1,5 +1,7 @@
 #include <cassert>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <utility>
 
@@ -175,6 +177,37 @@ void TestSymbolizerFallback() {
   assert(!symbolizer.LoadKernelSymbols("missing-kallsyms"));
   assert(symbolizer.SymbolizeKernel(0x1234) == "0x1234");
   assert(!symbolizer.SymbolizeUser(1, 0x1234).empty());
+
+  const auto symbols_path =
+      std::filesystem::temp_directory_path() / "kernscope-kallsyms-test.txt";
+  {
+    std::ofstream output(symbols_path);
+    output << "1000 T test_symbol\n";
+  }
+  Symbolizer loaded;
+  assert(loaded.LoadKernelSymbols(symbols_path.string()));
+  assert(loaded.SymbolizeKernel(0x1010) == "test_symbol+0x10");
+  std::filesystem::remove(symbols_path);
+}
+
+void TestProfileStackFrames() {
+  monitor::diagnostics::OnCpuProfileSample sample;
+  sample.user_stack_id = -1;
+  sample.kernel_stack_id = -1;
+  assert(sample.user_stack.empty());
+  assert(sample.kernel_stack.empty());
+
+  monitor::proto::ProfileEntry entry;
+  entry.set_user_stack_id(sample.user_stack_id);
+  entry.set_kernel_stack_id(sample.kernel_stack_id);
+  auto* user_frame = entry.add_user_stack();
+  user_frame->set_address(0x1234);
+  user_frame->set_symbol("module+0x34");
+  auto* kernel_frame = entry.add_kernel_stack();
+  kernel_frame->set_address(0x5678);
+  kernel_frame->set_symbol("schedule+0x78");
+  assert(entry.user_stack_size() == 1);
+  assert(entry.kernel_stack_size() == 1);
 }
 
 void TestMonitorSendQueuePriority() {
@@ -231,6 +264,7 @@ int main() {
   TestProbeController();
   TestProfileSession();
   TestSymbolizerFallback();
+  TestProfileStackFrames();
   TestMonitorSendQueuePriority();
   return 0;
 }

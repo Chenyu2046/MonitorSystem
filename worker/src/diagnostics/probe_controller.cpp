@@ -73,6 +73,28 @@ struct LoadedProbe {
   std::vector<int> perf_fds;
 };
 
+bool ReadStackTrace(int map_fd, std::int32_t stack_id,
+                    std::vector<std::uint64_t>* addresses) {
+  if (!addresses || stack_id < 0 || map_fd < 0) {
+    return false;
+  }
+
+  std::array<std::uint64_t, kMaxProfileStackDepth> values{};
+  if (bpf_map_lookup_elem(map_fd, &stack_id, values.data()) != 0) {
+    return false;
+  }
+
+  addresses->clear();
+  addresses->reserve(kMaxProfileStackDepth);
+  for (const auto address : values) {
+    if (address == 0) {
+      break;
+    }
+    addresses->push_back(address);
+  }
+  return true;
+}
+
 const char* ObjectName(ProbeKind kind) {
   switch (kind) {
     case ProbeKind::kTcp:
@@ -303,6 +325,8 @@ bool ReadSchedulerMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
 bool ReadOnCpuMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
   const int map_fd =
       bpf_object__find_map_fd(loaded.object, "oncpu_stack_counts");
+  const int stack_map_fd =
+      bpf_object__find_map_fd(loaded.object, "oncpu_stack_traces");
   const int possible_cpus = libbpf_num_possible_cpus();
   if (map_fd < 0 || possible_cpus <= 0) {
     return false;
@@ -324,6 +348,9 @@ bool ReadOnCpuMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
     for (const auto& value : per_cpu) {
       sample.samples += value.samples;
     }
+    ReadStackTrace(stack_map_fd, sample.user_stack_id, &sample.user_stack);
+    ReadStackTrace(stack_map_fd, sample.kernel_stack_id,
+                   &sample.kernel_stack);
     snapshot->profiling.on_cpu.push_back(sample);
     current_key = next_key;
     key = &current_key;
@@ -333,6 +360,8 @@ bool ReadOnCpuMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
 
 bool ReadOffCpuMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
   const int map_fd = bpf_object__find_map_fd(loaded.object, "offcpu_aggregate");
+  const int stack_map_fd =
+      bpf_object__find_map_fd(loaded.object, "offcpu_stack_traces");
   const int possible_cpus = libbpf_num_possible_cpus();
   if (map_fd < 0 || possible_cpus <= 0) {
     return false;
@@ -353,6 +382,8 @@ bool ReadOffCpuMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
       sample.total_duration_ns += value.total_duration_ns;
       sample.samples += value.samples;
     }
+    ReadStackTrace(stack_map_fd, sample.kernel_stack_id,
+                   &sample.kernel_stack);
     snapshot->profiling.off_cpu.push_back(sample);
     current_key = next_key;
     key = &current_key;

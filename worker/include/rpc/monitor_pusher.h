@@ -14,6 +14,7 @@
 #include "diagnostics/observability_config.h"
 #include "diagnostics/observability_state.h"
 #include "diagnostics/probe_controller.h"
+#include "diagnostics/symbolizer.h"
 #include "monitor/metric_collector.h"
 #include "rpc/monitor_send_queue.h"
 
@@ -66,6 +67,7 @@ class MonitorPusher {
   diagnostics::AnomalyDetector anomaly_detector_;
   diagnostics::ObservabilityStateMachine state_machine_;
   diagnostics::ProbeController probe_controller_;
+  diagnostics::Symbolizer symbolizer_;
   MonitorSendQueue send_queue_;
   std::unique_ptr<std::thread> sender_thread_;
   std::mutex lifecycle_mutex_;

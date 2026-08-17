@@ -1,6 +1,8 @@
 #include "diagnostics/evidence_builder.h"
 
 #include <algorithm>
+#include <iomanip>
+#include <sstream>
 
 namespace monitor::diagnostics {
 namespace {
@@ -23,6 +25,40 @@ void Add(std::vector<Evidence>* evidence, EvidenceType type,
       std::string(EvidenceTypeName(type)) + ":" + std::to_string(millis) + ":" +
           std::to_string(evidence->size()),
       type, source, "host", value, unit, severity, timestamp, detail});
+}
+
+std::string StackSummary(const monitor::proto::ProfileEntry& profile,
+                         bool include_user_stack) {
+  std::ostringstream detail;
+  detail << "pid=" << profile.pid() << " tid=" << profile.tid()
+         << " samples=" << profile.samples()
+         << " offcpu_ns=" << profile.total_offcpu_ns();
+  const auto append_frames = [&detail](const char* label,
+                                        const auto& frames) {
+    detail << " " << label << "=[";
+    constexpr int kMaxSummaryFrames = 5;
+    for (int index = 0;
+         index < std::min(frames.size(), kMaxSummaryFrames); ++index) {
+      if (index != 0) {
+        detail << ",";
+      }
+      const auto& frame = frames.Get(index);
+      if (frame.symbol().empty()) {
+        detail << "0x" << std::hex << frame.address() << std::dec;
+      } else {
+        detail << frame.symbol();
+      }
+    }
+    if (frames.size() > kMaxSummaryFrames) {
+      detail << ",...";
+    }
+    detail << "]";
+  };
+  if (include_user_stack) {
+    append_frames("user", profile.user_stack());
+  }
+  append_frames("kernel", profile.kernel_stack());
+  return detail.str();
 }
 
 }  // namespace
@@ -135,19 +171,27 @@ std::vector<Evidence> EvidenceBuilder::Build(
     }
     if (info.diagnostic().oncpu_profiles_size() > 0) {
       double samples = 0.0;
+      std::string detail = "top On-CPU profile entries";
       for (const auto& profile : info.diagnostic().oncpu_profiles()) {
         samples += profile.samples();
+        if (detail == "top On-CPU profile entries") {
+          detail += "; " + StackSummary(profile, true);
+        }
       }
       Add(&evidence, EvidenceType::kOnCpuStack, "DiagnosticSnapshot", samples,
-          "samples", 1.0, timestamp, "top On-CPU profile entries");
+          "samples", 1.0, timestamp, detail);
     }
     if (info.diagnostic().offcpu_profiles_size() > 0) {
       double duration_ns = 0.0;
+      std::string detail = "top Off-CPU profile entries";
       for (const auto& profile : info.diagnostic().offcpu_profiles()) {
         duration_ns += profile.total_offcpu_ns();
+        if (detail == "top Off-CPU profile entries") {
+          detail += "; " + StackSummary(profile, false);
+        }
       }
       Add(&evidence, EvidenceType::kOffCpuStack, "DiagnosticSnapshot",
-          duration_ns, "ns", 1.0, timestamp, "top Off-CPU profile entries");
+          duration_ns, "ns", 1.0, timestamp, detail);
     }
   }
   return evidence;

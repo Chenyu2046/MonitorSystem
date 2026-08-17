@@ -75,6 +75,7 @@ void FillDiagnosticProto(
     const monitor::diagnostics::AnomalyResult& anomaly,
     monitor::diagnostics::ObservabilityState state,
     const monitor::diagnostics::DiagnosticSnapshot& snapshot,
+    const monitor::diagnostics::Symbolizer& symbolizer,
     monitor::proto::DiagnosticSnapshot* diagnostic) {
   diagnostic->Clear();
   diagnostic->set_state(ToProtoState(state));
@@ -123,6 +124,17 @@ void FillDiagnosticProto(
     entry->set_samples(sample.samples);
     entry->set_user_stack_id(sample.user_stack_id);
     entry->set_kernel_stack_id(sample.kernel_stack_id);
+    for (const auto address : sample.user_stack) {
+      auto* frame = entry->add_user_stack();
+      frame->set_address(address);
+      frame->set_symbol(symbolizer.SymbolizeUser(
+          static_cast<int>(sample.tgid), address));
+    }
+    for (const auto address : sample.kernel_stack) {
+      auto* frame = entry->add_kernel_stack();
+      frame->set_address(address);
+      frame->set_symbol(symbolizer.SymbolizeKernel(address));
+    }
   }
 
   std::vector<monitor::diagnostics::OffCpuProfileSample> off_cpu =
@@ -139,6 +151,11 @@ void FillDiagnosticProto(
     entry->set_samples(sample.samples);
     entry->set_total_offcpu_ns(sample.total_duration_ns);
     entry->set_kernel_stack_id(sample.kernel_stack_id);
+    for (const auto address : sample.kernel_stack) {
+      auto* frame = entry->add_kernel_stack();
+      frame->set_address(address);
+      frame->set_symbol(symbolizer.SymbolizeKernel(address));
+    }
   }
 }
 
@@ -166,6 +183,7 @@ MonitorPusher::MonitorPusher(const std::string& manager_address,
 
   // 创建指标采集器
   collector_ = std::make_unique<MetricCollector>();
+  symbolizer_.LoadKernelSymbols();
 }
 
 MonitorPusher::~MonitorPusher() { Stop(); }
@@ -225,7 +243,7 @@ bool MonitorPusher::PushOnce() {
   diagnostics::DiagnosticSnapshot diagnostic_snapshot;
   probe_controller_.CollectSnapshot(&diagnostic_snapshot);
   FillDiagnosticProto(anomaly, state_machine_.state(), diagnostic_snapshot,
-                      info.mutable_diagnostic());
+                      symbolizer_, info.mutable_diagnostic());
 
   // 打印采集到的所有指标
   std::cout << "\n================== Collected Metrics =================="

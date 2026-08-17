@@ -1,5 +1,6 @@
 #include <cassert>
 #include <chrono>
+#include <string>
 
 #include "diagnostics/evidence_builder.h"
 #include "diagnostics/incident_store.h"
@@ -19,6 +20,12 @@ monitor::proto::MonitorInfo MakeCpuProfileInfo() {
   profile->set_pid(100);
   profile->set_tid(101);
   profile->set_samples(200);
+  auto* user_frame = profile->add_user_stack();
+  user_frame->set_address(0x1234);
+  user_frame->set_symbol("busy_loop+0x4");
+  auto* kernel_frame = profile->add_kernel_stack();
+  kernel_frame->set_address(0x5678);
+  kernel_frame->set_symbol("finish_task_switch+0x8");
   return info;
 }
 
@@ -33,6 +40,15 @@ void TestCpuRuleRequiresMultipleSignals() {
   assert(causes.front().type ==
          monitor::diagnostics::RootCauseType::kCpuSaturation);
   assert(causes.front().confidence >= 0.75);
+  bool saw_stack_detail = false;
+  for (const auto& item : evidence) {
+    if (item.type == monitor::diagnostics::EvidenceType::kOnCpuStack) {
+      saw_stack_detail = item.detail.find("busy_loop+0x4") != std::string::npos &&
+                         item.detail.find("finish_task_switch+0x8") !=
+                             std::string::npos;
+    }
+  }
+  assert(saw_stack_detail);
 
   monitor::proto::MonitorInfo cpu_only;
   auto* cpu = cpu_only.add_cpu_stat();
