@@ -36,10 +36,12 @@ class DiagnosticPersistenceState {
 
   void RecordSave(std::uint64_t incident_id, bool succeeded) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (succeeded) {
-      pending_incidents_.erase(incident_id);
-    } else {
-      pending_incidents_.insert(incident_id);
+    if (initialized_) {
+      if (succeeded) {
+        pending_incidents_.erase(incident_id);
+      } else {
+        pending_incidents_.insert(incident_id);
+      }
     }
     Refresh();
   }

@@ -258,6 +258,16 @@ void TestPersistenceFailureRemainsDegradedAfterOtherSuccess() {
   assert(!state.IsDegraded());
 }
 
+void TestMemoryOnlyPersistenceDoesNotAccumulatePendingIncidents() {
+  monitor::DiagnosticPersistenceState state;
+  state.SetInitialized(false);
+  state.RecordSave(1, false);
+  state.RecordSave(2, false);
+  state.RecordSave(3, false);
+  state.SetInitialized(true);
+  assert(!state.IsDegraded());
+}
+
 }  // namespace
 
 int main() {
@@ -269,5 +279,6 @@ int main() {
   TestDiskWaitDoesNotBecomeLockContention();
   TestProbeCapabilityDegradedEvidence();
   TestPersistenceFailureRemainsDegradedAfterOtherSuccess();
+  TestMemoryOnlyPersistenceDoesNotAccumulatePendingIncidents();
   return 0;
 }
