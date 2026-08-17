@@ -1,11 +1,12 @@
-#include <grpc/grpc.h>
-#include <grpcpp/server_builder.h>
-
 #include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <iostream>
 #include <string>
 #include <thread>
+
+#include <grpc/grpc.h>
+#include <grpcpp/server_builder.h>
 
 #include "host_manager.h"
 #include "query_manager.h"
@@ -18,12 +19,18 @@ constexpr char kDefaultMysqlUser[] = "monitor";
 constexpr char kDefaultMysqlPass[] = "monitor123";
 constexpr char kDefaultMysqlDb[] = "monitor_db";
 
+volatile std::sig_atomic_t g_shutdown_requested = 0;
+
+void HandleShutdownSignal(int) { g_shutdown_requested = 1; }
+
 const char* GetEnvOrDefault(const char* name, const char* default_value) {
   const char* value = std::getenv(name);
   return value && value[0] != '\0' ? value : default_value;
 }
 
 int main(int argc, char* argv[]) {
+  std::signal(SIGINT, HandleShutdownSignal);
+  std::signal(SIGTERM, HandleShutdownSignal);
   std::string listen_address = kDefaultListenAddress;
 
   // 解析命令行参数
@@ -50,10 +57,11 @@ int main(int argc, char* argv[]) {
   // 创建 QueryManager 并初始化
   monitor::QueryManager query_mgr;
 #ifdef ENABLE_MYSQL
-  if (query_mgr.Init(GetEnvOrDefault("MONITOR_MYSQL_HOST", kDefaultMysqlHost),
-                     GetEnvOrDefault("MONITOR_MYSQL_USER", kDefaultMysqlUser),
-                     GetEnvOrDefault("MONITOR_MYSQL_PASSWORD", kDefaultMysqlPass),
-                     GetEnvOrDefault("MONITOR_MYSQL_DATABASE", kDefaultMysqlDb))) {
+  if (query_mgr.Init(
+          GetEnvOrDefault("MONITOR_MYSQL_HOST", kDefaultMysqlHost),
+          GetEnvOrDefault("MONITOR_MYSQL_USER", kDefaultMysqlUser),
+          GetEnvOrDefault("MONITOR_MYSQL_PASSWORD", kDefaultMysqlPass),
+          GetEnvOrDefault("MONITOR_MYSQL_DATABASE", kDefaultMysqlDb))) {
     std::cout << "QueryManager initialized successfully" << std::endl;
   } else {
     std::cerr << "Warning: QueryManager initialization failed, "
@@ -71,11 +79,28 @@ int main(int argc, char* argv[]) {
   builder.RegisterService(&query_service);
 
   std::unique_ptr<grpc::Server> server(builder.BuildAndStart());
+  if (!server) {
+    std::cerr << "Failed to start gRPC server" << std::endl;
+    mgr.Stop();
+    query_mgr.Close();
+    return 1;
+  }
   std::cout << "Monitor Client listening on " << listen_address << std::endl;
   std::cout << "Waiting for workers to push data..." << std::endl;
-  std::cout << "Query service available for performance data queries" << std::endl;
+  std::cout << "Query service available for performance data queries"
+            << std::endl;
 
-  server->Wait();
+  std::thread server_thread([&server] { server->Wait(); });
+  while (!g_shutdown_requested) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  std::cout << "Shutdown requested, stopping manager..." << std::endl;
+  server->Shutdown();
+  if (server_thread.joinable()) {
+    server_thread.join();
+  }
+  mgr.Stop();
+  query_mgr.Close();
 
   return 0;
 }

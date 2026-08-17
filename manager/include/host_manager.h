@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -11,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "diagnostics/diagnostic_persistence.h"
 #include "diagnostics/incident_store.h"
 
 #include "monitor_info.pb.h"
@@ -75,11 +77,13 @@ class HostManager {
   std::unordered_map<std::string, HostScore> host_scores_;
   std::mutex mtx_;
   std::mutex processing_mtx_;
+  std::condition_variable process_condition_;
   std::atomic<bool> running_;
   std::unique_ptr<std::thread> thread_;
   diagnostics::EvidenceBuilder evidence_builder_;
   diagnostics::RootCauseEngine root_cause_engine_;
   diagnostics::IncidentStore incident_store_;
+  diagnostics::DiagnosticPersistence diagnostic_persistence_;
 };
 
 }  // namespace monitor

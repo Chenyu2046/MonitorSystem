@@ -17,12 +17,12 @@ KernScope 从现有的分布式服务器监控链路演进而来：Worker 负责
 - 🔄 **Worker-Agent + Manager** - Worker 主动 Push，Manager 统一评分、存储和查询
 - ⚡ **TC eBPF 网络数据面** - 保留基于 Per-CPU Hash Map 的收发字节与报文聚合
 - 📈 **健康评分与历史查询** - 保留现有多维评分、MySQL 持久化和 9 个查询接口
-- 🧭 **诊断控制层** - Phase 1 已加入异常评分、状态防抖、动态采样周期；Phase 2 加入受限诊断 Probe，Phase 3 加入限时 Profiling，Phase 4 加入 Evidence/RCA/Incident 内存闭环，Phase 5 增加 unary Push 的 deadline、有限重试和有界队列
+- 🧭 **诊断控制层** - Phase 1 已加入异常评分、状态防抖、动态采样周期；Phase 2 加入受限诊断 Probe，Phase 3 加入限时 Profiling，Phase 4 加入 Evidence/RCA/Incident 持久化与查询，Phase 5 增加 unary Push 的 deadline、有限重试、有界队列和优雅退出
 - 🛣️ **后续演进方向** - Monitoring → Anomaly Detection → Adaptive Observability → Kernel Diagnostics / Profiling → Evidence Correlation → Root Cause
 
-> Phase 4 已加入 `MonitorInfo.diagnostic` field 10、EvidenceBuilder、多证据 RootCauseEngine、有界 IncidentStore 和三类 Incident 查询 RPC；诊断 Incident 当前只保存在 Manager 内存，MySQL 诊断表留待后续阶段。Linux perf/BTF 和完整 gRPC/CTest 验证仍需 Linux 构建机执行，未验证能力不会在 README 中伪装成已完成运行时功能。
+> Phase 4 已加入 `MonitorInfo.diagnostic` field 10、EvidenceBuilder、多证据 RootCauseEngine、有界 IncidentStore、MySQL `diagnostic_incident`/`diagnostic_evidence` 持久化和三类 Incident 查询 RPC；无 MySQL 时仍回退到 Manager 内存。Linux perf/BTF 功能验证仍需 Linux 构建机执行，未验证能力不会在 README 中伪装成已完成运行时功能。
 
-> Phase 5 保留原有 `SetMonitorInfo` unary RPC，在 Worker 侧增加发送队列、RPC deadline、可重试状态过滤和指数退避；WAL 仍是后续 P2，不在本阶段宣称已实现。
+> Phase 5 保留原有 `SetMonitorInfo` unary RPC，在 Worker 侧增加发送队列、RPC deadline、可重试状态过滤、指数退避和 signal-driven graceful shutdown；WAL 仍是后续 P2，不在本阶段宣称已实现。
 
 ## 📐 系统架构
 

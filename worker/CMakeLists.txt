@@ -122,6 +122,19 @@ if(BUILD_TESTING)
     )
     target_link_libraries(diagnostics_test PRIVATE monitor_proto)
     add_test(NAME diagnostics_test COMMAND diagnostics_test)
+
+    add_executable(observability_overhead_test
+        tests/observability_overhead_test.cpp
+        src/rpc/monitor_send_queue.cpp
+        src/diagnostics/observability_config.cpp
+        src/diagnostics/anomaly_detector.cpp
+        src/diagnostics/observability_state.cpp
+    )
+    target_include_directories(observability_overhead_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/worker/include
+    )
+    target_link_libraries(observability_overhead_test PRIVATE monitor_proto)
+    add_test(NAME observability_overhead_test COMMAND observability_overhead_test)
 endif()
 
 # 内核模块构建（可选）

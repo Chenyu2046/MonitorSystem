@@ -57,8 +57,8 @@ Manager 当前保留主机状态、健康评分、MySQL 持久化、历史查询
 | eBPF Diagnostics | TCP、Block I/O、Scheduler 聚合诊断 | Phase 2 已实现独立对象加载、attach、map 聚合和不可用降级；Linux/BTF 功能验证待执行 |
 | Profiling | On-CPU、Off-CPU、Stack、Symbolizer | Phase 3 已加入有界 Stack Map、ProfileSession、采样聚合和地址/module+offset 回退；Linux perf/BPF 功能验证待执行 |
 | Evidence / RCA | Manager 侧证据构建、规则诊断、Incident | Phase 4 已实现多证据规则、可解释 confidence 和有界 IncidentStore |
-| Persistence / Query | 新增诊断数据的存储与查询 | Phase 4 已追加 diagnostic field 10 和三类内存查询 RPC；MySQL 诊断表待后续阶段 |
-| Reliability | Worker 发送队列、deadline、重试和退避 | Phase 5 已实现 unary Push 可靠发送；WAL、批量补传和端到端 ACK 待后续 P2 |
+| Persistence / Query | 新增诊断数据的存储与查询 | Phase 4 已追加 diagnostic field 10、MySQL 诊断表和三类查询 RPC；无 DB 时回退到内存 |
+| Reliability | Worker 发送队列、deadline、重试和退避 | Phase 5 已实现 unary Push 可靠发送和 signal-driven graceful shutdown；WAL、批量补传和端到端 ACK 待后续 P2 |
 
 设计约束：
 

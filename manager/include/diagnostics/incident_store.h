@@ -30,10 +30,14 @@ class IncidentStore {
  public:
   explicit IncidentStore(std::size_t max_history = 256);
 
-  void Observe(const std::string& server_name, const std::string& state,
-               const std::vector<Evidence>& evidence,
-               const std::vector<RootCause>& root_causes,
-               std::chrono::system_clock::time_point now);
+  // Returns the current incident when the observation changed incident state.
+  // An empty result means there was no active incident to close and no new
+  // incident to persist.
+  std::optional<IncidentRecord> Observe(
+      const std::string& server_name, const std::string& state,
+      const std::vector<Evidence>& evidence,
+      const std::vector<RootCause>& root_causes,
+      std::chrono::system_clock::time_point now);
 
   std::vector<IncidentRecord> List(
       const std::string& server_name = {},

@@ -159,12 +159,23 @@ HostManager::~HostManager() {
 }
 
 void HostManager::Start() {
-  running_ = true;
+  bool expected = false;
+  if (!running_.compare_exchange_strong(expected, true)) {
+    return;
+  }
+#ifdef ENABLE_MYSQL
+  diagnostic_persistence_.Init(
+      GetEnvOrDefault("MONITOR_MYSQL_HOST", MYSQL_HOST),
+      GetEnvOrDefault("MONITOR_MYSQL_USER", MYSQL_USER),
+      GetEnvOrDefault("MONITOR_MYSQL_PASSWORD", MYSQL_PASS),
+      GetEnvOrDefault("MONITOR_MYSQL_DATABASE", MYSQL_DB));
+#endif
   thread_ = std::make_unique<std::thread>(&HostManager::ProcessLoop, this);
 }
 
 void HostManager::Stop() {
   running_ = false;
+  process_condition_.notify_all();
   if (thread_ && thread_->joinable()) {
     thread_->join();
   }
@@ -172,12 +183,14 @@ void HostManager::Stop() {
 
 void HostManager::ProcessLoop() {
   while (running_) {
-    // 每隔 60 秒检查 host_scores_ 中的主机数据是否过期
-    std::this_thread::sleep_for(std::chrono::seconds(60));
+    std::unique_lock<std::mutex> wait_lock(mtx_);
+    if (process_condition_.wait_for(wait_lock, std::chrono::seconds(60),
+                                    [this] { return !running_.load(); })) {
+      break;
+    }
 
     // 获取当前时间
     auto now = std::chrono::system_clock::now();
-    std::lock_guard<std::mutex> lock(mtx_);
     // 遍历 host_scores_，移除过期的主机数据
     for (auto it = host_scores_.begin(); it != host_scores_.end();) {
       auto age = std::chrono::duration_cast<std::chrono::seconds>(
@@ -301,9 +314,12 @@ void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
   if (info.has_diagnostic()) {
     const auto evidence = evidence_builder_.Build(info, now);
     const auto root_causes = root_cause_engine_.Evaluate(evidence);
-    incident_store_.Observe(host_name,
-                            DiagnosticStateName(info.diagnostic().state()),
-                            evidence, root_causes, now);
+    const auto incident = incident_store_.Observe(
+        host_name, DiagnosticStateName(info.diagnostic().state()), evidence,
+        root_causes, now);
+    if (incident) {
+      diagnostic_persistence_.Save(*incident);
+    }
   }
 
   // 写入所有表

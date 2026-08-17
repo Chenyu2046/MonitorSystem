@@ -8,21 +8,23 @@ namespace monitor::diagnostics {
 IncidentStore::IncidentStore(std::size_t max_history)
     : max_history_(std::max<std::size_t>(1, max_history)) {}
 
-void IncidentStore::Observe(const std::string& server_name,
-                            const std::string& state,
-                            const std::vector<Evidence>& evidence,
-                            const std::vector<RootCause>& root_causes,
-                            std::chrono::system_clock::time_point now) {
+std::optional<IncidentRecord> IncidentStore::Observe(
+    const std::string& server_name, const std::string& state,
+    const std::vector<Evidence>& evidence,
+    const std::vector<RootCause>& root_causes,
+    std::chrono::system_clock::time_point now) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto active = active_.find(server_name);
   if (root_causes.empty()) {
     if (active != active_.end()) {
-      active->second.end_time = now;
-      active->second.active = false;
-      AddHistory(std::move(active->second));
+      IncidentRecord closed = active->second;
+      closed.end_time = now;
+      closed.active = false;
+      AddHistory(closed);
       active_.erase(active);
+      return closed;
     }
-    return;
+    return std::nullopt;
   }
 
   const auto max_confidence =
@@ -44,8 +46,9 @@ void IncidentStore::Observe(const std::string& server_name,
     incident.end_time = now;
     incident.root_causes = root_causes;
     incident.evidence = evidence;
-    active_.emplace(server_name, std::move(incident));
-    return;
+    auto [it, inserted] = active_.emplace(server_name, std::move(incident));
+    (void)inserted;
+    return it->second;
   }
 
   active->second.severity = severity;
@@ -54,6 +57,7 @@ void IncidentStore::Observe(const std::string& server_name,
   active->second.end_time = now;
   active->second.root_causes = root_causes;
   active->second.evidence = evidence;
+  return active->second;
 }
 
 std::vector<IncidentRecord> IncidentStore::List(

@@ -22,6 +22,7 @@ set(MANAGER_SOURCES
     src/diagnostics/evidence_builder.cpp
     src/diagnostics/root_cause_engine.cpp
     src/diagnostics/incident_store.cpp
+    src/diagnostics/diagnostic_persistence.cpp
     src/query_manager.cpp
     src/rpc/grpc_server.cpp
     src/rpc/query_service.cpp
@@ -62,6 +63,7 @@ if(BUILD_TESTING)
         src/diagnostics/evidence_builder.cpp
         src/diagnostics/root_cause_engine.cpp
         src/diagnostics/incident_store.cpp
+        src/diagnostics/diagnostic_persistence.cpp
     )
     target_include_directories(manager_diagnostics_test PRIVATE
         ${PROJECT_SOURCE_DIR}/manager/include

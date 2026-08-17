@@ -87,9 +87,9 @@
 | manager 收到空 request | 返回 `INVALID_ARGUMENT` | 正常 |
 | manager 收到空 hostname | 返回 `INVALID_ARGUMENT` 或 `OnDataReceived` 内 return | 该批数据丢弃 |
 | `mysql_init` 失败 | 打印错误并 return | gRPC 仍返回 OK，worker 认为 Push 成功 |
-| `mysql_real_connect` 失败 | 打印错误、关闭连接、return | 数据只进入内存态，不落库；上游不知道 |
+| `mysql_real_connect` 失败 | 打印错误、关闭连接、return | 基础数据和诊断数据保留内存回退；上游仍按现有 unary 成功语义返回 |
 | `mysql_query` 插入失败 | 当前基本未检查返回值 | 写库失败可能被吞掉，日志不可见 |
-| `BuildAndStart()` 失败 | 未检查 `server` 是否为空 | 可能空指针调用 `Wait()` |
+| `BuildAndStart()` 失败 | 检查空指针并返回失败 | 不进入服务等待循环 |
 
 ## 6. 风险分析
 
@@ -99,7 +99,7 @@
 
 生命周期：
 
-`worker` 的 `MonitorPusher` 是 `main` 栈对象，但主线程无限 sleep，正常析构路径基本不可达。`MonitorPusher::~MonitorPusher` 和 `MetricCollector::~MetricCollector` 设计了停止逻辑，但当前没有 signal handler 驱动优雅退出。`manager` 里 `QueryServiceImpl` 持有 `QueryManager*` 裸指针，当前因为都在 `main` 栈上且 `server->Wait()` 阻塞，所以生命周期成立；未来如果改异步关闭，需要重看。
+`worker` 的 `MonitorPusher` 是 `main` 栈对象，SIGINT/SIGTERM 会打断主循环并进入析构/显式 Stop，发送线程和采集线程随后 join。`manager` 用独立 Wait 线程承载 gRPC `Wait()`，收到退出信号后先 `Shutdown()`，再 join server、停止 HostManager 和关闭 QueryManager；服务对象仍由 main 栈持有，生命周期成立。
 
 资源：
 
@@ -119,9 +119,9 @@ worker 参数解析、线程创建、gRPC server 创建都没有异常/失败兜
 4. `PROFILING` 状态创建单一 `ProfileSession`，按异常信号选择 On-CPU 或 Off-CPU，并由硬超时和 RAII 清理资源。
 5. `ProbeController::CollectSnapshot()` 读取已 attach 对象的有界 map，并聚合 Per-CPU 值；Worker 将异常信号和 Top-N profile ID 写入新增 `MonitorInfo.diagnostic` field 10，旧 field 1~9 语义保持不变。
 
-Phase 4 在 `MonitorInfo.diagnostic` field 10 中追加异常信号和 Top-N profile ID。Manager 侧只在内存中保留最多 256 条已结束 Incident，并通过新增 QueryService RPC 提供 Incident 查询；旧 field 1~9、旧查询和 MySQL 表不变。
+Phase 4 在 `MonitorInfo.diagnostic` field 10 中追加异常信号和 Top-N profile ID。Manager 侧保留最多 256 条已结束 Incident，并通过独立 DiagnosticPersistence 写入 `diagnostic_incident`/`diagnostic_evidence`；QueryService 优先读取 MySQL，连接不可用时使用内存 IncidentStore。旧 field 1~9、旧查询和基础 MySQL 表不变。
 
-Phase 5 在不改变 unary RPC 协议的前提下，将 Worker 发送拆为采集线程和顺序发送线程。`MonitorSendQueue` 同时限制 item 数和序列化字节数；队满时优先移除普通基础指标，诊断/Profiling 快照优先保留。`SendWithRetry` 为每次 RPC 设置 deadline，只重试 `UNAVAILABLE`、`DEADLINE_EXCEEDED` 和 `RESOURCE_EXHAUSTED`，使用带 jitter 的指数退避。WAL、ACK 序号和断线补传仍未实现。
+Phase 5 在不改变 unary RPC 协议的前提下，将 Worker 发送拆为采集线程和顺序发送线程。`MonitorSendQueue` 同时限制 item 数和序列化字节数；队满时优先移除普通基础指标，诊断/Profiling 快照优先保留。`SendWithRetry` 为每次 RPC 设置 deadline，只重试 `UNAVAILABLE`、`DEADLINE_EXCEEDED` 和 `RESOURCE_EXHAUSTED`，使用带 jitter 的指数退避；Worker/Manager 均有 signal-driven shutdown。WAL、ACK 序号和断线补传仍未实现。
 
 状态机当前采样周期为：`NORMAL` 使用配置的基础 interval，`SUSPECT` 使用 suspect interval，`DIAGNOSTIC`、`PROFILING` 和 `COOLDOWN` 使用 diagnostic interval。`MonitorPusher::WaitForNextSample()` 按当前状态等待，因此不会再固定使用启动参数作为所有状态的周期。
 

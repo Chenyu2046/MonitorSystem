@@ -1,9 +1,13 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
+
+#include "diagnostics/incident_store.h"
 
 #ifdef ENABLE_MYSQL
 #include <mysql/mysql.h>
@@ -104,7 +108,6 @@ struct ClusterStats {
   std::string worst_server;
 };
 
-
 // 网络详细数据
 struct NetDetailRecord {
   std::string server_name;
@@ -174,54 +177,64 @@ class QueryManager {
   // 关闭连接
   void Close();
 
+  bool IsInitialized();
+
   // 验证时间范围
   bool ValidateTimeRange(const TimeRange& range) const;
 
   // 时间段性能数据查询
-  std::vector<PerformanceRecord> QueryPerformance(const std::string& server_name,
-                                                   const TimeRange& time_range,
-                                                   int page, int page_size,
-                                                   int* total_count);
+  std::vector<PerformanceRecord> QueryPerformance(
+      const std::string& server_name, const TimeRange& time_range, int page,
+      int page_size, int* total_count);
 
   // 变化率趋势查询（支持聚合）
   std::vector<PerformanceRecord> QueryTrend(const std::string& server_name,
-                                             const TimeRange& time_range,
-                                             int interval_seconds);
+                                            const TimeRange& time_range,
+                                            int interval_seconds);
 
   // 异常数据查询
   std::vector<AnomalyRecord> QueryAnomaly(const std::string& server_name,
-                                           const TimeRange& time_range,
-                                           const AnomalyThresholds& thresholds,
-                                           int page, int page_size,
-                                           int* total_count);
+                                          const TimeRange& time_range,
+                                          const AnomalyThresholds& thresholds,
+                                          int page, int page_size,
+                                          int* total_count);
 
   // 评分排序查询
   std::vector<ServerScoreSummary> QueryScoreRank(SortOrder order, int page,
-                                                  int page_size,
-                                                  int* total_count);
+                                                 int page_size,
+                                                 int* total_count);
 
   // 最新评分查询
   std::vector<ServerScoreSummary> QueryLatestScore(ClusterStats* stats);
 
   // 详细数据查询
   std::vector<NetDetailRecord> QueryNetDetail(const std::string& server_name,
-                                               const TimeRange& time_range,
-                                               int page, int page_size,
-                                               int* total_count);
+                                              const TimeRange& time_range,
+                                              int page, int page_size,
+                                              int* total_count);
 
   std::vector<DiskDetailRecord> QueryDiskDetail(const std::string& server_name,
-                                                 const TimeRange& time_range,
-                                                 int page, int page_size,
-                                                 int* total_count);
+                                                const TimeRange& time_range,
+                                                int page, int page_size,
+                                                int* total_count);
 
   std::vector<MemDetailRecord> QueryMemDetail(const std::string& server_name,
-                                               const TimeRange& time_range,
-                                               int page, int page_size,
-                                               int* total_count);
+                                              const TimeRange& time_range,
+                                              int page, int page_size,
+                                              int* total_count);
 
   std::vector<SoftIrqDetailRecord> QuerySoftIrqDetail(
       const std::string& server_name, const TimeRange& time_range, int page,
       int page_size, int* total_count);
+
+  std::vector<diagnostics::IncidentRecord> QueryIncidents(
+      const std::string& server_name, const TimeRange& time_range,
+      const std::string& root_cause, const std::string& severity, int page,
+      int page_size, int* total_count);
+  std::optional<diagnostics::IncidentRecord> QueryIncident(
+      std::uint64_t incident_id);
+  std::vector<diagnostics::IncidentRecord> QueryActiveIncidents(
+      const std::string& server_name);
 
  private:
   // 格式化时间为MySQL格式

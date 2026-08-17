@@ -529,16 +529,25 @@ void QueryServiceImpl::SetIncident(const diagnostics::IncidentRecord& incident,
     start_time = range.start_time;
     end_time = range.end_time;
   }
-  auto incidents =
-      host_manager_->GetIncidents(request->server_name(), start_time, end_time,
-                                  request->root_cause(), request->severity());
-
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
   if (page < 1) page = 1;
   if (page_size < 1) page_size = 100;
-  const int total_count = static_cast<int>(incidents.size());
-  const std::size_t begin = static_cast<std::size_t>(page - 1) * page_size;
+  const bool persisted = query_manager_ && query_manager_->IsInitialized();
+  int total_count = 0;
+  auto incidents =
+      persisted ? query_manager_->QueryIncidents(
+                      request->server_name(), TimeRange{start_time, end_time},
+                      request->root_cause(), request->severity(), page,
+                      page_size, &total_count)
+                : host_manager_->GetIncidents(
+                      request->server_name(), start_time, end_time,
+                      request->root_cause(), request->severity());
+  if (total_count == 0 && !persisted) {
+    total_count = static_cast<int>(incidents.size());
+  }
+  const std::size_t begin =
+      persisted ? 0 : static_cast<std::size_t>(page - 1) * page_size;
   const std::size_t end =
       std::min(incidents.size(), begin + static_cast<std::size_t>(page_size));
   for (std::size_t index = begin; index < end; ++index) {
@@ -559,7 +568,10 @@ void QueryServiceImpl::SetIncident(const diagnostics::IncidentRecord& incident,
     return grpc::Status(grpc::StatusCode::UNAVAILABLE,
                         "Host manager not initialized");
   }
-  const auto incident = host_manager_->GetIncident(request->incident_id());
+  const auto incident =
+      query_manager_ && query_manager_->IsInitialized()
+          ? query_manager_->QueryIncident(request->incident_id())
+          : host_manager_->GetIncident(request->incident_id());
   if (!incident) {
     return grpc::Status(grpc::StatusCode::NOT_FOUND, "Incident not found");
   }
@@ -576,8 +588,11 @@ void QueryServiceImpl::SetIncident(const diagnostics::IncidentRecord& incident,
     return grpc::Status(grpc::StatusCode::UNAVAILABLE,
                         "Host manager not initialized");
   }
-  for (const auto& incident :
-       host_manager_->GetActiveIncidents(request->server_name())) {
+  const auto incidents =
+      query_manager_ && query_manager_->IsInitialized()
+          ? query_manager_->QueryActiveIncidents(request->server_name())
+          : host_manager_->GetActiveIncidents(request->server_name());
+  for (const auto& incident : incidents) {
     SetIncident(incident, response->add_incidents());
   }
   return grpc::Status::OK;
