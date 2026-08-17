@@ -117,9 +117,12 @@ std::vector<RootCause> RootCauseEngine::Evaluate(
   }
 
   const Evidence* any_cpu = Find(evidence, EvidenceType::kCpuUsage);
-  if (off_cpu && any_cpu && any_cpu->severity < 0.5) {
+  const Evidence* lock_wait =
+      Find(evidence, EvidenceType::kLockWaitStack, 0.5);
+  if (off_cpu && off_cpu->value > 0.0 && lock_wait &&
+      lock_wait->value > 0.0 && any_cpu && any_cpu->severity < 0.5) {
     causes.push_back(MakeCause(RootCauseType::kLockContention, 0.75,
-                               {off_cpu->id, any_cpu->id}));
+                               {off_cpu->id, lock_wait->id, any_cpu->id}));
   }
 
   std::sort(causes.begin(), causes.end(),

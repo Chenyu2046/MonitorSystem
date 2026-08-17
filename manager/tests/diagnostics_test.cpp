@@ -142,26 +142,90 @@ void TestNetworkEvidenceRequiresAllSignals() {
   assert(engine.Evaluate(insufficient).empty());
 }
 
-void TestLockContentionRuleIsReachable() {
+bool HasEvidence(const std::vector<monitor::diagnostics::Evidence>& evidence,
+                 monitor::diagnostics::EvidenceType type) {
+  for (const auto& item : evidence) {
+    if (item.type == type) return true;
+  }
+  return false;
+}
+
+bool HasCause(const std::vector<monitor::diagnostics::RootCause>& causes,
+             monitor::diagnostics::RootCauseType type) {
+  for (const auto& cause : causes) {
+    if (cause.type == type) return true;
+  }
+  return false;
+}
+
+void TestEmptyProfilesDoNotBecomeStackEvidence() {
   monitor::proto::MonitorInfo info;
   auto* cpu = info.add_cpu_stat();
   cpu->set_cpu_percent(20.0);
   auto* diagnostic = info.mutable_diagnostic();
-  auto* profile = diagnostic->add_offcpu_profiles();
-  profile->set_pid(300);
-  profile->set_total_offcpu_ns(2000000000);
+  auto* on_cpu = diagnostic->add_oncpu_profiles();
+  on_cpu->set_samples(10);
+  auto* off_cpu = diagnostic->add_offcpu_profiles();
+  off_cpu->set_total_offcpu_ns(2000000000);
 
   monitor::diagnostics::EvidenceBuilder builder;
   monitor::diagnostics::RootCauseEngine engine;
   const auto evidence =
       builder.Build(info, std::chrono::system_clock::now());
-  const auto causes = engine.Evaluate(evidence);
-  bool found = false;
-  for (const auto& cause : causes) {
-    found = found || cause.type ==
-                        monitor::diagnostics::RootCauseType::kLockContention;
-  }
-  assert(found);
+  assert(!HasEvidence(evidence,
+                      monitor::diagnostics::EvidenceType::kOnCpuStack));
+  assert(!HasEvidence(evidence,
+                      monitor::diagnostics::EvidenceType::kOffCpuStack));
+  assert(!HasEvidence(evidence,
+                      monitor::diagnostics::EvidenceType::kLockWaitStack));
+  assert(!HasCause(engine.Evaluate(evidence),
+                   monitor::diagnostics::RootCauseType::kLockContention));
+}
+
+void TestLockContentionRequiresLockWaitStack() {
+  monitor::proto::MonitorInfo info;
+  auto* cpu = info.add_cpu_stat();
+  cpu->set_cpu_percent(20.0);
+  auto* profile = info.mutable_diagnostic()->add_offcpu_profiles();
+  profile->set_pid(300);
+  profile->set_samples(10);
+  profile->set_total_offcpu_ns(2000000000);
+  profile->add_kernel_stack()->set_symbol("futex_wait");
+  profile->add_kernel_stack()->set_symbol("pthread_mutex_lock");
+
+  monitor::diagnostics::EvidenceBuilder builder;
+  monitor::diagnostics::RootCauseEngine engine;
+  const auto evidence =
+      builder.Build(info, std::chrono::system_clock::now());
+  assert(HasEvidence(evidence,
+                     monitor::diagnostics::EvidenceType::kOffCpuStack));
+  assert(HasEvidence(evidence,
+                     monitor::diagnostics::EvidenceType::kLockWaitStack));
+  assert(HasCause(engine.Evaluate(evidence),
+                  monitor::diagnostics::RootCauseType::kLockContention));
+}
+
+void TestDiskWaitDoesNotBecomeLockContention() {
+  monitor::proto::MonitorInfo info;
+  auto* cpu = info.add_cpu_stat();
+  cpu->set_cpu_percent(20.0);
+  cpu->set_io_wait_percent(30.0);
+  auto* disk = info.add_disk_info();
+  disk->set_util_percent(98.0);
+  disk->set_avg_read_latency_ms(50.0);
+  auto* profile = info.mutable_diagnostic()->add_offcpu_profiles();
+  profile->set_samples(10);
+  profile->set_total_offcpu_ns(2000000000);
+  profile->add_kernel_stack()->set_symbol("io_schedule");
+
+  monitor::diagnostics::EvidenceBuilder builder;
+  monitor::diagnostics::RootCauseEngine engine;
+  const auto causes =
+      engine.Evaluate(builder.Build(info, std::chrono::system_clock::now()));
+  assert(HasCause(causes,
+                  monitor::diagnostics::RootCauseType::kDiskIoSaturation));
+  assert(!HasCause(causes,
+                   monitor::diagnostics::RootCauseType::kLockContention));
 }
 
 void TestProbeCapabilityDegradedEvidence() {
@@ -189,7 +253,9 @@ int main() {
   TestCpuRuleRequiresMultipleSignals();
   TestDiskRuleAndIncidentStore();
   TestNetworkEvidenceRequiresAllSignals();
-  TestLockContentionRuleIsReachable();
+  TestEmptyProfilesDoNotBecomeStackEvidence();
+  TestLockContentionRequiresLockWaitStack();
+  TestDiskWaitDoesNotBecomeLockContention();
   TestProbeCapabilityDegradedEvidence();
   return 0;
 }

@@ -1,8 +1,11 @@
 #include "diagnostics/evidence_builder.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 
 namespace monitor::diagnostics {
 namespace {
@@ -62,6 +65,26 @@ std::string StackSummary(const monitor::proto::ProfileEntry& profile,
   return detail.str();
 }
 
+bool HasLockWaitStack(const monitor::proto::ProfileEntry& profile) {
+  constexpr std::array<std::string_view, 8> kLockSymbols = {
+      "futex",       "pthread_mutex", "mutex_lock", "rwsem",
+      "rwlock",      "sem_wait",      "__lll_lock", "mutex"};
+  for (const auto& frame : profile.kernel_stack()) {
+    std::string symbol;
+    symbol.reserve(frame.symbol().size());
+    for (const unsigned char character : frame.symbol()) {
+      symbol.push_back(static_cast<char>(std::tolower(character)));
+    }
+    if (std::any_of(kLockSymbols.begin(), kLockSymbols.end(),
+                    [&symbol](std::string_view keyword) {
+                      return symbol.find(keyword) != std::string::npos;
+                    })) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 const char* EvidenceTypeName(EvidenceType type) {
@@ -96,6 +119,8 @@ const char* EvidenceTypeName(EvidenceType type) {
       return "oncpu_stack";
     case EvidenceType::kOffCpuStack:
       return "offcpu_stack";
+    case EvidenceType::kLockWaitStack:
+      return "lock_wait_stack";
   }
   return "unknown";
 }
@@ -206,26 +231,53 @@ std::vector<Evidence> EvidenceBuilder::Build(
     if (info.diagnostic().oncpu_profiles_size() > 0) {
       double samples = 0.0;
       std::string detail = "top On-CPU profile entries";
+      bool has_stack = false;
       for (const auto& profile : info.diagnostic().oncpu_profiles()) {
+        if (profile.user_stack_size() == 0 &&
+            profile.kernel_stack_size() == 0) {
+          continue;
+        }
         samples += profile.samples();
-        if (detail == "top On-CPU profile entries") {
+        if (!has_stack) {
           detail += "; " + StackSummary(profile, true);
+          has_stack = true;
         }
       }
-      Add(&evidence, EvidenceType::kOnCpuStack, "DiagnosticSnapshot", samples,
-          "samples", 1.0, timestamp, detail);
+      if (has_stack) {
+        Add(&evidence, EvidenceType::kOnCpuStack, "DiagnosticSnapshot",
+            samples, "samples", 1.0, timestamp, detail);
+      }
     }
     if (info.diagnostic().offcpu_profiles_size() > 0) {
       double duration_ns = 0.0;
       std::string detail = "top Off-CPU profile entries";
+      std::string lock_detail;
+      double lock_duration_ns = 0.0;
+      bool has_stack = false;
       for (const auto& profile : info.diagnostic().offcpu_profiles()) {
+        if (profile.kernel_stack_size() == 0) {
+          continue;
+        }
         duration_ns += profile.total_offcpu_ns();
-        if (detail == "top Off-CPU profile entries") {
+        if (!has_stack) {
           detail += "; " + StackSummary(profile, false);
+          has_stack = true;
+        }
+        if (HasLockWaitStack(profile)) {
+          lock_duration_ns += profile.total_offcpu_ns();
+          if (lock_detail.empty()) {
+            lock_detail = "lock-wait stack; " + StackSummary(profile, false);
+          }
         }
       }
-      Add(&evidence, EvidenceType::kOffCpuStack, "DiagnosticSnapshot",
-          duration_ns, "ns", 1.0, timestamp, detail);
+      if (has_stack) {
+        Add(&evidence, EvidenceType::kOffCpuStack, "DiagnosticSnapshot",
+            duration_ns, "ns", 1.0, timestamp, detail);
+      }
+      if (!lock_detail.empty()) {
+        Add(&evidence, EvidenceType::kLockWaitStack, "DiagnosticSnapshot",
+            lock_duration_ns, "ns", 1.0, timestamp, lock_detail);
+      }
     }
   }
   return evidence;

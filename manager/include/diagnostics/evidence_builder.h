@@ -24,6 +24,7 @@ enum class EvidenceType {
   kMemoryAvailable,
   kOnCpuStack,
   kOffCpuStack,
+  kLockWaitStack,
 };
 
 struct Evidence {

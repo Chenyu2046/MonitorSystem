@@ -57,6 +57,8 @@ diagnostics::EvidenceType ParseEvidenceType(const std::string& name) {
     return diagnostics::EvidenceType::kMemoryAvailable;
   if (name == "oncpu_stack") return diagnostics::EvidenceType::kOnCpuStack;
   if (name == "offcpu_stack") return diagnostics::EvidenceType::kOffCpuStack;
+  if (name == "lock_wait_stack")
+    return diagnostics::EvidenceType::kLockWaitStack;
   return diagnostics::EvidenceType::kCpuUsage;
 }
 
@@ -1152,7 +1154,9 @@ std::vector<diagnostics::IncidentRecord> QueryManager::QueryIncidents(
                {"memory_available",
                 diagnostics::EvidenceType::kMemoryAvailable},
                {"oncpu_stack", diagnostics::EvidenceType::kOnCpuStack},
-               {"offcpu_stack", diagnostics::EvidenceType::kOffCpuStack}}};
+               {"offcpu_stack", diagnostics::EvidenceType::kOffCpuStack},
+               {"lock_wait_stack",
+                diagnostics::EvidenceType::kLockWaitStack}}};
       for (const auto& [name, type] : evidence_names) {
         if (type_name == name) {
           evidence.type = type;
