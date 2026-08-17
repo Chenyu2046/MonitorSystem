@@ -240,3 +240,15 @@ CREATE TABLE IF NOT EXISTS diagnostic_evidence (
     event_time TIMESTAMP(3) NOT NULL,
     INDEX idx_incident (incident_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS diagnostic_root_cause (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    incident_id BIGINT NOT NULL,
+    ordinal INT NOT NULL,
+    root_cause VARCHAR(64) NOT NULL,
+    confidence DOUBLE NOT NULL,
+    evidence_ids TEXT NOT NULL,
+    summary TEXT,
+    UNIQUE KEY uk_incident_ordinal (incident_id, ordinal),
+    INDEX idx_root_cause_incident (incident_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -20,6 +20,48 @@ std::string EscapeSql(MYSQL* connection, const std::string& value) {
   escaped.resize(length);
   return escaped;
 }
+
+diagnostics::RootCauseType ParseRootCauseType(const std::string& name) {
+  if (name == "CPU_SATURATION")
+    return diagnostics::RootCauseType::kCpuSaturation;
+  if (name == "DISK_IO_SATURATION")
+    return diagnostics::RootCauseType::kDiskIoSaturation;
+  if (name == "NETWORK_STACK_PRESSURE")
+    return diagnostics::RootCauseType::kNetworkStackPressure;
+  if (name == "MEMORY_PRESSURE")
+    return diagnostics::RootCauseType::kMemoryPressure;
+  if (name == "LOCK_CONTENTION")
+    return diagnostics::RootCauseType::kLockContention;
+  return diagnostics::RootCauseType::kUnknown;
+}
+
+diagnostics::EvidenceType ParseEvidenceType(const std::string& name) {
+  if (name == "cpu_usage") return diagnostics::EvidenceType::kCpuUsage;
+  if (name == "run_queue") return diagnostics::EvidenceType::kRunQueue;
+  if (name == "io_wait") return diagnostics::EvidenceType::kIoWait;
+  if (name == "disk_util") return diagnostics::EvidenceType::kDiskUtil;
+  if (name == "disk_latency") return diagnostics::EvidenceType::kDiskLatency;
+  if (name == "net_pps") return diagnostics::EvidenceType::kNetPps;
+  if (name == "tcp_retrans") return diagnostics::EvidenceType::kTcpRetrans;
+  if (name == "softirq_net_rx")
+    return diagnostics::EvidenceType::kSoftirqNetRx;
+  if (name == "memory_available")
+    return diagnostics::EvidenceType::kMemoryAvailable;
+  if (name == "oncpu_stack") return diagnostics::EvidenceType::kOnCpuStack;
+  if (name == "offcpu_stack") return diagnostics::EvidenceType::kOffCpuStack;
+  return diagnostics::EvidenceType::kCpuUsage;
+}
+
+std::vector<std::string> SplitEvidenceIds(const char* value) {
+  std::vector<std::string> ids;
+  if (!value) return ids;
+  std::istringstream input(value);
+  std::string id;
+  while (std::getline(input, id)) {
+    if (!id.empty()) ids.push_back(std::move(id));
+  }
+  return ids;
+}
 }  // namespace
 #endif
 
@@ -88,12 +130,20 @@ bool QueryManager::ValidateTimeRange(const TimeRange& range) const {
 
 std::string QueryManager::FormatTime(
     const std::chrono::system_clock::time_point& tp) const {
-  std::time_t t = std::chrono::system_clock::to_time_t(tp);
-  std::tm tm_time;
+  const auto millis_count =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          tp.time_since_epoch())
+          .count() %
+      1000;
+  const auto millis = std::chrono::milliseconds(millis_count);
+  const auto seconds = tp - millis;
+  std::time_t t = std::chrono::system_clock::to_time_t(seconds);
+  std::tm tm_time{};
   localtime_r(&t, &tm_time);
-  char buf[32];
-  std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm_time);
-  return std::string(buf);
+  std::ostringstream output;
+  output << std::put_time(&tm_time, "%Y-%m-%d %H:%M:%S") << '.'
+         << std::setfill('0') << std::setw(3) << millis.count();
+  return output.str();
 }
 
 std::chrono::system_clock::time_point QueryManager::ParseTime(
@@ -101,7 +151,15 @@ std::chrono::system_clock::time_point QueryManager::ParseTime(
   std::tm tm = {};
   std::istringstream ss(str);
   ss >> std::get_time(&tm, "%Y-%m-%d %H:%M:%S");
-  return std::chrono::system_clock::from_time_t(std::mktime(&tm));
+  std::chrono::milliseconds millis(0);
+  if (ss.peek() == '.') {
+    ss.get();
+    std::string fraction;
+    ss >> fraction;
+    fraction.resize(3, '0');
+    millis = std::chrono::milliseconds(std::stoi(fraction.substr(0, 3)));
+  }
+  return std::chrono::system_clock::from_time_t(std::mktime(&tm)) + millis;
 }
 
 int QueryManager::GetTotalCount(const std::string& count_sql) {
@@ -979,14 +1037,19 @@ std::vector<diagnostics::IncidentRecord> QueryManager::QueryIncidents(
   if (!server_name.empty()) {
     where << " AND host_name='" << EscapeSql(conn_, server_name) << "'";
   }
-  if (time_range.start_time != std::chrono::system_clock::time_point::min()) {
-    where << " AND start_time >= '" << FormatTime(time_range.start_time) << "'";
-  }
   if (time_range.end_time != std::chrono::system_clock::time_point::max()) {
     where << " AND start_time <= '" << FormatTime(time_range.end_time) << "'";
   }
+  if (time_range.start_time != std::chrono::system_clock::time_point::min()) {
+    where << " AND (end_time IS NULL OR end_time >= '"
+          << FormatTime(time_range.start_time) << "')";
+  }
   if (!root_cause.empty()) {
-    where << " AND root_cause='" << EscapeSql(conn_, root_cause) << "'";
+    const auto escaped_root_cause = EscapeSql(conn_, root_cause);
+    where << " AND (root_cause='" << escaped_root_cause
+          << "' OR EXISTS (SELECT 1 FROM diagnostic_root_cause rc WHERE "
+             "rc.incident_id=diagnostic_incident.id AND rc.root_cause='"
+          << escaped_root_cause << "'))";
   }
   if (!severity.empty()) {
     where << " AND severity='" << EscapeSql(conn_, severity) << "'";
@@ -1093,6 +1156,7 @@ std::vector<diagnostics::IncidentRecord> QueryManager::QueryIncidents(
     }
     mysql_free_result(evidence_result);
   }
+  LoadIncidentDetails(&records);
 #else
   (void)server_name;
   (void)time_range;
@@ -1105,18 +1169,104 @@ std::vector<diagnostics::IncidentRecord> QueryManager::QueryIncidents(
   return records;
 }
 
+#ifdef ENABLE_MYSQL
+void QueryManager::LoadIncidentDetails(
+    std::vector<diagnostics::IncidentRecord>* incidents) {
+  for (auto& incident : *incidents) {
+    std::ostringstream root_sql;
+    root_sql << "SELECT root_cause, confidence, evidence_ids, summary "
+                "FROM diagnostic_root_cause WHERE incident_id="
+             << incident.id << " ORDER BY ordinal";
+    if (mysql_query(conn_, root_sql.str().c_str()) == 0) {
+      MYSQL_RES* root_result = mysql_store_result(conn_);
+      if (root_result) {
+        std::vector<diagnostics::RootCause> root_causes;
+        MYSQL_ROW root_row;
+        while ((root_row = mysql_fetch_row(root_result))) {
+          diagnostics::RootCause cause;
+          cause.type = ParseRootCauseType(root_row[0] ? root_row[0] : "");
+          cause.confidence = root_row[1] ? std::atof(root_row[1]) : 0.0;
+          cause.evidence_ids = SplitEvidenceIds(root_row[2]);
+          cause.summary = root_row[3] ? root_row[3] : "";
+          root_causes.push_back(std::move(cause));
+        }
+        mysql_free_result(root_result);
+        if (!root_causes.empty()) {
+          incident.root_causes = std::move(root_causes);
+        }
+      }
+    }
+
+    if (!incident.evidence.empty()) continue;
+    std::ostringstream evidence_sql;
+    evidence_sql << "SELECT evidence_type, source, target, metric, value, "
+                    "unit, severity, detail, event_time FROM "
+                    "diagnostic_evidence WHERE incident_id="
+                 << incident.id << " ORDER BY id";
+    if (mysql_query(conn_, evidence_sql.str().c_str()) != 0) continue;
+    MYSQL_RES* evidence_result = mysql_store_result(conn_);
+    if (!evidence_result) continue;
+    MYSQL_ROW evidence_row;
+    while ((evidence_row = mysql_fetch_row(evidence_result))) {
+      diagnostics::Evidence evidence;
+      evidence.type = ParseEvidenceType(evidence_row[0] ? evidence_row[0] : "");
+      evidence.source = evidence_row[1] ? evidence_row[1] : "";
+      evidence.target = evidence_row[2] ? evidence_row[2] : "";
+      evidence.id = evidence_row[3] ? evidence_row[3] : "";
+      evidence.value = evidence_row[4] ? std::atof(evidence_row[4]) : 0.0;
+      evidence.unit = evidence_row[5] ? evidence_row[5] : "";
+      evidence.severity = evidence_row[6] ? std::atof(evidence_row[6]) : 0.0;
+      evidence.detail = evidence_row[7] ? evidence_row[7] : "";
+      evidence.timestamp = evidence_row[8]
+                               ? ParseTime(evidence_row[8])
+                               : incident.start_time;
+      incident.evidence.push_back(std::move(evidence));
+    }
+    mysql_free_result(evidence_result);
+  }
+}
+#endif
+
 std::optional<diagnostics::IncidentRecord> QueryManager::QueryIncident(
     std::uint64_t incident_id) {
-  TimeRange range{std::chrono::system_clock::time_point::min(),
-                  std::chrono::system_clock::time_point::max()};
-  int total_count = 0;
-  auto records = QueryIncidents("", range, "", "", 1, 1000, &total_count);
-  auto it = std::find_if(records.begin(), records.end(),
-                         [incident_id](const auto& incident) {
-                           return incident.id == incident_id;
-                         });
-  if (it == records.end()) return std::nullopt;
-  return *it;
+#ifdef ENABLE_MYSQL
+  std::lock_guard<std::mutex> lock(mtx_);
+  if (!initialized_ || !conn_) return std::nullopt;
+  std::ostringstream sql;
+  sql << "SELECT id, host_name, severity, state, start_time, end_time, "
+         "root_cause, confidence, summary FROM diagnostic_incident WHERE id="
+      << incident_id;
+  if (mysql_query(conn_, sql.str().c_str()) != 0) return std::nullopt;
+  MYSQL_RES* result = mysql_store_result(conn_);
+  if (!result) return std::nullopt;
+  MYSQL_ROW row = mysql_fetch_row(result);
+  if (!row) {
+    mysql_free_result(result);
+    return std::nullopt;
+  }
+  diagnostics::IncidentRecord incident;
+  incident.id = row[0] ? std::strtoull(row[0], nullptr, 10) : 0;
+  incident.server_name = row[1] ? row[1] : "";
+  incident.severity = row[2] ? row[2] : "";
+  incident.state = row[3] ? row[3] : "";
+  incident.start_time = row[4] ? ParseTime(row[4])
+                               : std::chrono::system_clock::time_point{};
+  incident.end_time = row[5] ? ParseTime(row[5]) : incident.start_time;
+  incident.active = row[5] == nullptr;
+  diagnostics::RootCause cause;
+  cause.type = ParseRootCauseType(row[6] ? row[6] : "");
+  cause.confidence = row[7] ? std::atof(row[7]) : 0.0;
+  cause.summary = row[8] ? row[8] : "";
+  incident.root_causes.push_back(std::move(cause));
+  mysql_free_result(result);
+  std::vector<diagnostics::IncidentRecord> records;
+  records.push_back(std::move(incident));
+  LoadIncidentDetails(&records);
+  return records.front();
+#else
+  (void)incident_id;
+  return std::nullopt;
+#endif
 }
 
 std::vector<diagnostics::IncidentRecord> QueryManager::QueryActiveIncidents(
@@ -1165,6 +1315,7 @@ std::vector<diagnostics::IncidentRecord> QueryManager::QueryActiveIncidents(
     records.push_back(std::move(incident));
   }
   mysql_free_result(result);
+  LoadIncidentDetails(&records);
 #else
   (void)server_name;
 #endif

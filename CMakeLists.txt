@@ -14,6 +14,11 @@ if(SANITIZER)
     if(MSVC)
         message(FATAL_ERROR "SANITIZER is only supported by the GCC/Clang toolchain")
     endif()
+    if(NOT SANITIZER STREQUAL "address" AND
+       NOT SANITIZER STREQUAL "thread" AND
+       NOT SANITIZER STREQUAL "undefined")
+        message(FATAL_ERROR "SANITIZER must be address, thread, or undefined")
+    endif()
     add_compile_options(-fno-omit-frame-pointer -fsanitize=${SANITIZER})
     add_link_options(-fno-omit-frame-pointer -fsanitize=${SANITIZER})
     if(SANITIZER STREQUAL "thread")

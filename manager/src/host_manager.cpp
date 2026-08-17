@@ -211,7 +211,7 @@ void HostManager::ProcessLoop() {
 // 计算主机的综合评分
 void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
   // 变化率历史和写库辅助状态由多个 gRPC 回调共享，必须整体串行化。
-  std::lock_guard<std::mutex> processing_lock(processing_mtx_);
+  std::unique_lock<std::mutex> processing_lock(processing_mtx_);
 
   // 构建服务器唯一标识: hostname_ip
   std::string host_name;
@@ -318,7 +318,9 @@ void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
         host_name, DiagnosticStateName(info.diagnostic().state()), evidence,
         root_causes, now);
     if (incident) {
+      processing_lock.unlock();
       diagnostic_persistence_.Save(*incident);
+      processing_lock.lock();
     }
   }
 

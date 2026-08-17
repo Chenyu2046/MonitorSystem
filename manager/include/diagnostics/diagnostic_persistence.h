@@ -36,6 +36,8 @@ class DiagnosticPersistence {
       const std::chrono::system_clock::time_point& time) const;
   bool SaveEvidence(std::uint64_t incident_id,
                     const std::vector<Evidence>& evidence);
+  bool SaveRootCauses(std::uint64_t incident_id,
+                      const std::vector<RootCause>& root_causes);
 
   MYSQL* connection_ = nullptr;
 #endif

@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <vector>
 
 namespace monitor::diagnostics {
 
@@ -74,6 +75,11 @@ bool DiagnosticPersistence::Save(const IncidentRecord& incident) {
     return false;
   }
 
+  if (!Execute("START TRANSACTION")) {
+    return false;
+  }
+  const auto rollback = [this] { Execute("ROLLBACK"); };
+
   const auto& cause = *std::max_element(
       incident.root_causes.begin(), incident.root_causes.end(),
       [](const RootCause& left, const RootCause& right) {
@@ -102,6 +108,7 @@ bool DiagnosticPersistence::Save(const IncidentRecord& incident) {
          "confidence=VALUES(confidence), state=VALUES(state), "
          "summary=VALUES(summary), end_time=VALUES(end_time)";
   if (!Execute(sql.str())) {
+    rollback();
     return false;
   }
 
@@ -111,10 +118,12 @@ bool DiagnosticPersistence::Save(const IncidentRecord& incident) {
     lookup << "SELECT id FROM diagnostic_incident WHERE incident_key='"
            << Escape(incident_key) << "'";
     if (mysql_query(connection_, lookup.str().c_str()) != 0) {
+      rollback();
       return false;
     }
     MYSQL_RES* result = mysql_store_result(connection_);
     if (!result) {
+      rollback();
       return false;
     }
     MYSQL_ROW row = mysql_fetch_row(result);
@@ -123,7 +132,12 @@ bool DiagnosticPersistence::Save(const IncidentRecord& incident) {
     }
     mysql_free_result(result);
   }
-  return incident_id != 0 && SaveEvidence(incident_id, incident.evidence);
+  if (incident_id == 0 || !SaveRootCauses(incident_id, incident.root_causes) ||
+      !SaveEvidence(incident_id, incident.evidence) || !Execute("COMMIT")) {
+    rollback();
+    return false;
+  }
+  return true;
 #else
   (void)incident;
   return false;
@@ -147,8 +161,8 @@ bool DiagnosticPersistence::EnsureSchema() {
              "INDEX idx_host_time (host_name, start_time),"
              "INDEX idx_cause_time (root_cause, start_time))"
              " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4") &&
-         Execute(
-             "CREATE TABLE IF NOT EXISTS diagnostic_evidence ("
+          Execute(
+              "CREATE TABLE IF NOT EXISTS diagnostic_evidence ("
              "id BIGINT AUTO_INCREMENT PRIMARY KEY,"
              "incident_id BIGINT NOT NULL,"
              "evidence_type VARCHAR(64) NOT NULL,"
@@ -160,8 +174,20 @@ bool DiagnosticPersistence::EnsureSchema() {
              "severity DOUBLE,"
              "detail TEXT,"
              "event_time TIMESTAMP(3) NOT NULL,"
-             "INDEX idx_incident (incident_id))"
-             " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+              "INDEX idx_incident (incident_id))"
+              " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4") &&
+          Execute(
+              "CREATE TABLE IF NOT EXISTS diagnostic_root_cause ("
+              "id BIGINT AUTO_INCREMENT PRIMARY KEY,"
+              "incident_id BIGINT NOT NULL,"
+              "ordinal INT NOT NULL,"
+              "root_cause VARCHAR(64) NOT NULL,"
+              "confidence DOUBLE NOT NULL,"
+              "evidence_ids TEXT NOT NULL,"
+              "summary TEXT," 
+              "UNIQUE KEY uk_incident_ordinal (incident_id, ordinal),"
+              "INDEX idx_root_cause_incident (incident_id))"
+              " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 }
 
 bool DiagnosticPersistence::Execute(const std::string& sql) {
@@ -183,12 +209,50 @@ std::string DiagnosticPersistence::Escape(const std::string& value) const {
 
 std::string DiagnosticPersistence::FormatTime(
     const std::chrono::system_clock::time_point& time) const {
-  const std::time_t raw = std::chrono::system_clock::to_time_t(time);
+  const auto millis_count =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          time.time_since_epoch())
+          .count() %
+      1000;
+  const auto millis = std::chrono::milliseconds(millis_count);
+  const auto seconds = time - millis;
+  const std::time_t raw = std::chrono::system_clock::to_time_t(seconds);
   std::tm tm_time{};
   localtime_r(&raw, &tm_time);
   std::ostringstream output;
-  output << std::put_time(&tm_time, "%Y-%m-%d %H:%M:%S");
+  output << std::put_time(&tm_time, "%Y-%m-%d %H:%M:%S") << '.'
+         << std::setfill('0') << std::setw(3) << millis.count();
   return output.str();
+}
+
+bool DiagnosticPersistence::SaveRootCauses(
+    std::uint64_t incident_id, const std::vector<RootCause>& root_causes) {
+  std::ostringstream delete_sql;
+  delete_sql << "DELETE FROM diagnostic_root_cause WHERE incident_id="
+             << incident_id;
+  if (!Execute(delete_sql.str())) {
+    return false;
+  }
+  for (std::size_t ordinal = 0; ordinal < root_causes.size(); ++ordinal) {
+    const auto& cause = root_causes[ordinal];
+    std::ostringstream evidence_ids;
+    for (std::size_t index = 0; index < cause.evidence_ids.size(); ++index) {
+      if (index > 0) evidence_ids << '\n';
+      evidence_ids << cause.evidence_ids[index];
+    }
+    std::ostringstream insert;
+    insert << "INSERT INTO diagnostic_root_cause "
+              "(incident_id, ordinal, root_cause, confidence, evidence_ids, "
+              "summary) VALUES ("
+           << incident_id << "," << ordinal << ", '"
+           << Escape(RootCauseTypeName(cause.type)) << "',"
+           << cause.confidence << ", '" << Escape(evidence_ids.str())
+           << "', '" << Escape(cause.summary) << "')";
+    if (!Execute(insert.str())) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool DiagnosticPersistence::SaveEvidence(

@@ -247,6 +247,11 @@ class QueryManager {
   int GetTotalCount(const std::string& count_sql);
 
 #ifdef ENABLE_MYSQL
+  void LoadIncidentDetails(
+      std::vector<diagnostics::IncidentRecord>* incidents);
+#endif
+
+#ifdef ENABLE_MYSQL
   MYSQL* conn_ = nullptr;
 #endif
   std::mutex mtx_;

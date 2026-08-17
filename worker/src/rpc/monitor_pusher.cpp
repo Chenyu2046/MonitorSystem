@@ -362,9 +362,15 @@ void MonitorPusher::SendLoop() {
 }
 
 bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
+  if (!running_.load()) {
+    return false;
+  }
   int backoff_ms = observability_config_.sender_retry_initial_ms;
   for (int attempt = 0; attempt <= observability_config_.sender_max_retries;
        ++attempt) {
+    if (!running_.load()) {
+      return false;
+    }
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() +
                          std::chrono::milliseconds(
