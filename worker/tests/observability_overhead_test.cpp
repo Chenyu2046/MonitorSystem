@@ -62,7 +62,8 @@ int main() {
       MakeInfo(monitor::proto::OBSERVABILITY_DIAGNOSTIC, false), kIterations);
   const auto profiling = Measure(
       MakeInfo(monitor::proto::OBSERVABILITY_PROFILING, true), kIterations);
-  std::cout << "iterations=" << kIterations << " normal_us=" << normal
+  std::cout << "control_loop_microbenchmark iterations=" << kIterations
+            << " normal_us=" << normal
             << " diagnostic_us=" << diagnostic << " profiling_us=" << profiling
             << std::endl;
   return 0;

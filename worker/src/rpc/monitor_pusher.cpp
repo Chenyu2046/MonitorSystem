@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
 #include <cstdint>
+#include <cerrno>
 #include <cstdlib>
 #include <iostream>
 #include <random>
@@ -11,15 +13,63 @@
 
 namespace {
 
+void ApplyPositiveEnv(const char* name, int default_value, int* target) {
+  const char* raw = std::getenv(name);
+  if (!raw) {
+    return;
+  }
+
+  char* end = nullptr;
+  errno = 0;
+  const long parsed = std::strtol(raw, &end, 10);
+  if (*raw == '\0' || end == raw || *end != '\0' || errno == ERANGE ||
+      parsed <= 0 || parsed > INT_MAX) {
+    std::cerr << "Warning: invalid " << name << "='" << raw
+              << "'; using default " << default_value << std::endl;
+    *target = default_value;
+    return;
+  }
+  *target = static_cast<int>(parsed);
+}
+
+bool IsMetricsLogEnabled() {
+  const char* value = std::getenv("MONITOR_VERBOSE_METRICS");
+  return value && std::string(value) == "1";
+}
+
 monitor::diagnostics::ObservabilityConfig MakeObservabilityConfig(
     int interval_seconds) {
   monitor::diagnostics::ObservabilityConfig config;
+  const monitor::diagnostics::ObservabilityConfig defaults;
   if (interval_seconds > 0) {
     config.normal_interval_ms = interval_seconds * 1000;
   }
+  ApplyPositiveEnv("KERNSCOPE_NORMAL_INTERVAL_MS",
+                   defaults.normal_interval_ms, &config.normal_interval_ms);
+  ApplyPositiveEnv("KERNSCOPE_SUSPECT_INTERVAL_MS",
+                   defaults.suspect_interval_ms, &config.suspect_interval_ms);
+  ApplyPositiveEnv("KERNSCOPE_DIAGNOSTIC_INTERVAL_MS",
+                   defaults.diagnostic_interval_ms,
+                   &config.diagnostic_interval_ms);
+  ApplyPositiveEnv("KERNSCOPE_PROFILING_DURATION_SEC",
+                   defaults.profiling_duration_sec,
+                   &config.profiling_duration_sec);
+  if (config.profiling_duration_sec > config.profiling_max_duration_sec) {
+    std::cerr << "Warning: KERNSCOPE_PROFILING_DURATION_SEC exceeds "
+              << "KERNSCOPE profiling maximum; using default "
+              << defaults.profiling_duration_sec << std::endl;
+    config.profiling_duration_sec = defaults.profiling_duration_sec;
+  }
+  ApplyPositiveEnv("KERNSCOPE_COOLDOWN_SEC", defaults.cooldown_sec,
+                   &config.cooldown_sec);
+  ApplyPositiveEnv("KERNSCOPE_PROFILE_SAMPLE_HZ",
+                   defaults.profiling_sample_hz, &config.profiling_sample_hz);
   if (const char* object_dir = std::getenv("KERNSCOPE_EBPF_OBJECT_DIR")) {
     if (*object_dir != '\0') {
       config.ebpf_object_dir = object_dir;
+    } else {
+      std::cerr << "Warning: KERNSCOPE_EBPF_OBJECT_DIR is empty; using default "
+                << config.ebpf_object_dir << std::endl;
     }
   }
   return config;
@@ -294,9 +344,10 @@ bool MonitorPusher::PushOnce() {
   FillDiagnosticProto(anomaly, state_machine_.state(), diagnostic_snapshot,
                       probe_controller_, symbolizer_, info.mutable_diagnostic());
 
-  // 打印采集到的所有指标
-  std::cout << "\n================== Collected Metrics =================="
-            << std::endl;
+  if (IsMetricsLogEnabled()) {
+    // 打印采集到的所有指标
+    std::cout << "\n================== Collected Metrics =================="
+              << std::endl;
 
   // 主机信息
   if (info.has_host_info()) {
@@ -412,8 +463,9 @@ bool MonitorPusher::PushOnce() {
     }
   }
 
-  std::cout << "========================================================\n"
-            << std::endl;
+    std::cout << "========================================================\n"
+              << std::endl;
+  }
 
   return send_queue_.Push(std::move(info));
 }

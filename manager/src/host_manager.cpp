@@ -33,7 +33,7 @@ const char* DiagnosticStateName(monitor::proto::ObservabilityState state) {
 
 bool IsMetricsLogEnabled() {
   const char* value = std::getenv("MONITOR_VERBOSE_METRICS");
-  return !value || std::string(value) != "0";
+  return value && std::string(value) == "1";
 }
 
 }  // namespace
