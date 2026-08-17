@@ -142,11 +142,34 @@ void TestNetworkEvidenceRequiresAllSignals() {
   assert(engine.Evaluate(insufficient).empty());
 }
 
+void TestLockContentionRuleIsReachable() {
+  monitor::proto::MonitorInfo info;
+  auto* cpu = info.add_cpu_stat();
+  cpu->set_cpu_percent(20.0);
+  auto* diagnostic = info.mutable_diagnostic();
+  auto* profile = diagnostic->add_offcpu_profiles();
+  profile->set_pid(300);
+  profile->set_total_offcpu_ns(2000000000);
+
+  monitor::diagnostics::EvidenceBuilder builder;
+  monitor::diagnostics::RootCauseEngine engine;
+  const auto evidence =
+      builder.Build(info, std::chrono::system_clock::now());
+  const auto causes = engine.Evaluate(evidence);
+  bool found = false;
+  for (const auto& cause : causes) {
+    found = found || cause.type ==
+                        monitor::diagnostics::RootCauseType::kLockContention;
+  }
+  assert(found);
+}
+
 }  // namespace
 
 int main() {
   TestCpuRuleRequiresMultipleSignals();
   TestDiskRuleAndIncidentStore();
   TestNetworkEvidenceRequiresAllSignals();
+  TestLockContentionRuleIsReachable();
   return 0;
 }

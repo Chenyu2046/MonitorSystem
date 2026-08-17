@@ -533,7 +533,9 @@ void QueryServiceImpl::SetIncident(const diagnostics::IncidentRecord& incident,
   int page_size = request->pagination().page_size();
   if (page < 1) page = 1;
   if (page_size < 1) page_size = 100;
-  const bool persisted = query_manager_ && query_manager_->IsInitialized();
+  const bool persisted =
+      query_manager_ && query_manager_->IsInitialized() &&
+      !host_manager_->IsDiagnosticPersistenceDegraded();
   int total_count = 0;
   auto incidents =
       persisted ? query_manager_->QueryIncidents(
@@ -569,7 +571,8 @@ void QueryServiceImpl::SetIncident(const diagnostics::IncidentRecord& incident,
                         "Host manager not initialized");
   }
   const auto incident =
-      query_manager_ && query_manager_->IsInitialized()
+      query_manager_ && query_manager_->IsInitialized() &&
+              !host_manager_->IsDiagnosticPersistenceDegraded()
           ? query_manager_->QueryIncident(request->incident_id())
           : host_manager_->GetIncident(request->incident_id());
   if (!incident) {
@@ -589,7 +592,8 @@ void QueryServiceImpl::SetIncident(const diagnostics::IncidentRecord& incident,
                         "Host manager not initialized");
   }
   const auto incidents =
-      query_manager_ && query_manager_->IsInitialized()
+      query_manager_ && query_manager_->IsInitialized() &&
+              !host_manager_->IsDiagnosticPersistenceDegraded()
           ? query_manager_->QueryActiveIncidents(request->server_name())
           : host_manager_->GetActiveIncidents(request->server_name());
   for (const auto& incident : incidents) {

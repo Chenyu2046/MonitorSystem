@@ -164,11 +164,14 @@ void HostManager::Start() {
     return;
   }
 #ifdef ENABLE_MYSQL
-  diagnostic_persistence_.Init(
+  const bool persistence_initialized = diagnostic_persistence_.Init(
       GetEnvOrDefault("MONITOR_MYSQL_HOST", MYSQL_HOST),
       GetEnvOrDefault("MONITOR_MYSQL_USER", MYSQL_USER),
       GetEnvOrDefault("MONITOR_MYSQL_PASSWORD", MYSQL_PASS),
       GetEnvOrDefault("MONITOR_MYSQL_DATABASE", MYSQL_DB));
+  diagnostic_persistence_degraded_.store(!persistence_initialized);
+#else
+  diagnostic_persistence_degraded_.store(true);
 #endif
   thread_ = std::make_unique<std::thread>(&HostManager::ProcessLoop, this);
 }
@@ -319,7 +322,12 @@ void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
         root_causes, now);
     if (incident) {
       processing_lock.unlock();
-      diagnostic_persistence_.Save(*incident);
+      const bool persisted = diagnostic_persistence_.Save(*incident);
+      diagnostic_persistence_degraded_.store(!persisted);
+      if (!persisted) {
+        std::cerr << "ERROR: diagnostic persistence degraded; incident "
+                  << incident->id << " remains available in memory" << std::endl;
+      }
       processing_lock.lock();
     }
   }

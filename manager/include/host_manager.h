@@ -56,6 +56,9 @@ class HostManager {
       std::uint64_t incident_id) const;
   std::vector<diagnostics::IncidentRecord> GetActiveIncidents(
       const std::string& server_name = {}) const;
+  bool IsDiagnosticPersistenceDegraded() const {
+    return diagnostic_persistence_degraded_.load();
+  }
 
  private:
   void ProcessLoop();
@@ -84,6 +87,7 @@ class HostManager {
   diagnostics::RootCauseEngine root_cause_engine_;
   diagnostics::IncidentStore incident_store_;
   diagnostics::DiagnosticPersistence diagnostic_persistence_;
+  std::atomic<bool> diagnostic_persistence_degraded_{true};
 };
 
 }  // namespace monitor
