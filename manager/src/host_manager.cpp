@@ -36,6 +36,11 @@ bool IsMetricsLogEnabled() {
   return value && std::string(value) == "1";
 }
 
+bool IsDiagnosticLogEnabled() {
+  const char* value = std::getenv("KERNSCOPE_DIAGNOSTIC_LOG");
+  return value && std::string(value) == "1";
+}
+
 }  // namespace
 
 #ifdef ENABLE_MYSQL
@@ -317,6 +322,23 @@ void HostManager::OnDataReceived(const monitor::proto::MonitorInfo& info) {
   if (info.has_diagnostic()) {
     const auto evidence = evidence_builder_.Build(info, now);
     const auto root_causes = root_cause_engine_.Evaluate(evidence);
+    if (IsDiagnosticLogEnabled()) {
+      std::cout << "[KernScopeManager] state="
+                << DiagnosticStateName(info.diagnostic().state())
+                << " evidence=";
+      for (std::size_t index = 0; index < evidence.size(); ++index) {
+        if (index != 0) std::cout << ",";
+        std::cout << diagnostics::EvidenceTypeName(evidence[index].type)
+                  << ":severity=" << evidence[index].severity;
+      }
+      std::cout << " root_causes=";
+      for (std::size_t index = 0; index < root_causes.size(); ++index) {
+        if (index != 0) std::cout << ",";
+        std::cout << diagnostics::RootCauseTypeName(root_causes[index].type)
+                  << ":confidence=" << root_causes[index].confidence;
+      }
+      std::cout << std::endl;
+    }
     const auto incident = incident_store_.Observe(
         host_name, DiagnosticStateName(info.diagnostic().state()), evidence,
         root_causes, now);

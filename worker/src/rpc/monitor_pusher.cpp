@@ -37,6 +37,11 @@ bool IsMetricsLogEnabled() {
   return value && std::string(value) == "1";
 }
 
+bool IsDiagnosticLogEnabled() {
+  const char* value = std::getenv("KERNSCOPE_DIAGNOSTIC_LOG");
+  return value && std::string(value) == "1";
+}
+
 monitor::diagnostics::ObservabilityConfig MakeObservabilityConfig(
     int interval_seconds) {
   monitor::diagnostics::ObservabilityConfig config;
@@ -102,6 +107,22 @@ monitor::proto::ObservabilityState ToProtoState(
       return monitor::proto::OBSERVABILITY_COOLDOWN;
   }
   return monitor::proto::OBSERVABILITY_NORMAL;
+}
+
+const char* StateName(monitor::diagnostics::ObservabilityState state) {
+  switch (state) {
+    case monitor::diagnostics::ObservabilityState::kNormal:
+      return "NORMAL";
+    case monitor::diagnostics::ObservabilityState::kSuspect:
+      return "SUSPECT";
+    case monitor::diagnostics::ObservabilityState::kDiagnostic:
+      return "DIAGNOSTIC";
+    case monitor::diagnostics::ObservabilityState::kProfiling:
+      return "PROFILING";
+    case monitor::diagnostics::ObservabilityState::kCooldown:
+      return "COOLDOWN";
+  }
+  return "UNKNOWN";
 }
 
 monitor::proto::DiagnosticDomain ToProtoDomain(
@@ -338,10 +359,32 @@ bool MonitorPusher::PushOnce() {
 
   const auto anomaly = anomaly_detector_.Evaluate(info);
   state_machine_.Update(anomaly);
-  probe_controller_.Apply(state_machine_.state(), SelectProfileType(anomaly));
+  const auto state = state_machine_.state();
+  const bool probes_ready =
+      probe_controller_.Apply(state, SelectProfileType(anomaly));
+  if (IsDiagnosticLogEnabled()) {
+    const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
+    std::cout << "[KernScope] timestamp_ms=" << timestamp_ms
+              << " state=" << StateName(state) << " active_probes=";
+    bool first = true;
+    for (const auto kind : {diagnostics::ProbeKind::kTcp,
+                            diagnostics::ProbeKind::kBlockIo,
+                            diagnostics::ProbeKind::kScheduler,
+                            diagnostics::ProbeKind::kOnCpuProfile,
+                            diagnostics::ProbeKind::kOffCpuProfile}) {
+      const auto& status = probe_controller_.Status(kind);
+      if (!status.requested) continue;
+      if (!first) std::cout << ",";
+      std::cout << ProbeName(kind) << (status.attached ? ":attached" : ":failed");
+      first = false;
+    }
+    std::cout << " probes_ready=" << probes_ready << std::endl;
+  }
   diagnostics::DiagnosticSnapshot diagnostic_snapshot;
   probe_controller_.CollectSnapshot(&diagnostic_snapshot);
-  FillDiagnosticProto(anomaly, state_machine_.state(), diagnostic_snapshot,
+  FillDiagnosticProto(anomaly, state, diagnostic_snapshot,
                       probe_controller_, symbolizer_, info.mutable_diagnostic());
 
   if (IsMetricsLogEnabled()) {
