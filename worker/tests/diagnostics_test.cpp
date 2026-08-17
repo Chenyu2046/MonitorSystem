@@ -139,9 +139,11 @@ void TestProbeController() {
   assert(!controller.Apply(ObservabilityState::kSuspect));
   assert(controller.DesiredProbes().count(ProbeKind::kTcp) == 1);
   assert(controller.DesiredProbes().count(ProbeKind::kBlockIo) == 1);
+  assert(!controller.Apply(ObservabilityState::kSuspect));
+  assert(controller.ApplyCount() == 2);
   assert(!controller.Apply(ObservabilityState::kDiagnostic));
   assert(controller.DesiredProbes().count(ProbeKind::kScheduler) == 1);
-  assert(controller.Apply(ObservabilityState::kCooldown));
+  assert(!controller.Apply(ObservabilityState::kCooldown));
   assert(controller.DesiredProbes().count(ProbeKind::kTcp) == 1);
   assert(controller.DesiredProbes().count(ProbeKind::kBlockIo) == 1);
   assert(controller.DesiredProbes().count(ProbeKind::kScheduler) == 1);

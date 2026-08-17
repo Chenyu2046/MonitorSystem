@@ -461,6 +461,12 @@ bool ProbeController::Apply(ObservabilityState state, ProfileType profile_type,
   const auto desired = DesiredFor(state, profile_type, profile_active);
   const bool changed = !initialized_ || desired != desired_probes_;
   if (!changed) {
+    for (const ProbeKind kind : desired_probes_) {
+      const ProbeStatus& status = statuses_[Index(kind)];
+      if (!status.requested || !status.available || !status.attached) {
+        return false;
+      }
+    }
     return true;
   }
 

@@ -73,6 +73,14 @@ bool ObservabilityStateMachine::Update(const AnomalyResult& result,
         break;
       }
 
+      // Do not carry anomalous samples collected during the cooldown window
+      // into the next diagnostic episode. A persistent anomaly must be
+      // observed again after cooldown has elapsed.
+      if (now - cooldown_started_ < cooldown) {
+        diagnostic_samples_ = 0;
+        break;
+      }
+
       diagnostic_samples_ =
           result.overall_score >= config_.diagnostic_enter_score
               ? diagnostic_samples_ + 1
