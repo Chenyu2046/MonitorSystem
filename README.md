@@ -1,39 +1,62 @@
-# Linux 服务器性能监控系统
+# KernScope
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/)
 [![gRPC](https://img.shields.io/badge/gRPC-1.50+-green.svg)](https://grpc.io/)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://www.linux.org/)
 
-分布式服务器性能监控系统，采用 Push 模式架构，支持多服务器性能数据采集、存储和查询。基于内核模块和 eBPF 技术实现高效的系统指标采集。
+> **eBPF 驱动的 Linux 内核性能诊断系统**
+
+KernScope 从现有的分布式服务器监控链路演进而来：Worker 负责低开销采集，Manager 负责接收、评分、持久化和查询；后续在这条稳定链路上增加异常触发的自适应观测、eBPF 深度诊断、Profiling 和可解释根因分析。
+
+本仓库当前仍保留内部 `monitor` namespace、`monitor.proto` package、原有 unary `SetMonitorInfo` RPC、MySQL 表和 benchmark。项目展示层先统一使用 KernScope，运行时能力按 Phase 增量演进。
 
 ## ✨ 特性
 
-- 🚀 **高效采集** - 基于内核模块和 eBPF 的低开销数据采集
-- 📊 **全面监控** - CPU、内存、磁盘、网络、软中断等全方位指标
-- 🔄 **Push 模式** - Worker 主动推送，降低 Manager 负载
-- 📈 **健康评分** - 多维度加权评分算法，快速评估服务器状态
-- 🔍 **丰富查询** - 9 个 gRPC 查询接口，支持历史数据、趋势分析、异常检测
-- 💾 **数据持久化** - MySQL 存储历史数据
+- 🚀 **低开销基础观测** - 通过 procfs、内核模块和 eBPF 采集 CPU、内存、磁盘、网络、软中断等指标
+- 🔄 **Worker-Agent + Manager** - Worker 主动 Push，Manager 统一评分、存储和查询
+- ⚡ **TC eBPF 网络数据面** - 保留基于 Per-CPU Hash Map 的收发字节与报文聚合
+- 📈 **健康评分与历史查询** - 保留现有多维评分、MySQL 持久化和 9 个查询接口
+- 🧭 **诊断控制层** - Phase 1 已加入异常评分、状态防抖、动态采样周期；Phase 2 加入受限诊断 Probe，Phase 3 加入限时 Profiling，Phase 4 加入 Evidence/RCA/Incident 持久化与查询，Phase 5 增加 unary Push 的 deadline、有限重试、有界队列和优雅退出
+- 🛣️ **后续演进方向** - Monitoring → Anomaly Detection → Adaptive Observability → Kernel Diagnostics / Profiling → Evidence Correlation → Root Cause
+
+> Phase 4 已加入 `MonitorInfo.diagnostic` field 10、EvidenceBuilder、多证据 RootCauseEngine、有界 IncidentStore、MySQL `diagnostic_incident`/`diagnostic_evidence` 持久化和三类 Incident 查询 RPC；无 MySQL 时仍回退到 Manager 内存。Linux perf/BTF 功能验证仍需 Linux 构建机执行，未验证能力不会在 README 中伪装成已完成运行时功能。
+
+> Phase 5 保留原有 `SetMonitorInfo` unary RPC，在 Worker 侧增加发送队列、RPC deadline、可重试状态过滤、指数退避和 signal-driven graceful shutdown；WAL 仍是后续 P2，不在本阶段宣称已实现。
 
 ## 📐 系统架构
 
+当前可验证的运行时链路见 [核心流程追踪](docs/ai/core-flow-trace.md)。Phase 1/2/3/4/5 在既有上报链路上增量加入自适应观测、诊断、Profiling、Evidence/RCA 和可靠发送；旧 MonitorInfo field 1~9、unary RPC、Manager 评分和 MySQL 基础表语义保持不变。
+
 ```
-┌─────────────────┐     gRPC Push      ┌─────────────────┐
-│     Worker      │ ─────────────────► │     Manager     │
-│  (被监控服务器)  │   MonitorInfo      │   (管理服务器)   │
-│                 │   每10秒推送        │                 │
-│  - CPU 采集     │                    │  - 数据接收     │
-│  - 内存采集     │                    │  - 评分计算     │
-│  - 磁盘采集     │                    │  - MySQL 存储   │
-│  - 网络采集     │                    │  - 查询服务     │
-└─────────────────┘                    └─────────────────┘
-        │                                      │
-        │ 内核模块/eBPF                         │ QueryService
-        ▼                                      ▼
-   /dev/cpu_stat_monitor                  9个查询接口
-   /dev/cpu_softirq_monitor
+┌──────────────────────┐      gRPC unary Push       ┌──────────────────────┐
+│ Worker-Agent         │ ─────────────────────────► │ Manager              │
+│                      │       MonitorInfo         │                      │
+│ procfs / kernel      │                            │ 接收 / 评分 / 缓存    │
+│ module / TC eBPF     │                            │ MySQL / QueryService  │
+│ MetricCollector      │                            │                      │
+└──────────────────────┘                            └──────────────────────┘
+          │                                                     │
+          └── /dev/cpu_*、/proc/*、TC eBPF map ───────► MySQL / 查询 API
 ```
+
+KernScope 的目标演进链路：
+
+```text
+Monitoring
+    ↓
+Anomaly Detection
+    ↓
+Adaptive Observability
+    ↓
+Kernel Diagnostics / Profiling
+    ↓
+Evidence Correlation
+    ↓
+Root Cause
+```
+
+详细的当前基线、目标边界和 Phase 计划见 [KernScope 架构说明](docs/ai/kernscope-architecture.md)。
 
 ## 📁 项目结构
 
@@ -66,7 +89,7 @@ monitor_system/
 - **编译器**: GCC 9+ 或 Clang 10+ (支持 C++17)
 - **CMake**: 3.10+
 - **内核版本**: 5.4+ (eBPF 功能需要)
-- **MySQL**: 8.0+ (必须)
+- **MySQL**: 8.0+（启用 MySQL persistence 时需要；关闭时使用 Manager 内存回退）
 
 ## 📦 安装
 
@@ -95,11 +118,12 @@ sudo yum install -y \
 
 ### eBPF/libbpf 配置
 
-libbpf 相关依赖的安装和配置请参考 **AI智能网络检测知识库** 中的 libbpf 配置文档。
+libbpf 相关依赖用于 Linux eBPF 诊断和 Profiling；如果只构建基础监控或执行
+`ENABLE_EBPF=OFF` 构建，可以不安装这些依赖。
 
 ## 💾 数据库配置
 
-### 1. 安装并启动 MySQL
+### 1. 可选：安装并启动 MySQL
 
 ```bash
 sudo systemctl start mysql
@@ -129,19 +153,20 @@ EXIT;
 mysql -u monitor -pmonitor123 monitor_db < manager/sql/init_server_performance.sql
 ```
 
-### 4. 修改代码中的数据库配置
+### 4. 配置 Manager 数据库连接
 
-在以下两个文件中修改数据库连接信息：
+Manager 从环境变量读取 MySQL 连接信息，不需要修改源码。启用 MySQL persistence
+时设置：
 
-**文件**: `manager/src/main.cpp` 和 `manager/src/host_manager.cpp`
-
-```cpp
-// 修改为你的 MySQL 配置
-const char* host = "localhost";
-const char* user = "monitor";        // 你的用户名
-const char* password = "monitor123"; // 你的密码
-const char* database = "monitor_db";
+```bash
+export MONITOR_MYSQL_HOST=127.0.0.1
+export MONITOR_MYSQL_USER=monitor
+export MONITOR_MYSQL_PASSWORD='your-password'
+export MONITOR_MYSQL_DATABASE=monitor_db
 ```
+
+未启用 MySQL 时，诊断 Incident 保留在 Manager 内存中，并通过 QueryService 提供
+回退查询。
 
 ### 数据库表说明
 
@@ -157,8 +182,8 @@ const char* database = "monitor_db";
 
 ```bash
 # 克隆项目
-git clone https://github.com/cpp-agan-team/monitor_system.git
-cd monitor_system
+git clone https://github.com/Chenyu2046/MonitorSystem.git
+cd MonitorSystem
 
 # 创建构建目录
 mkdir build && cd build
@@ -297,12 +322,12 @@ web-server_10.0.0.5
 - **语言**: C++
 - **RPC 框架**: gRPC + Protocol Buffers
 - **数据采集**: Linux 内核模块 + eBPF + procfs
-- **数据库**: MySQL
+- **数据库**: 可选 MySQL persistence；无 MySQL 时使用内存回退
 - **构建系统**: CMake
 
 
 
-学cpp基础，可以把最近开发的这个编程练习平台利用起来 
+## 📄 许可证
 
-cppagancoding.top
+本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
 

@@ -24,6 +24,7 @@ struct Options {
   int interval_ms = 1000;
   std::string run_id = "benchmark";
   bool stagger_start = false;
+  bool diagnostic = false;
 };
 
 struct Sample {
@@ -61,6 +62,10 @@ bool ParseArgs(int argc, char* argv[], Options* options) {
       options->stagger_start = true;
       continue;
     }
+    if (arg == "--diagnostic") {
+      options->diagnostic = true;
+      continue;
+    }
     if (arg == "--target" || arg == "--output" || arg == "--workers" ||
         arg == "--duration-seconds" || arg == "--interval-ms" ||
         arg == "--run-id") {
@@ -85,7 +90,8 @@ bool ParseArgs(int argc, char* argv[], Options* options) {
          expected_samples <= 1000000;
 }
 
-monitor::proto::MonitorInfo MakeRequest(const std::string& run_id, int worker_id) {
+monitor::proto::MonitorInfo MakeRequest(const std::string& run_id, int worker_id,
+                                        bool diagnostic) {
   monitor::proto::MonitorInfo info;
   const std::string name = run_id + "-worker-" + std::to_string(worker_id);
   info.set_name(name);
@@ -94,10 +100,10 @@ monitor::proto::MonitorInfo MakeRequest(const std::string& run_id, int worker_id
 
   auto* cpu = info.add_cpu_stat();
   cpu->set_cpu_name("cpu0");
-  cpu->set_cpu_percent(42.0f);
+  cpu->set_cpu_percent(diagnostic ? 92.0f : 42.0f);
   cpu->set_usr_percent(30.0f);
   cpu->set_system_percent(12.0f);
-  info.mutable_cpu_load()->set_load_avg_1(1.0f);
+  info.mutable_cpu_load()->set_load_avg_1(diagnostic ? 8.0f : 1.0f);
   info.mutable_mem_info()->set_used_percent(55);
   info.mutable_mem_info()->set_total(16384);
   info.mutable_mem_info()->set_free(4096);
@@ -109,6 +115,15 @@ monitor::proto::MonitorInfo MakeRequest(const std::string& run_id, int worker_id
   auto* disk = info.add_disk_info();
   disk->set_name("sda");
   disk->set_util_percent(20.0f);
+  if (diagnostic) {
+    auto* snapshot = info.mutable_diagnostic();
+    snapshot->set_state(monitor::proto::OBSERVABILITY_DIAGNOSTIC);
+    snapshot->set_anomaly_score(0.9);
+    auto* profile = snapshot->add_oncpu_profiles();
+    profile->set_pid(1);
+    profile->set_tid(1);
+    profile->set_samples(10);
+  }
   return info;
 }
 
@@ -120,9 +135,9 @@ int64_t Percentile(std::vector<int64_t> values, double percentile) {
 }
 
 void PrintUsage() {
-  std::cerr << "Usage: push_benchmark [--target host:port] [--workers N] "
+    std::cerr << "Usage: push_benchmark [--target host:port] [--workers N] "
                "[--duration-seconds N] [--interval-ms N] [--stagger-start] "
-               "[--run-id ID] [--output path]\n";
+               "[--diagnostic] [--run-id ID] [--output path]\n";
 }
 
 }  // namespace
@@ -143,7 +158,8 @@ int main(int argc, char* argv[]) {
     threads.emplace_back([&, worker_id] {
       auto channel = grpc::CreateChannel(options.target, grpc::InsecureChannelCredentials());
       auto stub = monitor::proto::GrpcManager::NewStub(channel);
-      const auto request = MakeRequest(options.run_id, worker_id);
+      const auto request =
+          MakeRequest(options.run_id, worker_id, options.diagnostic);
       while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
 
       const auto worker_start = std::chrono::steady_clock::now() +

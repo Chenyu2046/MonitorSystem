@@ -19,6 +19,10 @@ option(ENABLE_MYSQL "Enable MySQL support for data persistence" ON)
 set(MANAGER_SOURCES
     src/main.cpp
     src/host_manager.cpp
+    src/diagnostics/evidence_builder.cpp
+    src/diagnostics/root_cause_engine.cpp
+    src/diagnostics/incident_store.cpp
+    src/diagnostics/diagnostic_persistence.cpp
     src/query_manager.cpp
     src/rpc/grpc_server.cpp
     src/rpc/query_service.cpp
@@ -52,3 +56,18 @@ if(ENABLE_MYSQL)
 endif()
 
 target_link_libraries(manager PUBLIC ${MANAGER_LIBS})
+
+if(BUILD_TESTING)
+    add_executable(manager_diagnostics_test
+        tests/diagnostics_test.cpp
+        src/diagnostics/evidence_builder.cpp
+        src/diagnostics/root_cause_engine.cpp
+        src/diagnostics/incident_store.cpp
+        src/diagnostics/diagnostic_persistence.cpp
+    )
+    target_include_directories(manager_diagnostics_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/manager/include
+    )
+    target_link_libraries(manager_diagnostics_test PRIVATE monitor_proto)
+    add_test(NAME manager_diagnostics_test COMMAND manager_diagnostics_test)
+endif()

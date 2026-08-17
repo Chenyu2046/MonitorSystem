@@ -1,0 +1,93 @@
+syntax = "proto3";
+package monitor.proto;
+
+enum ObservabilityState {
+  OBSERVABILITY_NORMAL = 0;
+  OBSERVABILITY_SUSPECT = 1;
+  OBSERVABILITY_DIAGNOSTIC = 2;
+  OBSERVABILITY_PROFILING = 3;
+  OBSERVABILITY_COOLDOWN = 4;
+}
+
+enum DiagnosticDomain {
+  DOMAIN_UNKNOWN = 0;
+  DOMAIN_CPU = 1;
+  DOMAIN_MEMORY = 2;
+  DOMAIN_DISK = 3;
+  DOMAIN_NETWORK = 4;
+  DOMAIN_SCHEDULER = 5;
+}
+
+message DiagnosticSignal {
+  DiagnosticDomain domain = 1;
+  string metric = 2;
+  double value = 3;
+  string unit = 4;
+  double anomaly_score = 5;
+  string target = 6;
+}
+
+message StackFrame {
+  uint64 address = 1;
+  string symbol = 2;
+  string module = 3;
+}
+
+message ProfileEntry {
+  int32 pid = 1;
+  int32 tid = 2;
+  uint64 samples = 3;
+  uint64 total_offcpu_ns = 4;
+  repeated StackFrame user_stack = 5;
+  repeated StackFrame kernel_stack = 6;
+  int32 user_stack_id = 7;
+  int32 kernel_stack_id = 8;
+}
+
+message ProbeRuntimeStatus {
+  string probe = 1;
+  bool requested = 2;
+  bool available = 3;
+  bool attached = 4;
+  int32 last_error = 5;
+}
+
+message DiagnosticSnapshot {
+  ObservabilityState state = 1;
+  double anomaly_score = 2;
+  repeated DiagnosticSignal signals = 3;
+  repeated ProfileEntry oncpu_profiles = 4;
+  repeated ProfileEntry offcpu_profiles = 5;
+  repeated ProbeRuntimeStatus probe_status = 6;
+}
+
+message Evidence {
+  string id = 1;
+  string type = 2;
+  string source = 3;
+  string target = 4;
+  double value = 5;
+  string unit = 6;
+  double severity = 7;
+  int64 timestamp_ms = 8;
+  string detail = 9;
+}
+
+message RootCause {
+  string type = 1;
+  double confidence = 2;
+  repeated string evidence_ids = 3;
+  string summary = 4;
+}
+
+message Incident {
+  uint64 id = 1;
+  string server_name = 2;
+  string severity = 3;
+  string state = 4;
+  int64 start_time_ms = 5;
+  int64 end_time_ms = 6;
+  repeated RootCause root_causes = 7;
+  repeated Evidence evidence = 8;
+  bool active = 9;
+}

@@ -1,20 +1,23 @@
 #pragma once
 
-#include <grpcpp/support/status.h>
-#include <grpcpp/server_context.h>
-
 #include <memory>
+
+#include <grpcpp/server_context.h>
+#include <grpcpp/support/status.h>
+
+#include "host_manager.h"
+#include "query_manager.h"
 
 #include "query_api.grpc.pb.h"
 #include "query_api.pb.h"
-#include "query_manager.h"
 
 namespace monitor {
 
 // gRPC 查询服务实现类
 class QueryServiceImpl : public monitor::proto::QueryService::Service {
  public:
-  explicit QueryServiceImpl(QueryManager* query_manager);
+  explicit QueryServiceImpl(QueryManager* query_manager,
+                            HostManager* host_manager = nullptr);
   virtual ~QueryServiceImpl() = default;
 
   // 时间段性能数据查询
@@ -71,6 +74,21 @@ class QueryServiceImpl : public monitor::proto::QueryService::Service {
       const ::monitor::proto::QueryDetailRequest* request,
       ::monitor::proto::QuerySoftIrqDetailResponse* response) override;
 
+  ::grpc::Status GetIncidents(
+      ::grpc::ServerContext* context,
+      const ::monitor::proto::GetIncidentsRequest* request,
+      ::monitor::proto::GetIncidentsResponse* response) override;
+
+  ::grpc::Status GetIncidentDetail(
+      ::grpc::ServerContext* context,
+      const ::monitor::proto::GetIncidentDetailRequest* request,
+      ::monitor::proto::GetIncidentDetailResponse* response) override;
+
+  ::grpc::Status GetActiveDiagnosis(
+      ::grpc::ServerContext* context,
+      const ::monitor::proto::GetActiveDiagnosisRequest* request,
+      ::monitor::proto::GetActiveDiagnosisResponse* response) override;
+
  private:
   // 转换时间范围
   TimeRange ConvertTimeRange(const ::monitor::proto::TimeRange& proto_range);
@@ -78,8 +96,11 @@ class QueryServiceImpl : public monitor::proto::QueryService::Service {
   // 转换时间点到protobuf Timestamp
   void SetTimestamp(::google::protobuf::Timestamp* ts,
                     const std::chrono::system_clock::time_point& tp);
+  void SetIncident(const diagnostics::IncidentRecord& incident,
+                   ::monitor::proto::Incident* output);
 
   QueryManager* query_manager_;
+  HostManager* host_manager_;
 };
 
 }  // namespace monitor

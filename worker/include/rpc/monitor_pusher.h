@@ -1,13 +1,23 @@
 #pragma once
 
-#include <grpcpp/grpcpp.h>
-
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
+#include <grpcpp/grpcpp.h>
+
+#include "diagnostics/anomaly_detector.h"
+#include "diagnostics/observability_config.h"
+#include "diagnostics/observability_state.h"
+#include "diagnostics/probe_controller.h"
+#include "diagnostics/symbolizer.h"
 #include "monitor/metric_collector.h"
+#include "rpc/monitor_send_queue.h"
+
 #include "monitor_info.grpc.pb.h"
 #include "monitor_info.pb.h"
 
@@ -15,9 +25,8 @@ namespace monitor {
 
 /**
  * 监控数据推送器
- * 
- * 每隔指定间隔（默认 10 秒）采集本机监控数据，
- * 并通过 gRPC 推送给管理者服务器。
+ *
+ * Adaptive sampling (10 seconds in NORMAL) pushes metrics over gRPC.
  */
 class MonitorPusher {
  public:
@@ -41,7 +50,12 @@ class MonitorPusher {
 
  private:
   void PushLoop();
+  void SendLoop();
   bool PushOnce();
+  void WaitForNextSample();
+  bool SendWithRetry(const monitor::proto::MonitorInfo& info);
+  bool WaitForRetry(std::chrono::milliseconds delay);
+  static bool IsRetryable(const grpc::Status& status);
 
   std::string manager_address_;
   int interval_seconds_;
@@ -49,6 +63,16 @@ class MonitorPusher {
   std::unique_ptr<std::thread> thread_;
   std::unique_ptr<MetricCollector> collector_;
   std::unique_ptr<monitor::proto::GrpcManager::Stub> stub_;
+  diagnostics::ObservabilityConfig observability_config_;
+  diagnostics::AnomalyDetector anomaly_detector_;
+  diagnostics::ObservabilityStateMachine state_machine_;
+  diagnostics::ProbeController probe_controller_;
+  diagnostics::Symbolizer symbolizer_;
+  MonitorSendQueue send_queue_;
+  std::unique_ptr<std::thread> sender_thread_;
+  std::mutex lifecycle_mutex_;
+  std::mutex stop_mutex_;
+  std::condition_variable stop_condition_;
 };
 
 }  // namespace monitor

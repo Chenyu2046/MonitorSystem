@@ -209,3 +209,46 @@ CREATE TABLE IF NOT EXISTS server_disk_detail (
     timestamp DATETIME NOT NULL,
     INDEX idx_server_disk_time(server_name, disk_name, timestamp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 6. Durable diagnostic incidents and their evidence
+CREATE TABLE IF NOT EXISTS diagnostic_incident (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    incident_key VARCHAR(512) NOT NULL UNIQUE,
+    host_name VARCHAR(255) NOT NULL,
+    root_cause VARCHAR(64) NOT NULL,
+    severity VARCHAR(16) NOT NULL,
+    confidence DOUBLE NOT NULL,
+    state VARCHAR(32) NOT NULL,
+    summary TEXT,
+    start_time TIMESTAMP(3) NOT NULL,
+    end_time TIMESTAMP(3) NULL,
+    INDEX idx_host_time (host_name, start_time),
+    INDEX idx_cause_time (root_cause, start_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS diagnostic_evidence (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    incident_id BIGINT NOT NULL,
+    evidence_type VARCHAR(64) NOT NULL,
+    source VARCHAR(64),
+    target VARCHAR(255),
+    metric VARCHAR(128),
+    value DOUBLE,
+    unit VARCHAR(32),
+    severity DOUBLE,
+    detail TEXT,
+    event_time TIMESTAMP(3) NOT NULL,
+    INDEX idx_incident (incident_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS diagnostic_root_cause (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    incident_id BIGINT NOT NULL,
+    ordinal INT NOT NULL,
+    root_cause VARCHAR(64) NOT NULL,
+    confidence DOUBLE NOT NULL,
+    evidence_ids TEXT NOT NULL,
+    summary TEXT,
+    UNIQUE KEY uk_incident_ordinal (incident_id, ordinal),
+    INDEX idx_root_cause_incident (incident_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
