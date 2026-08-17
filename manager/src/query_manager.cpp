@@ -1133,7 +1133,7 @@ std::vector<diagnostics::IncidentRecord> QueryManager::QueryIncidents(
       diagnostics::Evidence evidence;
       evidence.type = diagnostics::EvidenceType::kCpuUsage;
       const std::string type_name = evidence_row[0] ? evidence_row[0] : "";
-      const std::array<std::pair<const char*, diagnostics::EvidenceType>, 15>
+      const std::array<std::pair<const char*, diagnostics::EvidenceType>, 16>
           evidence_names{
               {{"cpu_usage", diagnostics::EvidenceType::kCpuUsage},
                {"run_queue", diagnostics::EvidenceType::kRunQueue},
