@@ -536,11 +536,11 @@ std::set<ProbeKind> ProbeController::DesiredFor(ObservabilityState state,
   std::set<ProbeKind> desired;
   switch (state) {
     case ObservabilityState::kNormal:
-    case ObservabilityState::kCooldown:
       return desired;
     case ObservabilityState::kSuspect:
       return {ProbeKind::kTcp, ProbeKind::kBlockIo};
     case ObservabilityState::kDiagnostic:
+    case ObservabilityState::kCooldown:
       return {ProbeKind::kTcp, ProbeKind::kBlockIo, ProbeKind::kScheduler};
     case ObservabilityState::kProfiling:
       desired = {ProbeKind::kTcp, ProbeKind::kBlockIo, ProbeKind::kScheduler};

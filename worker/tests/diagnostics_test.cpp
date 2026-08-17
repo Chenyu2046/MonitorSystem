@@ -96,9 +96,20 @@ void TestStateMachineTransitions() {
 
   machine.Update(HighAnomaly(), start + std::chrono::seconds(20));
   assert(machine.state() == ObservabilityState::kCooldown);
-  machine.Update(Recovery(), start + std::chrono::seconds(50));
-  machine.Update(Recovery(), start + std::chrono::seconds(51));
-  machine.Update(Recovery(), start + std::chrono::seconds(52));
+  machine.Update(HighAnomaly(), start + std::chrono::seconds(21));
+  assert(machine.state() == ObservabilityState::kCooldown);
+  machine.Update(HighAnomaly(), start + std::chrono::seconds(51));
+  assert(machine.state() == ObservabilityState::kCooldown);
+  machine.Update(HighAnomaly(), start + std::chrono::seconds(52));
+  assert(machine.state() == ObservabilityState::kDiagnostic);
+
+  machine.Update(HighAnomaly(), start + std::chrono::seconds(53));
+  assert(machine.state() == ObservabilityState::kProfiling);
+  machine.Update(Recovery(), start + std::chrono::seconds(54));
+  assert(machine.state() == ObservabilityState::kCooldown);
+  machine.Update(Recovery(), start + std::chrono::seconds(55));
+  machine.Update(Recovery(), start + std::chrono::seconds(83));
+  machine.Update(Recovery(), start + std::chrono::seconds(84));
   assert(machine.state() == ObservabilityState::kNormal);
   assert(machine.CurrentIntervalMs() == config.normal_interval_ms);
 }
@@ -129,7 +140,9 @@ void TestProbeController() {
   assert(!controller.Apply(ObservabilityState::kDiagnostic));
   assert(controller.DesiredProbes().count(ProbeKind::kScheduler) == 1);
   assert(controller.Apply(ObservabilityState::kCooldown));
-  assert(controller.DesiredProbes().empty());
+  assert(controller.DesiredProbes().count(ProbeKind::kTcp) == 1);
+  assert(controller.DesiredProbes().count(ProbeKind::kBlockIo) == 1);
+  assert(controller.DesiredProbes().count(ProbeKind::kScheduler) == 1);
   DiagnosticSnapshot snapshot;
   assert(controller.CollectSnapshot(&snapshot));
   assert(!controller.Status(ProbeKind::kTcp).attached);

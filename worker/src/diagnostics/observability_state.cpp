@@ -65,12 +65,21 @@ bool ObservabilityStateMachine::Update(const AnomalyResult& result,
 
     case ObservabilityState::kCooldown: {
       const auto cooldown = std::chrono::seconds(config_.cooldown_sec);
-      if (!RecoveryConfirmed(result)) {
+      if (RecoveryConfirmed(result)) {
+        if (now - cooldown_started_ >= cooldown &&
+            recovery_samples_ >= config_.anomaly_exit_count) {
+          Enter(ObservabilityState::kNormal, now);
+        }
         break;
       }
+
+      diagnostic_samples_ =
+          result.overall_score >= config_.diagnostic_enter_score
+              ? diagnostic_samples_ + 1
+              : 0;
       if (now - cooldown_started_ >= cooldown &&
-          recovery_samples_ >= config_.anomaly_exit_count) {
-        Enter(ObservabilityState::kNormal, now);
+          diagnostic_samples_ >= config_.diagnostic_enter_count) {
+        Enter(ObservabilityState::kDiagnostic, now);
       }
       break;
     }
