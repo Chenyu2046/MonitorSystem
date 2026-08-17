@@ -24,6 +24,7 @@ message DiagnosticSignal {
   double value = 3;
   string unit = 4;
   double anomaly_score = 5;
+  string target = 6;
 }
 
 message StackFrame {

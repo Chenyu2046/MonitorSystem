@@ -69,6 +69,11 @@ void TestDiskRuleAndIncidentStore() {
   auto* profile = diagnostic->add_offcpu_profiles();
   profile->set_pid(200);
   profile->set_total_offcpu_ns(1000000000);
+  auto* block_signal = diagnostic->add_signals();
+  block_signal->set_metric("block_io_avg_latency_ms");
+  block_signal->set_value(50.0);
+  block_signal->set_unit("ms");
+  block_signal->set_target("host");
 
   const auto timestamp = std::chrono::system_clock::now();
   monitor::diagnostics::EvidenceBuilder builder;
@@ -78,6 +83,13 @@ void TestDiskRuleAndIncidentStore() {
   assert(!causes.empty());
   assert(causes.front().type ==
          monitor::diagnostics::RootCauseType::kDiskIoSaturation);
+  bool saw_bpf_block_latency = false;
+  for (const auto& item : evidence) {
+    saw_bpf_block_latency =
+        saw_bpf_block_latency ||
+        item.type == monitor::diagnostics::EvidenceType::kBpfBlockLatency;
+  }
+  assert(saw_bpf_block_latency);
 
   monitor::diagnostics::IncidentStore store;
   store.Observe("host-a", "DIAGNOSTIC", evidence, causes, timestamp);
@@ -92,10 +104,49 @@ void TestDiskRuleAndIncidentStore() {
   assert(!history.front().active);
 }
 
+void TestNetworkEvidenceRequiresAllSignals() {
+  monitor::proto::MonitorInfo info;
+  auto* net = info.add_net_info();
+  net->set_rcv_packets_rate(120000.0);
+  auto* softirq = info.add_soft_irq();
+  softirq->set_net_rx(120000);
+  auto* diagnostic = info.mutable_diagnostic();
+  auto* retrans = diagnostic->add_signals();
+  retrans->set_metric("tcp_retransmissions");
+  retrans->set_value(3.0);
+  retrans->set_unit("count");
+  retrans->set_target("pid:7/tgid:7");
+
+  monitor::diagnostics::EvidenceBuilder builder;
+  monitor::diagnostics::RootCauseEngine engine;
+  const auto timestamp = std::chrono::system_clock::now();
+  const auto evidence = builder.Build(info, timestamp);
+  const auto causes = engine.Evaluate(evidence);
+  assert(!causes.empty());
+  assert(causes.front().type ==
+         monitor::diagnostics::RootCauseType::kNetworkStackPressure);
+  bool saw_target = false;
+  for (const auto& item : evidence) {
+    if (item.type == monitor::diagnostics::EvidenceType::kTcpRetrans) {
+      saw_target = item.target == "pid:7/tgid:7";
+    }
+  }
+  assert(saw_target);
+
+  monitor::proto::MonitorInfo single_signal;
+  auto* single_diagnostic = single_signal.mutable_diagnostic();
+  auto* single_retrans = single_diagnostic->add_signals();
+  single_retrans->set_metric("tcp_retransmissions");
+  single_retrans->set_value(3.0);
+  const auto insufficient = builder.Build(single_signal, timestamp);
+  assert(engine.Evaluate(insufficient).empty());
+}
+
 }  // namespace
 
 int main() {
   TestCpuRuleRequiresMultipleSignals();
   TestDiskRuleAndIncidentStore();
+  TestNetworkEvidenceRequiresAllSignals();
   return 0;
 }

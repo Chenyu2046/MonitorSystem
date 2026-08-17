@@ -319,6 +319,15 @@ bool ReadSchedulerMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
     current_key = next_key;
     key = &current_key;
   }
+  std::sort(snapshot->scheduler.begin(), snapshot->scheduler.end(),
+            [](const auto& left, const auto& right) {
+              return left.switches + left.wakeups >
+                     right.switches + right.wakeups;
+            });
+  constexpr std::size_t kMaxSchedulerSamples = 20;
+  if (snapshot->scheduler.size() > kMaxSchedulerSamples) {
+    snapshot->scheduler.resize(kMaxSchedulerSamples);
+  }
   return true;
 }
 

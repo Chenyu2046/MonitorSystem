@@ -95,6 +95,8 @@ void FillDiagnosticProto(
     signal->set_metric("tcp_retransmissions");
     signal->set_value(static_cast<double>(sample.retransmissions));
     signal->set_unit("count");
+    signal->set_target("pid:" + std::to_string(sample.pid) +
+                       "/tgid:" + std::to_string(sample.tgid));
   }
   for (const auto& sample : snapshot.block_io) {
     if (sample.count == 0) {
@@ -106,6 +108,22 @@ void FillDiagnosticProto(
     signal->set_value(static_cast<double>(sample.total_latency_ns) /
                       static_cast<double>(sample.count) / 1000000.0);
     signal->set_unit("ms");
+    signal->set_target("host");
+  }
+  for (const auto& sample : snapshot.scheduler) {
+    auto* switches = diagnostic->add_signals();
+    switches->set_domain(monitor::proto::DOMAIN_SCHEDULER);
+    switches->set_metric("scheduler_switches");
+    switches->set_value(static_cast<double>(sample.switches));
+    switches->set_unit("count");
+    switches->set_target("pid:" + std::to_string(sample.pid));
+
+    auto* wakeups = diagnostic->add_signals();
+    wakeups->set_domain(monitor::proto::DOMAIN_SCHEDULER);
+    wakeups->set_metric("scheduler_wakeups");
+    wakeups->set_value(static_cast<double>(sample.wakeups));
+    wakeups->set_unit("count");
+    wakeups->set_target("pid:" + std::to_string(sample.pid));
   }
 
   std::vector<monitor::diagnostics::OnCpuProfileSample> on_cpu =

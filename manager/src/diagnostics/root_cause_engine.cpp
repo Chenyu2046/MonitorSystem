@@ -77,6 +77,8 @@ std::vector<RootCause> RootCauseEngine::Evaluate(
   const Evidence* disk_util = Find(evidence, EvidenceType::kDiskUtil, 0.5);
   const Evidence* disk_latency =
       Find(evidence, EvidenceType::kDiskLatency, 0.5);
+  const Evidence* bpf_block_latency =
+      Find(evidence, EvidenceType::kBpfBlockLatency, 0.5);
   const Evidence* disk_io_wait = Find(evidence, EvidenceType::kIoWait, 0.5);
   const Evidence* off_cpu = Find(evidence, EvidenceType::kOffCpuStack, 0.5);
   double disk_score = 0.0;
@@ -84,6 +86,7 @@ std::vector<RootCause> RootCauseEngine::Evaluate(
   AddMatch(disk_io_wait, 0.25, &disk_score, &disk_ids);
   AddMatch(disk_util, 0.25, &disk_score, &disk_ids);
   AddMatch(disk_latency, 0.25, &disk_score, &disk_ids);
+  AddMatch(bpf_block_latency, 0.25, &disk_score, &disk_ids);
   AddMatch(off_cpu, 0.25, &disk_score, &disk_ids);
   if (disk_ids.size() >= 3) {
     causes.push_back(

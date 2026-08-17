@@ -41,10 +41,16 @@ diagnostics::EvidenceType ParseEvidenceType(const std::string& name) {
   if (name == "io_wait") return diagnostics::EvidenceType::kIoWait;
   if (name == "disk_util") return diagnostics::EvidenceType::kDiskUtil;
   if (name == "disk_latency") return diagnostics::EvidenceType::kDiskLatency;
+  if (name == "bpf_block_latency")
+    return diagnostics::EvidenceType::kBpfBlockLatency;
   if (name == "net_pps") return diagnostics::EvidenceType::kNetPps;
   if (name == "tcp_retrans") return diagnostics::EvidenceType::kTcpRetrans;
   if (name == "softirq_net_rx")
     return diagnostics::EvidenceType::kSoftirqNetRx;
+  if (name == "scheduler_switches")
+    return diagnostics::EvidenceType::kSchedulerSwitches;
+  if (name == "scheduler_wakeups")
+    return diagnostics::EvidenceType::kSchedulerWakeups;
   if (name == "memory_available")
     return diagnostics::EvidenceType::kMemoryAvailable;
   if (name == "oncpu_stack") return diagnostics::EvidenceType::kOnCpuStack;
@@ -1123,16 +1129,22 @@ std::vector<diagnostics::IncidentRecord> QueryManager::QueryIncidents(
       diagnostics::Evidence evidence;
       evidence.type = diagnostics::EvidenceType::kCpuUsage;
       const std::string type_name = evidence_row[0] ? evidence_row[0] : "";
-      const std::array<std::pair<const char*, diagnostics::EvidenceType>, 11>
+      const std::array<std::pair<const char*, diagnostics::EvidenceType>, 14>
           evidence_names{
               {{"cpu_usage", diagnostics::EvidenceType::kCpuUsage},
                {"run_queue", diagnostics::EvidenceType::kRunQueue},
                {"io_wait", diagnostics::EvidenceType::kIoWait},
                {"disk_util", diagnostics::EvidenceType::kDiskUtil},
                {"disk_latency", diagnostics::EvidenceType::kDiskLatency},
+               {"bpf_block_latency",
+                diagnostics::EvidenceType::kBpfBlockLatency},
                {"net_pps", diagnostics::EvidenceType::kNetPps},
                {"tcp_retrans", diagnostics::EvidenceType::kTcpRetrans},
                {"softirq_net_rx", diagnostics::EvidenceType::kSoftirqNetRx},
+               {"scheduler_switches",
+                diagnostics::EvidenceType::kSchedulerSwitches},
+               {"scheduler_wakeups",
+                diagnostics::EvidenceType::kSchedulerWakeups},
                {"memory_available",
                 diagnostics::EvidenceType::kMemoryAvailable},
                {"oncpu_stack", diagnostics::EvidenceType::kOnCpuStack},

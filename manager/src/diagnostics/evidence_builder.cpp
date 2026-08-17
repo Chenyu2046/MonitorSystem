@@ -17,14 +17,15 @@ double Severity(double value, double warning, double critical) {
 void Add(std::vector<Evidence>* evidence, EvidenceType type,
          const std::string& source, double value, const std::string& unit,
          double severity, std::chrono::system_clock::time_point timestamp,
-         const std::string& detail) {
+         const std::string& detail, const std::string& target = "host") {
   const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
                           timestamp.time_since_epoch())
                           .count();
+  const std::string resolved_target = target.empty() ? "host" : target;
   evidence->push_back(Evidence{
       std::string(EvidenceTypeName(type)) + ":" + std::to_string(millis) + ":" +
           std::to_string(evidence->size()),
-      type, source, "host", value, unit, severity, timestamp, detail});
+      type, source, resolved_target, value, unit, severity, timestamp, detail});
 }
 
 std::string StackSummary(const monitor::proto::ProfileEntry& profile,
@@ -75,12 +76,18 @@ const char* EvidenceTypeName(EvidenceType type) {
       return "disk_util";
     case EvidenceType::kDiskLatency:
       return "disk_latency";
+    case EvidenceType::kBpfBlockLatency:
+      return "bpf_block_latency";
     case EvidenceType::kNetPps:
       return "net_pps";
     case EvidenceType::kTcpRetrans:
       return "tcp_retrans";
     case EvidenceType::kSoftirqNetRx:
       return "softirq_net_rx";
+    case EvidenceType::kSchedulerSwitches:
+      return "scheduler_switches";
+    case EvidenceType::kSchedulerWakeups:
+      return "scheduler_wakeups";
     case EvidenceType::kMemoryAvailable:
       return "memory_available";
     case EvidenceType::kOnCpuStack:
@@ -166,7 +173,23 @@ std::vector<Evidence> EvidenceBuilder::Build(
       if (signal.metric() == "tcp_retransmissions") {
         Add(&evidence, EvidenceType::kTcpRetrans, "DiagnosticSnapshot",
             signal.value(), signal.unit(), signal.anomaly_score(), timestamp,
-            "TCP retransmission aggregate");
+            "TCP retransmission aggregate", signal.target());
+      } else if (signal.metric() == "block_io_avg_latency_ms") {
+        Add(&evidence, EvidenceType::kBpfBlockLatency,
+            "DiagnosticSnapshot.block_io", signal.value(), signal.unit(),
+            std::max(signal.anomaly_score(),
+                     Severity(signal.value(), 10.0, 40.0)),
+            timestamp, "eBPF block I/O latency", signal.target());
+      } else if (signal.metric() == "scheduler_switches") {
+        Add(&evidence, EvidenceType::kSchedulerSwitches,
+            "DiagnosticSnapshot.scheduler", signal.value(), signal.unit(),
+            signal.anomaly_score(), timestamp, "scheduler context switches",
+            signal.target());
+      } else if (signal.metric() == "scheduler_wakeups") {
+        Add(&evidence, EvidenceType::kSchedulerWakeups,
+            "DiagnosticSnapshot.scheduler", signal.value(), signal.unit(),
+            signal.anomaly_score(), timestamp, "scheduler wakeups",
+            signal.target());
       }
     }
     if (info.diagnostic().oncpu_profiles_size() > 0) {
