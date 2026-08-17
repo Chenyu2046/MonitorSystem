@@ -89,7 +89,7 @@ monitor_system/
 - **编译器**: GCC 9+ 或 Clang 10+ (支持 C++17)
 - **CMake**: 3.10+
 - **内核版本**: 5.4+ (eBPF 功能需要)
-- **MySQL**: 8.0+ (必须)
+- **MySQL**: 8.0+（启用 MySQL persistence 时需要；关闭时使用 Manager 内存回退）
 
 ## 📦 安装
 
@@ -118,11 +118,12 @@ sudo yum install -y \
 
 ### eBPF/libbpf 配置
 
-libbpf 相关依赖的安装和配置请参考 **AI智能网络检测知识库** 中的 libbpf 配置文档。
+libbpf 相关依赖用于 Linux eBPF 诊断和 Profiling；如果只构建基础监控或执行
+`ENABLE_EBPF=OFF` 构建，可以不安装这些依赖。
 
 ## 💾 数据库配置
 
-### 1. 安装并启动 MySQL
+### 1. 可选：安装并启动 MySQL
 
 ```bash
 sudo systemctl start mysql
@@ -152,19 +153,20 @@ EXIT;
 mysql -u monitor -pmonitor123 monitor_db < manager/sql/init_server_performance.sql
 ```
 
-### 4. 修改代码中的数据库配置
+### 4. 配置 Manager 数据库连接
 
-在以下两个文件中修改数据库连接信息：
+Manager 从环境变量读取 MySQL 连接信息，不需要修改源码。启用 MySQL persistence
+时设置：
 
-**文件**: `manager/src/main.cpp` 和 `manager/src/host_manager.cpp`
-
-```cpp
-// 修改为你的 MySQL 配置
-const char* host = "localhost";
-const char* user = "monitor";        // 你的用户名
-const char* password = "monitor123"; // 你的密码
-const char* database = "monitor_db";
+```bash
+export MONITOR_MYSQL_HOST=127.0.0.1
+export MONITOR_MYSQL_USER=monitor
+export MONITOR_MYSQL_PASSWORD='your-password'
+export MONITOR_MYSQL_DATABASE=monitor_db
 ```
+
+未启用 MySQL 时，诊断 Incident 保留在 Manager 内存中，并通过 QueryService 提供
+回退查询。
 
 ### 数据库表说明
 
@@ -180,8 +182,8 @@ const char* database = "monitor_db";
 
 ```bash
 # 克隆项目
-git clone https://github.com/cpp-agan-team/monitor_system.git
-cd monitor_system
+git clone https://github.com/Chenyu2046/MonitorSystem.git
+cd MonitorSystem
 
 # 创建构建目录
 mkdir build && cd build
@@ -320,7 +322,7 @@ web-server_10.0.0.5
 - **语言**: C++
 - **RPC 框架**: gRPC + Protocol Buffers
 - **数据采集**: Linux 内核模块 + eBPF + procfs
-- **数据库**: MySQL
+- **数据库**: 可选 MySQL persistence；无 MySQL 时使用内存回退
 - **构建系统**: CMake
 
 
@@ -329,8 +331,4 @@ web-server_10.0.0.5
 ## 📄 许可证
 
 本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
-
-学cpp基础，可以把最近开发的这个编程练习平台利用起来 
-
-cppagancoding.top
 
