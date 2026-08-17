@@ -10,6 +10,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "diagnostics/diagnostic_persistence.h"
@@ -23,6 +24,37 @@ struct HostScore {
   monitor::proto::MonitorInfo info;
   double score;
   std::chrono::system_clock::time_point timestamp;
+};
+
+class DiagnosticPersistenceState {
+ public:
+  void SetInitialized(bool initialized) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    initialized_ = initialized;
+    Refresh();
+  }
+
+  void RecordSave(std::uint64_t incident_id, bool succeeded) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (succeeded) {
+      pending_incidents_.erase(incident_id);
+    } else {
+      pending_incidents_.insert(incident_id);
+    }
+    Refresh();
+  }
+
+  bool IsDegraded() const { return degraded_.load(); }
+
+ private:
+  void Refresh() {
+    degraded_.store(!initialized_ || !pending_incidents_.empty());
+  }
+
+  mutable std::mutex mutex_;
+  std::unordered_set<std::uint64_t> pending_incidents_;
+  bool initialized_ = false;
+  std::atomic<bool> degraded_{true};
 };
 
 // 管理多个远程主机的监控数据（推送模式）
@@ -57,7 +89,7 @@ class HostManager {
   std::vector<diagnostics::IncidentRecord> GetActiveIncidents(
       const std::string& server_name = {}) const;
   bool IsDiagnosticPersistenceDegraded() const {
-    return diagnostic_persistence_degraded_.load();
+    return diagnostic_persistence_state_.IsDegraded();
   }
 
  private:
@@ -87,7 +119,7 @@ class HostManager {
   diagnostics::RootCauseEngine root_cause_engine_;
   diagnostics::IncidentStore incident_store_;
   diagnostics::DiagnosticPersistence diagnostic_persistence_;
-  std::atomic<bool> diagnostic_persistence_degraded_{true};
+  DiagnosticPersistenceState diagnostic_persistence_state_;
 };
 
 }  // namespace monitor

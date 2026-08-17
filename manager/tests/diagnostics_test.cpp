@@ -5,6 +5,7 @@
 #include "diagnostics/evidence_builder.h"
 #include "diagnostics/incident_store.h"
 #include "diagnostics/root_cause_engine.h"
+#include "host_manager.h"
 
 namespace {
 
@@ -247,6 +248,16 @@ void TestProbeCapabilityDegradedEvidence() {
   assert(engine.Evaluate(evidence).empty());
 }
 
+void TestPersistenceFailureRemainsDegradedAfterOtherSuccess() {
+  monitor::DiagnosticPersistenceState state;
+  state.SetInitialized(true);
+  state.RecordSave(100, false);
+  state.RecordSave(200, true);
+  assert(state.IsDegraded());
+  state.RecordSave(100, true);
+  assert(!state.IsDegraded());
+}
+
 }  // namespace
 
 int main() {
@@ -257,5 +268,6 @@ int main() {
   TestLockContentionRequiresLockWaitStack();
   TestDiskWaitDoesNotBecomeLockContention();
   TestProbeCapabilityDegradedEvidence();
+  TestPersistenceFailureRemainsDegradedAfterOtherSuccess();
   return 0;
 }

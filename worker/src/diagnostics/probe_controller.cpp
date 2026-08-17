@@ -22,6 +22,34 @@
 namespace monitor::diagnostics {
 namespace {
 
+constexpr std::uint32_t kMaxAttachRetries = 3;
+constexpr auto kAttachRetryBaseDelay = std::chrono::seconds(5);
+
+bool AttachRetryDue(const ProbeController::ProbeStatus& status,
+                   ProfileSession::Clock::time_point now) {
+  return status.retry_count < kMaxAttachRetries &&
+         now >= status.next_retry_at;
+}
+
+void ScheduleAttachRetry(ProbeController::ProbeStatus* status,
+                         ProfileSession::Clock::time_point now) {
+  if (!status) return;
+  ++status->retry_count;
+  if (status->retry_count >= kMaxAttachRetries) {
+    status->next_retry_at = ProfileSession::Clock::time_point::max();
+    return;
+  }
+  const auto multiplier = 1u << (status->retry_count - 1);
+  status->next_retry_at =
+      now + kAttachRetryBaseDelay * static_cast<int>(multiplier);
+}
+
+void ClearAttachRetry(ProbeController::ProbeStatus* status) {
+  if (!status) return;
+  status->retry_count = 0;
+  status->next_retry_at = ProfileSession::Clock::time_point::min();
+}
+
 #ifdef ENABLE_EBPF
 
 struct TcpKey {
@@ -460,7 +488,8 @@ bool ProbeController::Apply(ObservabilityState state, ProfileType profile_type,
       profile_session_ && profile_session_->active() && profiling_requested;
   const auto desired = DesiredFor(state, profile_type, profile_active);
   const bool changed = !initialized_ || desired != desired_probes_;
-  if (!changed) {
+
+  const auto all_available_now = [this] {
     for (const ProbeKind kind : desired_probes_) {
       const ProbeStatus& status = statuses_[Index(kind)];
       if (!status.requested || !status.available || !status.attached) {
@@ -468,6 +497,22 @@ bool ProbeController::Apply(ObservabilityState state, ProfileType profile_type,
       }
     }
     return true;
+  };
+
+  if (!changed) {
+#ifdef ENABLE_EBPF
+    bool retry_due = false;
+    for (const ProbeKind kind : desired_probes_) {
+      const ProbeStatus& status = statuses_[Index(kind)];
+      if (!status.attached && AttachRetryDue(status, now)) {
+        retry_due = true;
+        break;
+      }
+    }
+    if (!retry_due) return all_available_now();
+#else
+    return all_available_now();
+#endif
   }
 
   bool all_available = true;
@@ -485,16 +530,30 @@ bool ProbeController::Apply(ObservabilityState state, ProfileType profile_type,
       status.available = false;
       status.attached = false;
       status.last_error = 0;
+      ClearAttachRetry(&status);
       continue;
     }
 
 #ifdef ENABLE_EBPF
+    if (!changed && status.attached) {
+      all_available = all_available && status.available;
+      continue;
+    }
+    if (!changed && !AttachRetryDue(status, now)) {
+      all_available = false;
+      continue;
+    }
     DestroyLoadedProbe(&runtime_->probes[Index(kind)]);
     status.last_error = 0;
     status.attached =
         LoadProbe(object_dir_, kind, profile_sample_hz_,
                   &runtime_->probes[Index(kind)], &status.last_error);
     status.available = status.attached;
+    if (status.attached) {
+      ClearAttachRetry(&status);
+    } else {
+      ScheduleAttachRetry(&status, now);
+    }
 #else
     status.available = false;
     status.attached = false;
@@ -611,6 +670,7 @@ void ProbeController::DetachProfile() {
     status.available = false;
     status.attached = false;
     status.last_error = 0;
+    ClearAttachRetry(&status);
   }
 }
 

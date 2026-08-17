@@ -42,6 +42,9 @@ class ProbeController {
     bool available = false;
     bool attached = false;
     int last_error = 0;
+    std::chrono::steady_clock::time_point next_retry_at =
+        std::chrono::steady_clock::time_point::min();
+    std::uint32_t retry_count = 0;
   };
 
   const ProbeStatus& Status(ProbeKind kind) const;
