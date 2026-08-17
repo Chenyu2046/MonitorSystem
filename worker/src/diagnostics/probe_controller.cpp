@@ -269,7 +269,8 @@ bool LoadProbe(const std::string& object_dir, ProbeKind kind, int sample_hz,
 }
 
 bool ReadTcpMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
-  const int map_fd = bpf_object__find_map_fd(loaded.object, "tcp_diag_map");
+  const int map_fd =
+      bpf_object__find_map_fd_by_name(loaded.object, "tcp_diag_map");
   const int possible_cpus = libbpf_num_possible_cpus();
   if (map_fd < 0 || possible_cpus <= 0) {
     return false;
@@ -296,7 +297,7 @@ bool ReadTcpMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
 
 bool ReadBlockMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
   const int map_fd =
-      bpf_object__find_map_fd(loaded.object, "block_io_stats_map");
+      bpf_object__find_map_fd_by_name(loaded.object, "block_io_stats_map");
   const int possible_cpus = libbpf_num_possible_cpus();
   if (map_fd < 0 || possible_cpus <= 0) {
     return false;
@@ -323,7 +324,8 @@ bool ReadBlockMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
 }
 
 bool ReadSchedulerMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
-  const int map_fd = bpf_object__find_map_fd(loaded.object, "sched_stats_map");
+  const int map_fd =
+      bpf_object__find_map_fd_by_name(loaded.object, "sched_stats_map");
   const int possible_cpus = libbpf_num_possible_cpus();
   if (map_fd < 0 || possible_cpus <= 0) {
     return false;
@@ -361,9 +363,9 @@ bool ReadSchedulerMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
 
 bool ReadOnCpuMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
   const int map_fd =
-      bpf_object__find_map_fd(loaded.object, "oncpu_stack_counts");
+      bpf_object__find_map_fd_by_name(loaded.object, "oncpu_stack_counts");
   const int stack_map_fd =
-      bpf_object__find_map_fd(loaded.object, "oncpu_stack_traces");
+      bpf_object__find_map_fd_by_name(loaded.object, "oncpu_stack_traces");
   const int possible_cpus = libbpf_num_possible_cpus();
   if (map_fd < 0 || possible_cpus <= 0) {
     return false;
@@ -396,9 +398,10 @@ bool ReadOnCpuMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
 }
 
 bool ReadOffCpuMap(const LoadedProbe& loaded, DiagnosticSnapshot* snapshot) {
-  const int map_fd = bpf_object__find_map_fd(loaded.object, "offcpu_aggregate");
+  const int map_fd =
+      bpf_object__find_map_fd_by_name(loaded.object, "offcpu_aggregate");
   const int stack_map_fd =
-      bpf_object__find_map_fd(loaded.object, "offcpu_stack_traces");
+      bpf_object__find_map_fd_by_name(loaded.object, "offcpu_stack_traces");
   const int possible_cpus = libbpf_num_possible_cpus();
   if (map_fd < 0 || possible_cpus <= 0) {
     return false;

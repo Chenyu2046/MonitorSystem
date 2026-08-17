@@ -4,13 +4,76 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include "monitor_info.grpc.pb.h"
 #include "monitor_info.pb.h"
 
 namespace monitor {
 void CpuStatMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
     int fd = open("/dev/cpu_stat_monitor", O_RDONLY);
-    if (fd < 0) return;
+    if (fd < 0) {
+        std::ifstream input("/proc/stat");
+        std::string line;
+        while (std::getline(input, line)) {
+            std::istringstream values(line);
+            std::string cpu_name;
+            if (!(values >> cpu_name) || cpu_name == "cpu" ||
+                cpu_name.rfind("cpu", 0) != 0) {
+                continue;
+            }
+
+            CpuStat current;
+            current.cpu_name = cpu_name;
+            if (!(values >> current.user >> current.nice >> current.system >>
+                  current.idle >> current.io_wait >> current.irq >>
+                  current.soft_irq >> current.steal >> current.guest >>
+                  current.guest_nice)) {
+                continue;
+            }
+
+            const auto it = cpu_stat_map_.find(cpu_name);
+            if (it != cpu_stat_map_.end()) {
+                const CpuStat& old = it->second;
+                const auto total =
+                    (current.user - old.user) + (current.nice - old.nice) +
+                    (current.system - old.system) +
+                    (current.idle - old.idle) +
+                    (current.io_wait - old.io_wait) +
+                    (current.irq - old.irq) +
+                    (current.soft_irq - old.soft_irq) +
+                    (current.steal - old.steal);
+                if (total != 0) {
+                    auto* message = monitor_info->add_cpu_stat();
+                    const auto busy =
+                        (current.user - old.user) +
+                        (current.system - old.system) +
+                        (current.nice - old.nice) +
+                        (current.irq - old.irq) +
+                        (current.soft_irq - old.soft_irq) +
+                        (current.steal - old.steal);
+                    message->set_cpu_name(cpu_name);
+                    message->set_cpu_percent(100.0F * busy / total);
+                    message->set_usr_percent(
+                        100.0F * (current.user - old.user) / total);
+                    message->set_system_percent(
+                        100.0F * (current.system - old.system) / total);
+                    message->set_nice_percent(
+                        100.0F * (current.nice - old.nice) / total);
+                    message->set_idle_percent(
+                        100.0F * (current.idle - old.idle) / total);
+                    message->set_io_wait_percent(
+                        100.0F * (current.io_wait - old.io_wait) / total);
+                    message->set_irq_percent(
+                        100.0F * (current.irq - old.irq) / total);
+                    message->set_soft_irq_percent(
+                        100.0F * (current.soft_irq - old.soft_irq) / total);
+                }
+            }
+            cpu_stat_map_[cpu_name] = current;
+        }
+        return;
+    }
 
     size_t stat_count = 128; // 假设最多128个CPU
     size_t stat_size = sizeof(struct cpu_stat) * stat_count;
