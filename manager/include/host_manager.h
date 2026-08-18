@@ -138,6 +138,7 @@ class HostManager {
   std::atomic<std::uint64_t> queue_full_count_{0};
   std::atomic<std::uint64_t> processed_count_{0};
   std::atomic<std::uint64_t> persistence_task_count_{0};
+  std::atomic<std::uint64_t> persistence_rejected_count_{0};
   std::atomic<std::uint64_t> queue_delay_samples_{0};
   std::atomic<std::uint64_t> queue_delay_total_us_{0};
   std::atomic<std::uint64_t> max_queue_delay_us_{0};

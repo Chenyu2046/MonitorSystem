@@ -344,6 +344,18 @@ void TestPersistenceProducerUnblocksDuringDrain() {
   assert(processed == 3);
 }
 
+void TestPersistenceWorkerRejectsOversizeTask() {
+  bool handler_called = false;
+  monitor::PersistenceWorker worker(
+      2, 1, [&handler_called](monitor::PersistenceTask&&) {
+        handler_called = true;
+      });
+  worker.Start();
+  assert(!worker.Enqueue(monitor::PersistenceTask{}));
+  worker.Stop();
+  assert(!handler_called);
+}
+
 }  // namespace
 
 int main() {
@@ -355,5 +367,6 @@ int main() {
   TestQueueByteBudgetAndOversize();
   TestPersistenceWorkerDrainsAcceptedTasks();
   TestPersistenceProducerUnblocksDuringDrain();
+  TestPersistenceWorkerRejectsOversizeTask();
   return 0;
 }

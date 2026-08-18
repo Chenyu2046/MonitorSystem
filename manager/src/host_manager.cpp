@@ -211,6 +211,8 @@ void HostManager::Stop() {
             << " processed=" << processed_count_.load(std::memory_order_relaxed)
             << " persistence_tasks="
             << persistence_task_count_.load(std::memory_order_relaxed)
+            << " persistence_rejected="
+            << persistence_rejected_count_.load(std::memory_order_relaxed)
             << " queue_delay_samples="
             << queue_delay_samples_.load(std::memory_order_relaxed)
             << " queue_delay_total_us="
@@ -466,10 +468,14 @@ void HostManager::ProcessOne(
               << std::endl;
   }
 
+  // processed means ProcessOne completed and the PersistenceTask was accepted
+  // by the PersistenceWorker; it does not mean that MySQL has completed.
   if (persistence_worker_ && persistence_worker_->Enqueue(std::move(task))) {
     processed_count_.fetch_add(1, std::memory_order_relaxed);
   } else {
-    std::cerr << "ERROR: persistence worker stopped before task was accepted"
+    persistence_rejected_count_.fetch_add(1, std::memory_order_relaxed);
+    std::cerr << "ERROR: persistence task rejected (worker stopped, queue "
+                 "closed, or task exceeded the byte budget)"
               << std::endl;
   }
 }
