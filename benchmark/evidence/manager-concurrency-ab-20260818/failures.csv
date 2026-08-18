@@ -1,0 +1,4 @@
+﻿"workload","architecture","hosts","path","total_samples","successful_rpc","persisted_rows","queue_full","persistence_rejected","failure"
+"burst","Sharded","150","F:\chenyu_project\monitor_system\benchmark\evidence\manager-concurrency-ab-20260818\burst\sharded\150host\rep1\summary.txt","9000","8098","8098","902","0","loadgen exit code 2"
+"burst","Sharded","200","F:\chenyu_project\monitor_system\benchmark\evidence\manager-concurrency-ab-20260818\burst\sharded\200host\rep1\summary.txt","12000","8466","8466","3534","0","loadgen exit code 2"
+"stagger","Sharded","10","F:\chenyu_project\monitor_system\benchmark\evidence\manager-concurrency-ab-20260818\stagger\sharded\10host\rep1\summary.txt","600","600","580","0","0","drain timeout: expected 600, got 580"

@@ -1,5 +1,7 @@
 #include "diagnostics/diagnostic_persistence.h"
 
+#include "mysql_timeout_config.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
@@ -25,6 +27,12 @@ bool DiagnosticPersistence::Init(const std::string& host,
   connection_ = mysql_init(nullptr);
   if (!connection_) {
     std::cerr << "DiagnosticPersistence: mysql_init failed" << std::endl;
+    return false;
+  }
+  if (!ApplyMysqlTimeouts(connection_, GetMysqlTimeoutConfig(),
+                          "DiagnosticPersistence MySQL")) {
+    mysql_close(connection_);
+    connection_ = nullptr;
     return false;
   }
   if (!mysql_real_connect(connection_, host.c_str(), user.c_str(),

@@ -1,0 +1,195 @@
+ Network manager-ab-ab-legacy-stagger-50-r3-20260818_default Creating
+ Network manager-ab-ab-legacy-stagger-50-r3-20260818_default Created
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-mysql-1 Creating
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-mysql-1 Created
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-mysql-1 Starting
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-mysql-1 Started
+ Image monitor-system-benchmark:local Building
+#1 [internal] load local bake definitions
+#1 reading from stdin 610B 0.0s done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile.benchmark
+#2 transferring dockerfile: 761B done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/python:3.13-slim
+#3 DONE 0.0s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 2B done
+#4 DONE 0.0s
+
+#5 [1/5] FROM docker.io/library/python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
+#5 resolve docker.io/library/python:3.13-slim@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91 0.0s done
+#5 DONE 0.0s
+
+#6 [internal] load build context
+#6 transferring context: 58.02kB 0.0s done
+#6 DONE 0.0s
+
+#7 [2/5] RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g; s|http://security.debian.org|https://security.debian.org|g' /etc/apt/sources.list.d/debian.sources     && apt-get -o Acquire::Retries=3 update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends     build-essential cmake pkg-config     libprotobuf-dev protobuf-compiler protobuf-compiler-grpc     libgrpc++-dev default-libmysqlclient-dev     && rm -rf /var/lib/apt/lists/*
+#7 CACHED
+
+#8 [3/5] WORKDIR /app
+#8 CACHED
+
+#9 [4/5] COPY . .
+#9 DONE 0.1s
+
+#10 [5/5] RUN cmake -S . -B build -DENABLE_EBPF=OFF -DBUILD_MANAGER=ON -DBUILD_BENCHMARK=ON     && cmake --build build --target manager push_benchmark -j"$(nproc)"
+#10 0.308 -- The CXX compiler identification is GNU 14.2.0
+#10 0.319 -- Detecting CXX compiler ABI info
+#10 0.463 -- Detecting CXX compiler ABI info - done
+#10 0.484 -- Check for working CXX compiler: /usr/bin/c++ - skipped
+#10 0.484 -- Detecting CXX compile features
+#10 0.484 -- Detecting CXX compile features - done
+#10 0.690 -- Found Protobuf: /usr/lib/x86_64-linux-gnu/libprotobuf.so (found version "3.21.12")
+#10 0.698 -- Found ZLIB: /usr/lib/x86_64-linux-gnu/libz.so (found version "1.3.1")
+#10 0.768 -- Found OpenSSL: /usr/lib/x86_64-linux-gnu/libcrypto.so (found version "3.5.6")
+#10 0.771 -- Found c-ares: /usr/lib/x86_64-linux-gnu/cmake/c-ares/c-ares-config.cmake (found version "1.34.5")
+#10 0.774 -- Found Threads: TRUE
+#10 0.795 -- Found PkgConfig: /usr/bin/pkg-config (found version "1.8.1")
+#10 27.48 -- Found RE2 via pkg-config.
+#10 27.54 -- Found RE2 via pkg-config.
+#10 27.60 -- Found RE2 via pkg-config.
+#10 27.61 -- Checking for module 'mysqlclient'
+#10 27.63 --   Found mysqlclient, version 3.4.9
+#10 27.67 -- MySQL support enabled
+#10 27.67 -- Configuring done (27.4s)
+#10 27.82 -- Generating done (0.2s)
+#10 27.82 -- Build files have been written to: /app/build
+#10 27.91 [  2%] Running cpp protocol buffer compiler on query_api.proto
+#10 27.91 [  8%] Running grpc protocol buffer compiler on cpu_load.proto
+#10 27.91 [  8%] Running cpp protocol buffer compiler on cpu_load.proto
+#10 27.91 [  8%] Running cpp protocol buffer compiler on cpu_softirq.proto
+#10 27.91 [ 12%] Running grpc protocol buffer compiler on cpu_stat.proto
+#10 27.91 [ 12%] Running grpc protocol buffer compiler on cpu_softirq.proto
+#10 27.91 [ 14%] Running cpp protocol buffer compiler on cpu_stat.proto
+#10 27.91 [ 17%] Running cpp protocol buffer compiler on disk_info.proto
+#10 27.91 [ 21%] Running grpc protocol buffer compiler on diagnostic.proto
+#10 27.91 [ 23%] Running cpp protocol buffer compiler on diagnostic.proto
+#10 27.91 [ 23%] Running grpc protocol buffer compiler on disk_info.proto
+#10 27.91 [ 25%] Running cpp protocol buffer compiler on mem_info.proto
+#10 27.92 [ 29%] Running grpc protocol buffer compiler on monitor_info.proto
+#10 27.92 [ 29%] Running grpc protocol buffer compiler on mem_info.proto
+#10 27.92 [ 31%] Running cpp protocol buffer compiler on monitor_info.proto
+#10 27.92 [ 34%] Running grpc protocol buffer compiler on net_info.proto
+#10 27.94 [ 36%] Running cpp protocol buffer compiler on net_info.proto
+#10 27.94 [ 38%] Running grpc protocol buffer compiler on query_api.proto
+#10 28.01 [ 44%] Building CXX object proto/CMakeFiles/monitor_proto.dir/cpu_softirq.pb.cc.o
+#10 28.01 [ 44%] Building CXX object proto/CMakeFiles/monitor_proto.dir/cpu_stat.pb.cc.o
+#10 28.01 [ 44%] Building CXX object proto/CMakeFiles/monitor_proto.dir/cpu_load.pb.cc.o
+#10 28.01 [ 46%] Building CXX object proto/CMakeFiles/monitor_proto.dir/monitor_info.pb.cc.o
+#10 28.01 [ 48%] Building CXX object proto/CMakeFiles/monitor_proto.dir/mem_info.pb.cc.o
+#10 28.01 [ 51%] Building CXX object proto/CMakeFiles/monitor_proto.dir/net_info.pb.cc.o
+#10 28.01 [ 53%] Building CXX object proto/CMakeFiles/monitor_proto.dir/disk_info.pb.cc.o
+#10 28.01 [ 55%] Building CXX object proto/CMakeFiles/monitor_proto.dir/query_api.pb.cc.o
+#10 28.01 [ 57%] Building CXX object proto/CMakeFiles/monitor_proto.dir/monitor_info.grpc.pb.cc.o
+#10 28.01 [ 61%] Building CXX object proto/CMakeFiles/monitor_proto.dir/diagnostic.pb.cc.o
+#10 28.02 [ 61%] Building CXX object proto/CMakeFiles/monitor_proto.dir/cpu_stat.grpc.pb.cc.o
+#10 28.02 [ 63%] Building CXX object proto/CMakeFiles/monitor_proto.dir/cpu_load.grpc.pb.cc.o
+#10 28.02 [ 65%] Building CXX object proto/CMakeFiles/monitor_proto.dir/cpu_softirq.grpc.pb.cc.o
+#10 28.02 [ 68%] Building CXX object proto/CMakeFiles/monitor_proto.dir/mem_info.grpc.pb.cc.o
+#10 28.03 [ 70%] Building CXX object proto/CMakeFiles/monitor_proto.dir/net_info.grpc.pb.cc.o
+#10 28.03 [ 72%] Building CXX object proto/CMakeFiles/monitor_proto.dir/disk_info.grpc.pb.cc.o
+#10 30.61 [ 74%] Building CXX object proto/CMakeFiles/monitor_proto.dir/query_api.grpc.pb.cc.o
+#10 30.63 [ 76%] Building CXX object proto/CMakeFiles/monitor_proto.dir/diagnostic.grpc.pb.cc.o
+#10 34.77 [ 78%] Linking CXX static library libmonitor_proto.a
+#10 34.91 [ 78%] Built target monitor_proto
+#10 34.94 [ 87%] Building CXX object manager/CMakeFiles/manager.dir/src/diagnostics/evidence_builder.cpp.o
+#10 34.94 [ 87%] Building CXX object manager/CMakeFiles/manager.dir/src/main.cpp.o
+#10 34.94 [ 87%] Building CXX object manager/CMakeFiles/manager.dir/src/diagnostics/root_cause_engine.cpp.o
+#10 34.94 [ 87%] Building CXX object manager/CMakeFiles/manager.dir/src/host_manager.cpp.o
+#10 34.94 [ 89%] Building CXX object manager/CMakeFiles/manager.dir/src/diagnostics/diagnostic_persistence.cpp.o
+#10 34.94 [ 91%] Building CXX object manager/CMakeFiles/manager.dir/src/rpc/grpc_server.cpp.o
+#10 34.94 [ 93%] Building CXX object manager/CMakeFiles/manager.dir/src/rpc/query_service.cpp.o
+#10 34.94 [ 95%] Building CXX object manager/CMakeFiles/manager.dir/src/diagnostics/incident_store.cpp.o
+#10 34.94 [ 97%] Building CXX object manager/CMakeFiles/manager.dir/src/query_manager.cpp.o
+#10 38.88 [100%] Linking CXX executable manager
+#10 39.55 [100%] Built target manager
+#10 39.66 [ 94%] Built target monitor_proto
+#10 39.69 [ 97%] Building CXX object benchmark/CMakeFiles/push_benchmark.dir/src/push_benchmark.cpp.o
+#10 42.00 [100%] Linking CXX executable push_benchmark
+#10 42.38 [100%] Built target push_benchmark
+#10 DONE 42.4s
+
+#11 exporting to image
+#11 exporting layers
+#11 exporting layers 0.6s done
+#11 exporting manifest sha256:a29c72dd90202294ed73b5151ed9649f45874846ef214657b956f4ae8c57dc0b 0.0s done
+#11 exporting config sha256:295ba6c1cefd8873367af260bbf81a369a1594f1dc832609a6d91af6efb74337 0.0s done
+#11 exporting attestation manifest sha256:1586af1858f270d9e6dc0d3f799e438565b7298e089d287f1cc489031022b632 0.0s done
+#11 exporting manifest list sha256:cb06dae83440ad0140354f5a98b933dd86774abadb575ce975a4d6bfc6f68b09 0.0s done
+#11 naming to docker.io/library/monitor-system-benchmark:local done
+#11 unpacking to docker.io/library/monitor-system-benchmark:local
+#11 unpacking to docker.io/library/monitor-system-benchmark:local 0.3s done
+#11 DONE 1.0s
+
+#12 resolving provenance for metadata file
+#12 DONE 0.0s
+ Image monitor-system-benchmark:local Built
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-mysql-1 Running
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-manager-1 Creating
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-manager-1 Created
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-mysql-1 Waiting
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-mysql-1 Healthy
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-manager-1 Starting
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-manager-1 Started
+mysql: [Warning] Using a password on the command line interface can be insecure.
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-manager-1 Stopping
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-manager-1 Stopped
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-manager-1 Stopping
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-manager-1 Stopped
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-manager-1 Removing
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-manager-1 Removed
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-mysql-1 Stopping
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-mysql-1 Stopped
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-mysql-1 Removing
+ Container manager-ab-ab-legacy-stagger-50-r3-20260818-mysql-1 Removed
+ Network manager-ab-ab-legacy-stagger-50-r3-20260818_default Removing
+ Network manager-ab-ab-legacy-stagger-50-r3-20260818_default Removed
+status=PASS
+architecture=Legacy
+repository=F:\chenyu_project\monitor_system-legacy-5c29
+run_id=ab-legacy-stagger-50-r3-20260818
+workers=50
+duration_seconds=60
+interval_ms=1000
+arrival_model=stagger_start
+total_samples=3000
+successful_rpc=3000
+failed_rpc=0
+persisted_rows=3000
+load_duration_sec=61.515
+drain_duration_sec=0.549
+total_completion_sec=62.419
+accepted_reports_per_sec=48.062
+processed_reports_per_sec=N/A
+persisted_reports_per_sec=48.062
+rpc_p50_us=12720
+rpc_p95_us=19571
+rpc_p99_us=88288
+accepted=N/A
+queue_full=N/A
+processed=N/A
+persistence_tasks=N/A
+persistence_rejected=N/A
+queue_delay_samples=N/A
+queue_delay_total_us=N/A
+queue_delay_mean_us=N/A
+max_queue_delay_us=N/A
+max_shard_queue_depth=N/A
+max_shard_queue_bytes=N/A
+max_persistence_queue_depth=N/A
+max_persistence_queue_bytes=N/A
+manager_cpu_avg_percent=4.74
+manager_cpu_peak_percent=6.47
+manager_rss_avg_mib=9.09
+manager_rss_peak_mib=9.74
+mysql_cpu_avg_percent=18.7
+mysql_cpu_peak_percent=27.72
+mysql_rss_avg_mib=404.81
+mysql_rss_peak_mib=406.9
+result_csv_sha256=55ED322A8B5DCD0BED759CF3C74CF2E64A3E3C00D185ED75D2D4E436765D9E79
+failure=

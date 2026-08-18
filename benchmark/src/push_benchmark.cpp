@@ -216,8 +216,8 @@ int main(int argc, char* argv[]) {
   std::cout << "samples=" << total << " success=" << success
             << " success_rate=" << (total ? 100.0 * success / total : 0.0)
             << "% reports_per_second=" << (elapsed_seconds > 0 ? total / elapsed_seconds : 0)
-            << " p50_us=" << Percentile(successful_latencies, 0.50)
-            << " p95_us=" << Percentile(successful_latencies, 0.95)
-            << " p99_us=" << Percentile(successful_latencies, 0.99) << '\n';
+            << " accepted_p50_us=" << Percentile(successful_latencies, 0.50)
+            << " accepted_p95_us=" << Percentile(successful_latencies, 0.95)
+            << " accepted_p99_us=" << Percentile(successful_latencies, 0.99) << '\n';
   return success == total ? 0 : 2;
 }

@@ -1,0 +1,7 @@
+ Container manager-ab-ab-legacy-burst-50-r1-20260818-manager-1 Running
+ Container manager-ab-ab-legacy-burst-50-r1-20260818-mysql-1 Running
+ Container manager-ab-ab-legacy-burst-50-r1-20260818-mysql-1 Waiting
+ Container manager-ab-ab-legacy-burst-50-r1-20260818-mysql-1 Healthy
+ Container manager-ab-ab-legacy-burst-50-r1-20260818-loadgen-run-8c17409b00c9 Creating
+ Container manager-ab-ab-legacy-burst-50-r1-20260818-loadgen-run-8c17409b00c9 Created
+samples=3000 success=3000 success_rate=100% reports_per_second=50.3799 p50_us=293422 p95_us=558307 p99_us=652677

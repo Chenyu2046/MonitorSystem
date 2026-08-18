@@ -1,0 +1,7 @@
+ Container manager-ab-ab-legacy-stagger-100-r2-20260818-manager-1 Running
+ Container manager-ab-ab-legacy-stagger-100-r2-20260818-mysql-1 Running
+ Container manager-ab-ab-legacy-stagger-100-r2-20260818-mysql-1 Waiting
+ Container manager-ab-ab-legacy-stagger-100-r2-20260818-mysql-1 Healthy
+ Container manager-ab-ab-legacy-stagger-100-r2-20260818-loadgen-run-834b9de97a26 Creating
+ Container manager-ab-ab-legacy-stagger-100-r2-20260818-loadgen-run-834b9de97a26 Created
+samples=6000 success=6000 success_rate=100% reports_per_second=80.944 p50_us=1174635 p95_us=1506900 p99_us=1736246
