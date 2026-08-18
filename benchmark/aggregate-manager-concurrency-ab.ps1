@@ -121,6 +121,9 @@ Get-ChildItem -LiteralPath $EvidenceRoot -Recurse -File |
         $relative = $_.FullName.Substring((Resolve-Path $EvidenceRoot).Path.Length).TrimStart('\', '/')
         $hashLines += "$hash  $relative"
     }
-$hashLines | Out-File -LiteralPath (Join-Path $EvidenceRoot 'sha256-manifest.txt') -Encoding utf8
+[IO.File]::WriteAllLines(
+    (Join-Path $EvidenceRoot 'sha256-manifest.txt'),
+    $hashLines,
+    [Text.UTF8Encoding]::new($false))
 
 $records | Group-Object workload, architecture, status | Select-Object Name, Count | Format-Table -AutoSize
