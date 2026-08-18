@@ -6,6 +6,7 @@
 #include "diagnostics/incident_store.h"
 #include "diagnostics/root_cause_engine.h"
 #include "host_manager.h"
+#include "mysql_timeout_config.h"
 
 namespace {
 
@@ -268,6 +269,14 @@ void TestMemoryOnlyPersistenceDoesNotAccumulatePendingIncidents() {
   assert(!state.IsDegraded());
 }
 
+void TestMysqlTimeoutParsing() {
+  assert(monitor::ParseMysqlTimeoutSeconds("5").value() == 5);
+  assert(monitor::ParseMysqlTimeoutSeconds("0") == std::nullopt);
+  assert(monitor::ParseMysqlTimeoutSeconds("-1") == std::nullopt);
+  assert(monitor::ParseMysqlTimeoutSeconds("not-a-number") == std::nullopt);
+  assert(monitor::ParseMysqlTimeoutSeconds("4294967296") == std::nullopt);
+}
+
 }  // namespace
 
 int main() {
@@ -280,5 +289,6 @@ int main() {
   TestProbeCapabilityDegradedEvidence();
   TestPersistenceFailureRemainsDegradedAfterOtherSuccess();
   TestMemoryOnlyPersistenceDoesNotAccumulatePendingIncidents();
+  TestMysqlTimeoutParsing();
   return 0;
 }

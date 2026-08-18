@@ -21,6 +21,7 @@ set(MANAGER_SOURCES
     src/host_manager.cpp
     src/host_shard_executor.cpp
     src/persistence_worker.cpp
+    src/mysql_timeout_config.cpp
     src/diagnostics/evidence_builder.cpp
     src/diagnostics/root_cause_engine.cpp
     src/diagnostics/incident_store.cpp
@@ -66,6 +67,7 @@ if(BUILD_TESTING)
         src/diagnostics/root_cause_engine.cpp
         src/diagnostics/incident_store.cpp
         src/diagnostics/diagnostic_persistence.cpp
+        src/mysql_timeout_config.cpp
     )
     target_include_directories(manager_diagnostics_test PRIVATE
         ${PROJECT_SOURCE_DIR}/manager/include

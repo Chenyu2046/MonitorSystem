@@ -14,11 +14,12 @@ function Get-Percentile([double]$Percentile) {
 
 [pscustomobject]@{
     csv = Split-Path -Leaf $CsvPath
+    latency_stage = 'rpc_accepted'
     samples = $Rows.Count
     accepted = $Success.Count
     success = $Success.Count
     success_rate_percent = [Math]::Round(100 * $Success.Count / $Rows.Count, 2)
-    p50_us = Get-Percentile 0.50
-    p95_us = Get-Percentile 0.95
-    p99_us = Get-Percentile 0.99
+    accepted_p50_us = Get-Percentile 0.50
+    accepted_p95_us = Get-Percentile 0.95
+    accepted_p99_us = Get-Percentile 0.99
 } | Format-List

@@ -42,26 +42,27 @@ try {
         $PersistedRows = [int](docker compose -f docker-compose.benchmark.yml exec -T mysql `
             mysql -N -s -ubenchmark -pbenchmark_only_password monitor_db `
             -e "SELECT COUNT(*) FROM server_performance WHERE server_name LIKE 'benchmark-$RunId-%';")
-        if ($PersistedRows -ge $ExpectedRows) { break }
+        if ($PersistedRows -eq $ExpectedRows) { break }
         Start-Sleep -Seconds 1
     } while ((Get-Date) -lt $DrainDeadline)
 
     "server_performance_rows=$PersistedRows expected_successful_reports=$ExpectedRows"
-    if ($PersistedRows -lt $ExpectedRows) {
-        throw "MySQL persistence drain timeout: expected at least $ExpectedRows rows, got $PersistedRows."
+    if ($PersistedRows -ne $ExpectedRows) {
+        throw "MySQL persistence drain timeout: expected exactly $ExpectedRows rows, got $PersistedRows."
     }
 
     docker compose -f docker-compose.benchmark.yml stop manager | Out-Null
     $ManagerLogs = docker compose -f docker-compose.benchmark.yml logs manager --no-color | Out-String
     $StatsMatch = [regex]::Match(
         $ManagerLogs,
-        'processing_stats accepted=(\d+) processed=(\d+) persistence_tasks=(\d+)')
+        'processing_stats accepted=(\d+) queue_full=(\d+) processed=(\d+) persistence_tasks=(\d+)')
     if (-not $StatsMatch.Success) {
         throw 'Manager processing_stats line was not found after graceful shutdown.'
     }
-    "manager_accepted=$($StatsMatch.Groups[1].Value) manager_processed=$($StatsMatch.Groups[2].Value) manager_persistence_tasks=$($StatsMatch.Groups[3].Value)"
+    "benchmark_stages accepted=$($StatsMatch.Groups[1].Value) processed=$($StatsMatch.Groups[3].Value) persisted=$PersistedRows queue_full=$($StatsMatch.Groups[2].Value)"
     if ([int64]$StatsMatch.Groups[1].Value -ne $ExpectedRows -or
-        [int64]$StatsMatch.Groups[2].Value -lt [int64]$StatsMatch.Groups[1].Value) {
+        [int64]$StatsMatch.Groups[3].Value -ne [int64]$ExpectedRows -or
+        [int64]$StatsMatch.Groups[4].Value -ne [int64]$ExpectedRows) {
         throw 'Manager accepted/processed counters do not match the benchmark input.'
     }
 } finally {

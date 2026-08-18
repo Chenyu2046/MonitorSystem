@@ -15,7 +15,7 @@
 | CPU 中位数相差 0.51 个百分点 | TC filter 未挂载/挂载 A/B 的 `mpstat` | 3 轮 A/B 的 `mpstat 1 10` | 当前受控 WSL2 流量下未观察到明显全机 CPU 差异 | eBPF 程序独占 CPU 开销为 0.51% |
 | 75 节点、10 分钟、45,000 次 | Manager -> MySQL 错峰稳定性压测 | `hard-stagger-75w-600s.csv` + MySQL 精确计数 + Manager processing_stats | 中心端异步接收、顺序处理和写库的端到端稳定性 | 真实 Worker 采集成本、跨机器网络延迟或生产集群容量 |
 | 100% 成功/精确落库 | 成功 gRPC 样本数与按 `run-id` 查询到的 MySQL 行数相等 | CSV + `server_performance` 查询 | 每条成功 gRPC 对应一条本轮持久化记录 | 断网重试、WAL 补传或 exactly-once 语义 |
-| P99 676.736 ms | 45,000 条成功请求延迟排序后的第 44,550 条 | CSV `latency_us` | 该场景下端到端调用尾延迟 | 仅 eBPF 或仅 MySQL 的延迟 |
+| accepted P99 676.736 ms | 45,000 条成功 RPC accepted 延迟排序后的第 44,550 条 | CSV `latency_us` | 该场景下接收层尾延迟 | DB 持久化端到端延迟或仅 eBPF/仅 MySQL 延迟 |
 | Manager 8.68% CPU / 13.3 MiB | 稳定性轮次每秒 Docker stats 采样 | 运行期 `docker stats --no-stream` | 该容器/主机组合的资源占用 | 其他机器、不同 Docker 配额或单进程精确资源画像 |
 
 ## 2. 公共环境与原则
@@ -35,7 +35,7 @@
 压测客户端是项目内的 C++ 程序
 [`push_benchmark.cpp`](src/push_benchmark.cpp)。它构造合法的 `MonitorInfo`，但不调用
 真实 Worker 的 `/proc`、内核模块或 eBPF 采集。因此 Manager 数据用于证明**中心端
-接收、计算、同步持久化**能力，不能用于证明 Worker 采集性能。
+接收、计算、异步持久化**能力，不能用于证明 Worker 采集性能。
 
 ### 2.2 WSL2 的 eBPF 测试环境
 
@@ -91,16 +91,25 @@ veth 是内存中的虚拟网卡对，排除了物理网卡、驱动、交换机
 错峰模型与整秒突发模型不能混为同一基线。前者用于稳定部署下的持续能力，后者用于
 定位集中突发时的排队边界。
 
-### 3.3 延迟、成功率和持久化口径
+### 3.3 三阶段延迟、成功率和持久化口径
+
+本架构必须把三个阶段分开记录，不能把新的 accepted RPC 延迟当成旧同步架构的
+端到端延迟：
+
+| 阶段 | 定义 | 当前 benchmark 证据 |
+| --- | --- | --- |
+| T0 accepted latency | client RPC 调用 -> Manager 接受并进入 shard queue | CSV `latency_us`，脚本输出 `accepted_p50/p95/p99_us` |
+| T1 processed latency | ingress `received_at/enqueued_at` -> `ProcessOne` 完成并接受 PersistenceTask | Manager `processing_stats` 的 processed 计数和 queue delay 汇总；逐条 T1 延迟当前 NOT VERIFIED |
+| T2 persisted latency | ingress -> MySQL 对应 `server_performance` 行可查询 | 按 run-id 的精确行数和 drain 结果；逐条 T2 P50/P95/P99 当前 NOT VERIFIED |
 
 单条 accepted 延迟从 gRPC 调用前的 `steady_clock` 取样开始，到 `SetMonitorInfo` 返回结束，
-以微秒写入 CSV。该指标只代表进入 Manager shard 队列的延迟：
+以微秒写入 CSV。该指标只代表 T0 接收层延迟，不代表 T1/T2：
 
 ```text
 latency_us = steady_clock_after_rpc - steady_clock_before_rpc
 ```
 
-只有 gRPC `status.ok()` 的样本参与 P50/P95/P99。对排序后的成功延迟数组（长度为
+只有 gRPC `status.ok()` 的样本参与 T0 P50/P95/P99。对排序后的成功延迟数组（长度为
 `N`），分位点使用：
 
 ```text
@@ -111,13 +120,14 @@ Pp = sorted_latency[index(p)]
 例如 45,000 条成功样本的 P99 索引为 `ceil(45000 × 0.99) - 1 = 44,549`，即排序后
 第 44,550 条样本（从 1 开始计数）。
 
-本项目把“端到端持久化成功”定义为以下四项同时成立：
+本项目把“该轮持久化稳定完成”定义为以下四项同时成立：
 
 1. CSV 中该轮每条样本的 gRPC 状态为 `OK`；
 2. 成功样本数等于期望样本数；
 3. `server_performance` 中 hostname 前缀匹配本轮 `run-id` 的行数，等于成功样本数。
-4. Manager 优雅退出日志中的 `processing_stats` 满足 `accepted == processed`，且
-   `server_performance` 行数在 drain 等待窗口内追平 accepted 数。
+4. Manager 优雅退出日志中的 `processing_stats` 满足
+   `accepted == processed == persistence_tasks`，且 `server_performance` 行数在 drain
+   等待窗口内严格追平 accepted 数。
 
 SQL 核验示例：
 
@@ -130,10 +140,11 @@ WHERE server_name LIKE 'hard-stagger-75w-600s-worker-%';
 这不是消息队列语义测试：Worker 当前没有 WAL、补发队列或幂等序列号，故不宣称
 at-least-once 或 exactly-once。
 
-`run-windows-benchmark.ps1` 会在停止 Manager 前等待按 run-id 的落库行数追平 accepted
-数，并在优雅退出后校验 `processing_stats`。本文列出的正式结果仍应额外执行上面的
-前缀 SQL，并确认行数**严格等于**预期样本数；脚本的“行数不少于”检查只用于快速发现
-明显落库缺失。
+`run-windows-benchmark.ps1` 会在停止 Manager 前等待按 run-id 的落库行数严格等于
+accepted 数，并在优雅退出后校验 `accepted == processed == persistence_tasks`。脚本
+同时输出 `accepted / processed / persisted / queue_full` 四项阶段计数。逐条 T1/T2
+延迟没有被当前 CSV 或 SQL 直接关联，因此在补充关联 ID/时间采样前必须标记
+`NOT VERIFIED`。
 
 ### 3.4 75 节点、10 分钟稳定性实验
 
@@ -204,7 +215,7 @@ docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' `
 ### 3.5 集中突发容量边界
 
 100 和 300 节点测试保持 1 s 周期、60 s 时长，但不启用 `--stagger-start`。它们的
-作用是验证“所有节点同一时刻到达”时全局串行计算和同步 MySQL 写入的排队效应：
+作用是验证“所有节点同一时刻到达”时 shard worker 和单 DB Writer 的排队边界：
 
 | 场景 | 成功 / 落库 | P99 | 解释 |
 | --- | --- | --- | --- |
@@ -213,7 +224,7 @@ docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' `
 | 500 节点整秒突发 | 中止 | 无完整终态 | 8 分钟内未完成，停止前写入 17,521 行，不纳入结果 |
 
 500 节点中止后，Manager 继续处理在途工作；后续独立稳定性轮次前重建 Manager。
-因此“中止后未立即恢复”是当前同步串行设计的过载现象记录，不是 500 节点成功率。
+因此“中止后未立即恢复”是该过载场景的排水边界记录，不是 500 节点成功率。
 
 ## 4. TC eBPF 网络采集 A/B 测试
 
@@ -365,9 +376,10 @@ ip netns del ebpfbench-ns
 > 3 轮 A/B 压测中，最高覆盖 87.11 Gb/s、24.82 万 packets/s，eBPF 聚合值与
 > `/proc/net/dev` 的 RX/TX 字节增量均为 0 偏差。
 
-> 在 75 节点、1s 周期、10 分钟端到端稳定性压测中，完成 45,000 次
-> `gRPC -> Manager -> MySQL` 同步持久化，成功率与精确落库率均为 100%，P99 为
-> 676.7ms；Manager 平均 CPU 8.68%、峰值内存 13.3MiB。
+> 在 75 节点、1s 周期、10 分钟稳定性压测中，完成 45,000 次
+> `gRPC -> Manager -> MySQL` 异步链路排水，成功率与精确落库率均为 100%；CSV 中
+> 的 676.7ms 是 T0 accepted P99，不是 T2 持久化 P99。Manager 平均 CPU 8.68%、
+> 峰值内存 13.3MiB。
 
 不可写：
 
@@ -376,6 +388,9 @@ ip netns del ebpfbench-ns
 - “网卡性能达到 87.11 Gb/s”：该值来自 WSL2 veth；
 - “系统支持 300 节点稳定运行”：300 节点整秒突发的 P99 是 3.88 s；
 - “45,000 条数据 exactly-once”：测试只证明该轮成功请求与落库行数相等。
+- “新版 accepted P99 比旧版同步 RPC P99 降低 X%”：两者阶段定义不同，不能直接比较；
+- “T1/T2 P50/P95/P99”：当前 benchmark 未逐条关联处理完成和 DB 完成时间，必须标记
+  `NOT VERIFIED`。
 
 ## 6. 复跑检查清单
 
