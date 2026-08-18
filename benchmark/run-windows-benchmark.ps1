@@ -55,14 +55,21 @@ try {
     $ManagerLogs = docker compose -f docker-compose.benchmark.yml logs manager --no-color | Out-String
     $StatsMatch = [regex]::Match(
         $ManagerLogs,
-        'processing_stats accepted=(\d+) queue_full=(\d+) processed=(\d+) persistence_tasks=(\d+)')
+        'processing_stats accepted=(\d+) queue_full=(\d+) processed=(\d+) persistence_tasks=(\d+) persistence_rejected=(\d+) queue_delay_samples=(\d+) queue_delay_total_us=(\d+) max_queue_delay_us=(\d+) max_shard_queue_depth=(\d+) max_shard_queue_bytes=(\d+) max_persistence_queue_depth=(\d+) max_persistence_queue_bytes=(\d+)')
     if (-not $StatsMatch.Success) {
         throw 'Manager processing_stats line was not found after graceful shutdown.'
     }
-    "benchmark_stages accepted=$($StatsMatch.Groups[1].Value) processed=$($StatsMatch.Groups[3].Value) persisted=$PersistedRows queue_full=$($StatsMatch.Groups[2].Value)"
+    $QueueDelaySamples = [int64]$StatsMatch.Groups[6].Value
+    $QueueDelayTotalUs = [int64]$StatsMatch.Groups[7].Value
+    $QueueDelayMeanUs = if ($QueueDelaySamples -gt 0) {
+        [Math]::Round($QueueDelayTotalUs / $QueueDelaySamples, 2)
+    } else { 0 }
+    "benchmark_stages accepted=$($StatsMatch.Groups[1].Value) processed=$($StatsMatch.Groups[3].Value) persisted=$PersistedRows queue_full=$($StatsMatch.Groups[2].Value) persistence_rejected=$($StatsMatch.Groups[5].Value)"
+    "queue_delay_mean_us=$QueueDelayMeanUs queue_delay_max_us=$($StatsMatch.Groups[8].Value) max_shard_queue_depth=$($StatsMatch.Groups[9].Value) max_shard_queue_bytes=$($StatsMatch.Groups[10].Value) max_persistence_queue_depth=$($StatsMatch.Groups[11].Value) max_persistence_queue_bytes=$($StatsMatch.Groups[12].Value)"
     if ([int64]$StatsMatch.Groups[1].Value -ne $ExpectedRows -or
         [int64]$StatsMatch.Groups[3].Value -ne [int64]$ExpectedRows -or
-        [int64]$StatsMatch.Groups[4].Value -ne [int64]$ExpectedRows) {
+        [int64]$StatsMatch.Groups[4].Value -ne [int64]$ExpectedRows -or
+        [int64]$StatsMatch.Groups[5].Value -ne 0) {
         throw 'Manager accepted/processed counters do not match the benchmark input.'
     }
 } finally {
