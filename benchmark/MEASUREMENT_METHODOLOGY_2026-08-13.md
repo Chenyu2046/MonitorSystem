@@ -4,7 +4,8 @@
 统计公式、复跑命令和不能外推的边界。结果汇总见
 [`TEST_RESULTS_2026-08-12.md`](TEST_RESULTS_2026-08-12.md)，原始延迟样本保存在
 历史临时结果保存在 `benchmark/results/`；Current Sharded smoke 的可提交证据保存在
-`benchmark/evidence/manager-sharded-10host-20260818/`。
+`benchmark/evidence/manager-sharded-10host-20260818/`；本轮 Legacy/Current A/B 证据保存在
+`benchmark/evidence/manager-concurrency-ab-20260818/`。
 
 ## 1. 数字与实验的对应关系
 
@@ -33,10 +34,14 @@
 
 #### Current Sharded Manager Baseline
 
-- 当前 HEAD：`7ff8d142e5699e68c51f8402adeb17cd00414d94`。
+- 本轮 Current A/B HEAD：`dcdf9791c1893eaecc0b4b993abbe7a248c4a8fb`，分支为
+  `codex/kernscope-manager-concurrency`。
 - 当前链路：gRPC -> Shard Queue -> Shard Worker -> Persistence Queue -> Single DB Writer -> MySQL。
-- 只有本轮以当前 HEAD 重新执行并保存 raw CSV/SQL/log 的结果，才允许写入 Current Baseline。
-- 未重新验证的 1/50/75/100 Host 正式容量档位、T1/T2 分位延迟、Manager CPU/RSS、处理吞吐和持久化吞吐均必须标记 `NOT VERIFIED`；10 Host 当前只完成 smoke，不等于正式容量验证。
+- 本轮以该 HEAD 重新执行了 Legacy/Current A/B 矩阵，并保存每轮 raw CSV、资源采样、Manager
+  stats、loadgen log 和 SHA-256 manifest；汇总与边界见
+  `benchmark/evidence/manager-concurrency-ab-20260818/README.md`。
+- 当前已验证的是本报告列出的 Windows Docker 合成负载；T1/T2 逐请求分位延迟、物理机/生产
+  集群容量和可靠投递语义仍必须标记 `NOT VERIFIED`。
 
 数据归属规则：`Legacy synchronous RPC latency` 不等于 `Current T0 accepted latency`，也不等于
 `Current T1 processed latency` 或 `Current T2 persisted latency`。只有 workload、duration、arrival
@@ -261,11 +266,11 @@ docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' `
 `persistence_tasks` 代表任务进入单 DB Writer，`persisted` 代表按 run-id 查询到的 MySQL 行。
 没有逐条 correlation ID，因此不得从本节数据推导 T1/T2 P50/P95/P99。
 
-#### Current Sharded Smoke Baseline
+#### Historical Current Sharded Smoke Baseline (7ff8d142)
 
 | 项目 | 当前结果 |
 | --- | --- |
-| HEAD | `7ff8d142e5699e68c51f8402adeb17cd00414d94` |
+| historical smoke commit | `7ff8d142e5699e68c51f8402adeb17cd00414d94` |
 | workload | 10 Host、30 s、1 s/report/Host、默认整秒到达 |
 | evidence | `benchmark/evidence/manager-sharded-10host-20260818/` |
 | raw CSV | `benchmark/evidence/manager-sharded-10host-20260818/result.csv` |
@@ -278,9 +283,28 @@ docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' `
 | max persistence queue depth / bytes | 9 / 6,419 |
 | Manager CPU / RSS | `NOT VERIFIED` |
 
-这是一组 `7ff8d142` 当前 HEAD 的 smoke baseline，不是 1/10/50/75/100 Host 正式容量矩阵。
-除上述 10 Host smoke 以外，1/50/75/100 Host 档位、T1/T2 分位延迟、Manager CPU/RSS、
-处理吞吐和持久化吞吐均为 `NOT VERIFIED`。
+这是一组历史 smoke 记录，不是本轮 `dcdf9791` A/B 的 Current Baseline，也不是
+1/10/50/75/100 Host 正式容量矩阵。正式 Current A/B 结果以
+`benchmark/evidence/manager-concurrency-ab-20260818/` 为准。
+
+#### Current Sharded Manager Legacy/Current A/B Evidence (dcdf9791)
+
+本轮在同一 Windows Docker/MySQL 环境中分别运行 Legacy commit
+`5c29c4a452a095b77c5e46f5b9d25c7629e6461c` 与 Current commit
+`dcdf9791c1893eaecc0b4b993abbe7a248c4a8fb`。错峰矩阵覆盖 1/10/25/50/75/100 Host，
+整秒突发矩阵覆盖 10/25/50/75/100/150/200 Host；10/50/75/100 Host 的关键档位至少
+执行 3 次。75 Host 另有 600 s 长稳定性轮次。
+
+Current 错峰 60 s 的有效 PASS 结果在 100 Host 为 3/3，Legacy 为 3/3；中位数总完成时间
+分别为 69.490 s 与 78.698 s，Current 比 Legacy 低 11.70%，持久化吞吐比为 1.133x。
+Current 整秒突发在 100 Host 为 3/3；150 Host 出现 902 次 `queue_full`，200 Host 出现
+3,534 次 `queue_full`，均未出现 `persistence_rejected`。Current 75 Host、600 s 错峰
+轮次完成 45,000/45,000/45,000 accepted/processed/persisted，accepted P99 为 1,403 us，
+queue delay mean/max 为 74.07/3,646 us。
+
+这些结果只支持同负载下的总完成时间、精确落库数、持久化吞吐、容量边界和资源样本比较。
+Current accepted P99 不得与 Legacy synchronous RPC P99 直接比较；T1/T2 逐请求 P50/P95/P99
+仍为 `NOT VERIFIED`。完整汇总、失败样本和每轮 SHA-256 见上述 README 与 manifest。
 
 ## 4. TC eBPF 网络采集 A/B 测试
 

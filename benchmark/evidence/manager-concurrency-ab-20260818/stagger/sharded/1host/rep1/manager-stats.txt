@@ -1,0 +1,69 @@
+manager-1  | Starting Monitor Client (Manager Mode)...
+manager-1  | Listening on: 0.0.0.0:50051
+manager-1  | QueryManager: MySQL connection initialized
+manager-1  | QueryManager initialized successfully
+manager-1  | Monitor Client listening on 0.0.0.0:50051
+manager-1  | Waiting for workers to push data...
+manager-1  | Query service available for performance data queries
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Received monitor data from: ab-sharded-stagger-1-r1-20260818-worker-0
+manager-1  | Shutdown requested, stopping manager...
+manager-1  | [KernScopeManager] processing_stats accepted=60 queue_full=0 processed=60 persistence_tasks=60 persistence_rejected=0 queue_delay_samples=60 queue_delay_total_us=4744 max_queue_delay_us=109 max_shard_queue_depth=1 max_shard_queue_bytes=446 max_persistence_queue_depth=1 max_persistence_queue_bytes=734

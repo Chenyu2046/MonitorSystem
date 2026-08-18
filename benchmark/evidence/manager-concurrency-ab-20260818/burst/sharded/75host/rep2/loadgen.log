@@ -1,0 +1,7 @@
+ Container manager-ab-ab-sharded-burst-75-r2-20260818-mysql-1 Running
+ Container manager-ab-ab-sharded-burst-75-r2-20260818-manager-1 Running
+ Container manager-ab-ab-sharded-burst-75-r2-20260818-mysql-1 Waiting
+ Container manager-ab-ab-sharded-burst-75-r2-20260818-mysql-1 Healthy
+ Container manager-ab-ab-sharded-burst-75-r2-20260818-loadgen-run-e69c0a12dada Creating
+ Container manager-ab-ab-sharded-burst-75-r2-20260818-loadgen-run-e69c0a12dada Created
+samples=4500 success=4500 success_rate=100% reports_per_second=76.2568 accepted_p50_us=3362 accepted_p95_us=4930 accepted_p99_us=25796
