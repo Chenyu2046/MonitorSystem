@@ -3,7 +3,8 @@
 本文解释简历中出现的性能数字是如何得到的，包括测试对象、输入负载、成功判定、
 统计公式、复跑命令和不能外推的边界。结果汇总见
 [`TEST_RESULTS_2026-08-12.md`](TEST_RESULTS_2026-08-12.md)，原始延迟样本保存在
-`benchmark/results/`。
+历史临时结果保存在 `benchmark/results/`；Current Sharded smoke 的可提交证据保存在
+`benchmark/evidence/manager-sharded-10host-20260818/`。
 
 ## 1. 数字与实验的对应关系
 
@@ -32,7 +33,7 @@
 
 #### Current Sharded Manager Baseline
 
-- 当前 HEAD：`5044d6333d44590adfbd2be91cc466af4ba8499b`。
+- 当前 HEAD：`7ff8d142e5699e68c51f8402adeb17cd00414d94`。
 - 当前链路：gRPC -> Shard Queue -> Shard Worker -> Persistence Queue -> Single DB Writer -> MySQL。
 - 只有本轮以当前 HEAD 重新执行并保存 raw CSV/SQL/log 的结果，才允许写入 Current Baseline。
 - 未重新验证的 1/50/75/100 Host 正式容量档位、T1/T2 分位延迟、Manager CPU/RSS、处理吞吐和持久化吞吐均必须标记 `NOT VERIFIED`；10 Host 当前只完成 smoke，不等于正式容量验证。
@@ -264,18 +265,20 @@ docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' `
 
 | 项目 | 当前结果 |
 | --- | --- |
-| HEAD | `5044d6333d44590adfbd2be91cc466af4ba8499b` |
+| HEAD | `7ff8d142e5699e68c51f8402adeb17cd00414d94` |
 | workload | 10 Host、30 s、1 s/report/Host、默认整秒到达 |
-| raw CSV | `benchmark/results/push-20260818-152643.csv` |
+| evidence | `benchmark/evidence/manager-sharded-10host-20260818/` |
+| raw CSV | `benchmark/evidence/manager-sharded-10host-20260818/result.csv` |
+| CSV SHA-256 | `B92BAED901A15B977053CC2E609DE37729D758E71EC0A9A8D4480A3EC902683E` |
 | accepted / processed / persistence_tasks / persisted | 300 / 300 / 300 / 300 |
 | queue_full / persistence_rejected | 0 / 0 |
-| accepted P50 / P95 / P99 | 1,811 / 3,006 / 15,203 us |
-| queue delay mean / max | 71.95 / 440 us |
+| accepted P50 / P95 / P99 | 1,451 / 2,171 / 7,096 us |
+| queue delay mean / max | 80.14 / 395 us |
 | max shard queue depth / bytes | 2 / 852 |
 | max persistence queue depth / bytes | 9 / 6,419 |
 | Manager CPU / RSS | `NOT VERIFIED` |
 
-这是一组当前 HEAD 的 smoke baseline，不是 1/10/50/75/100 Host 正式容量矩阵。
+这是一组 `7ff8d142` 当前 HEAD 的 smoke baseline，不是 1/10/50/75/100 Host 正式容量矩阵。
 除上述 10 Host smoke 以外，1/50/75/100 Host 档位、T1/T2 分位延迟、Manager CPU/RSS、
 处理吞吐和持久化吞吐均为 `NOT VERIFIED`。
 

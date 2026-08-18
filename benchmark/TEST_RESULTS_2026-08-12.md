@@ -61,16 +61,26 @@
 - 汇总来源：`benchmark/summarize-results.ps1`
 - 落库核验：`SELECT COUNT(*) FROM server_performance WHERE server_name LIKE 'benchmark-worker-%';` 返回 `300`；不同 `server_name` 返回 `10`。
 
-## 可复跑命令
+## Legacy 可复跑命令
 
-在仓库根目录的 Windows PowerShell 中执行：
+本文件记录的是 `Legacy Manager Baseline`，对应旧的全局串行
+`HostManager` + 同步 `WriteToMysql` 架构。当前
+`codex/kernscope-manager-concurrency` 分支的同名脚本已经运行 Sharded Manager，
+不能复现本文件的 Legacy 数字。
+
+复现 Legacy 结果前，必须在干净工作区 checkout 到已经通过 Git 历史确认的
+Legacy baseline commit `5c29c4a452a095b77c5e46f5b9d25c7629e6461c`。该 commit 是引入
+Host Sharding / Persistence Worker 的 `c608138` 的父提交，源码仍包含全局
+`processing_mtx_` 和同步 `WriteToMysql`。在仓库根目录执行：
 
 ```powershell
+git switch --detach 5c29c4a452a095b77c5e46f5b9d25c7629e6461c
 powershell -ExecutionPolicy Bypass -File .\benchmark\run-windows-benchmark.ps1 `
   -Workers 10 -DurationSeconds 30 -IntervalMs 1000
+git switch codex/kernscope-manager-concurrency
 ```
 
-脚本会构建/启动 MySQL 与 Manager，运行负载发生器，输出 CSV、延迟分位数，
+在 Legacy commit 上，脚本会构建/启动 MySQL 与旧 Manager，运行负载发生器，输出 CSV、延迟分位数，
 并校验 `server_performance` 的行数不少于成功上报数。每次正式对比应保存
 新生成的 CSV，并同时记录容器版本、机器资源和配置参数。
 
