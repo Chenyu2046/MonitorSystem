@@ -1,5 +1,7 @@
 #include "host_shard_executor.h"
 
+#include <algorithm>
+#include <chrono>
 #include <functional>
 #include <utility>
 
@@ -7,6 +9,7 @@ namespace monitor {
 
 HostShardExecutor::HostShardExecutor(std::size_t shard_count,
                                      std::size_t queue_capacity,
+                                     std::size_t queue_max_bytes,
                                      ProcessCallback callback)
     : callback_(std::move(callback)) {
   if (shard_count == 0) {
@@ -14,7 +17,8 @@ HostShardExecutor::HostShardExecutor(std::size_t shard_count,
   }
   shards_.reserve(shard_count);
   for (std::size_t index = 0; index < shard_count; ++index) {
-    shards_.push_back(std::make_unique<Shard>(queue_capacity));
+    shards_.push_back(
+        std::make_unique<Shard>(queue_capacity, queue_max_bytes));
   }
 }
 
@@ -58,13 +62,31 @@ DataReceiveResult HostShardExecutor::Submit(
   }
 
   const std::size_t shard_id = ShardFor(host_name);
-  if (shards_[shard_id]->queue.TryPush(
-          WorkItem{host_name, std::move(info)})) {
+  const auto received_at = std::chrono::system_clock::now();
+  const auto enqueued_at = std::chrono::steady_clock::now();
+  if (shards_[shard_id]->queue.TryPush(WorkItem{
+          host_name, std::move(info), received_at, enqueued_at})) {
     return DataReceiveResult::kAccepted;
   }
   return accepting_.load(std::memory_order_acquire)
              ? DataReceiveResult::kQueueFull
              : DataReceiveResult::kStopping;
+}
+
+std::size_t HostShardExecutor::PeakQueueDepth() const {
+  std::size_t peak = 0;
+  for (const auto& shard : shards_) {
+    peak = std::max(peak, shard->queue.PeakSize());
+  }
+  return peak;
+}
+
+std::size_t HostShardExecutor::PeakQueueBytes() const {
+  std::size_t peak = 0;
+  for (const auto& shard : shards_) {
+    peak = std::max(peak, shard->queue.PeakBytes());
+  }
+  return peak;
 }
 
 std::size_t HostShardExecutor::ShardFor(const std::string& host_name) const {
@@ -74,7 +96,8 @@ std::size_t HostShardExecutor::ShardFor(const std::string& host_name) const {
 void HostShardExecutor::RunShard(std::size_t shard_id) {
   WorkItem item;
   while (shards_[shard_id]->queue.Pop(&item)) {
-    callback_(shard_id, item.host_name, item.info);
+    callback_(shard_id, item.host_name, item.info, item.received_at,
+              item.enqueued_at);
   }
 }
 

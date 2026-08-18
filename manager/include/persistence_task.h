@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -47,5 +48,29 @@ struct PersistenceTask {
 
   std::optional<diagnostics::IncidentRecord> incident;
 };
+
+inline std::size_t EstimatePersistenceTaskBytes(const PersistenceTask& task) {
+  std::size_t bytes = sizeof(PersistenceTask) + task.host_name.size() +
+                      task.host_score.info.ByteSizeLong();
+  if (!task.incident) {
+    return bytes;
+  }
+
+  const auto& incident = *task.incident;
+  bytes += incident.server_name.size() + incident.severity.size() +
+           incident.state.size();
+  for (const auto& cause : incident.root_causes) {
+    bytes += sizeof(cause) + cause.summary.size();
+    for (const auto& evidence_id : cause.evidence_ids) {
+      bytes += evidence_id.size();
+    }
+  }
+  for (const auto& evidence : incident.evidence) {
+    bytes += sizeof(evidence) + evidence.id.size() + evidence.source.size() +
+             evidence.target.size() + evidence.unit.size() +
+             evidence.detail.size();
+  }
+  return bytes;
+}
 
 }  // namespace monitor

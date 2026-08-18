@@ -107,7 +107,9 @@ class HostManager {
  private:
   void ProcessLoop();
   void ProcessOne(std::size_t shard_id, const std::string& host_name,
-                  const monitor::proto::MonitorInfo& info);
+                  const monitor::proto::MonitorInfo& info,
+                  std::chrono::system_clock::time_point received_at,
+                  std::chrono::steady_clock::time_point enqueued_at);
   void PersistTask(PersistenceTask task);
   double CalcScore(const monitor::proto::MonitorInfo& info);
   void WriteToMysql(const std::string& host_name, const HostScore& host_score,
@@ -133,8 +135,12 @@ class HostManager {
   std::unique_ptr<PersistenceWorker> persistence_worker_;
   std::vector<std::unordered_map<std::string, PerfSample>> shard_perf_samples_;
   std::atomic<std::uint64_t> accepted_count_{0};
+  std::atomic<std::uint64_t> queue_full_count_{0};
   std::atomic<std::uint64_t> processed_count_{0};
   std::atomic<std::uint64_t> persistence_task_count_{0};
+  std::atomic<std::uint64_t> queue_delay_samples_{0};
+  std::atomic<std::uint64_t> queue_delay_total_us_{0};
+  std::atomic<std::uint64_t> max_queue_delay_us_{0};
   PersistenceHistory persistence_history_;
   diagnostics::EvidenceBuilder evidence_builder_;
   diagnostics::RootCauseEngine root_cause_engine_;

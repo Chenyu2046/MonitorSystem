@@ -5,8 +5,13 @@
 namespace monitor {
 
 PersistenceWorker::PersistenceWorker(std::size_t queue_capacity,
+                                     std::size_t queue_max_bytes,
                                      TaskHandler handler)
-    : queue_(queue_capacity), handler_(std::move(handler)) {}
+    : queue_(queue_capacity, queue_max_bytes,
+             [](const PersistenceTask& task) {
+               return EstimatePersistenceTaskBytes(task);
+             }),
+      handler_(std::move(handler)) {}
 
 PersistenceWorker::~PersistenceWorker() { Stop(); }
 
@@ -34,6 +39,14 @@ void PersistenceWorker::Stop() {
   if (worker_.joinable()) {
     worker_.join();
   }
+}
+
+std::size_t PersistenceWorker::PeakQueueDepth() const {
+  return queue_.PeakSize();
+}
+
+std::size_t PersistenceWorker::PeakQueueBytes() const {
+  return queue_.PeakBytes();
 }
 
 void PersistenceWorker::Run() {

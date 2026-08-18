@@ -1,5 +1,7 @@
 #include "host_manager.h"
 
+#include "mysql_timeout_config.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
@@ -104,6 +106,12 @@ MYSQL* GetMysqlConnection() {
     std::cerr << "mysql_init failed\n";
     return nullptr;
   }
+  if (!ApplyMysqlTimeouts(mysql_conn, GetMysqlTimeoutConfig(),
+                          "HostManager legacy MySQL")) {
+    mysql_close(mysql_conn);
+    mysql_conn = nullptr;
+    return nullptr;
+  }
   if (!mysql_real_connect(
           mysql_conn, GetEnvOrDefault("MONITOR_MYSQL_HOST", MYSQL_HOST),
           GetEnvOrDefault("MONITOR_MYSQL_USER", MYSQL_USER),
@@ -156,21 +164,27 @@ void HostManager::Start() {
       "KERNSCOPE_MANAGER_SHARDS", DefaultShardCount());
   const std::size_t shard_queue_capacity =
       GetEnvSize("KERNSCOPE_SHARD_QUEUE_CAPACITY", 256);
+  const std::size_t shard_queue_max_bytes = GetEnvSize(
+      "KERNSCOPE_SHARD_QUEUE_MAX_BYTES", 64ull * 1024ull * 1024ull);
   const std::size_t persistence_queue_capacity =
       GetEnvSize("KERNSCOPE_PERSIST_QUEUE_CAPACITY", 1024);
+  const std::size_t persistence_queue_max_bytes = GetEnvSize(
+      "KERNSCOPE_PERSIST_QUEUE_MAX_BYTES", 128ull * 1024ull * 1024ull);
   shard_perf_samples_.clear();
   shard_perf_samples_.resize(shard_count);
 
   persistence_worker_ = std::make_unique<PersistenceWorker>(
-      persistence_queue_capacity,
+      persistence_queue_capacity, persistence_queue_max_bytes,
       [this](PersistenceTask&& task) { PersistTask(std::move(task)); });
   persistence_worker_->Start();
 
   shard_executor_ = std::make_unique<HostShardExecutor>(
-      shard_count, shard_queue_capacity,
+      shard_count, shard_queue_capacity, shard_queue_max_bytes,
       [this](std::size_t shard_id, const std::string& host_name,
-             const monitor::proto::MonitorInfo& info) {
-        ProcessOne(shard_id, host_name, info);
+             const monitor::proto::MonitorInfo& info,
+             std::chrono::system_clock::time_point received_at,
+             std::chrono::steady_clock::time_point enqueued_at) {
+        ProcessOne(shard_id, host_name, info, received_at, enqueued_at);
       });
   shard_executor_->Start();
   thread_ = std::make_unique<std::thread>(&HostManager::ProcessLoop, this);
@@ -192,9 +206,27 @@ void HostManager::Stop() {
   }
   std::cout << "[KernScopeManager] processing_stats accepted="
             << accepted_count_.load(std::memory_order_relaxed)
+            << " queue_full="
+            << queue_full_count_.load(std::memory_order_relaxed)
             << " processed=" << processed_count_.load(std::memory_order_relaxed)
             << " persistence_tasks="
             << persistence_task_count_.load(std::memory_order_relaxed)
+            << " queue_delay_samples="
+            << queue_delay_samples_.load(std::memory_order_relaxed)
+            << " queue_delay_total_us="
+            << queue_delay_total_us_.load(std::memory_order_relaxed)
+            << " max_queue_delay_us="
+            << max_queue_delay_us_.load(std::memory_order_relaxed)
+            << " max_shard_queue_depth="
+            << (shard_executor_ ? shard_executor_->PeakQueueDepth() : 0)
+            << " max_shard_queue_bytes="
+            << (shard_executor_ ? shard_executor_->PeakQueueBytes() : 0)
+            << " max_persistence_queue_depth="
+            << (persistence_worker_ ? persistence_worker_->PeakQueueDepth()
+                                     : 0)
+            << " max_persistence_queue_bytes="
+            << (persistence_worker_ ? persistence_worker_->PeakQueueBytes()
+                                     : 0)
             << std::endl;
 }
 
@@ -238,6 +270,8 @@ DataReceiveResult HostManager::Submit(
   const auto result = shard_executor_->Submit(host_name, info);
   if (result == DataReceiveResult::kAccepted) {
     accepted_count_.fetch_add(1, std::memory_order_relaxed);
+  } else if (result == DataReceiveResult::kQueueFull) {
+    queue_full_count_.fetch_add(1, std::memory_order_relaxed);
   }
   return result;
 }
@@ -245,10 +279,24 @@ DataReceiveResult HostManager::Submit(
 // 计算主机的综合评分
 void HostManager::ProcessOne(
     std::size_t shard_id, const std::string& host_name,
-    const monitor::proto::MonitorInfo& info) {
+    const monitor::proto::MonitorInfo& info,
+    std::chrono::system_clock::time_point received_at,
+    std::chrono::steady_clock::time_point enqueued_at) {
 
   double score = CalcScore(info);
-  auto now = std::chrono::system_clock::now();
+  const auto now = received_at;
+  const auto queue_delay = std::chrono::steady_clock::now() - enqueued_at;
+  const auto queue_delay_us = static_cast<std::uint64_t>(std::max<std::int64_t>(
+      0, std::chrono::duration_cast<std::chrono::microseconds>(queue_delay)
+             .count()));
+  queue_delay_samples_.fetch_add(1, std::memory_order_relaxed);
+  queue_delay_total_us_.fetch_add(queue_delay_us, std::memory_order_relaxed);
+  auto current_max = max_queue_delay_us_.load(std::memory_order_relaxed);
+  while (current_max < queue_delay_us &&
+         !max_queue_delay_us_.compare_exchange_weak(
+             current_max, queue_delay_us, std::memory_order_relaxed,
+             std::memory_order_relaxed)) {
+  }
 
   // 网络速率计算
   double net_in_rate = 0, net_out_rate = 0;
@@ -414,8 +462,6 @@ void HostManager::ProcessOne(
     std::cout << "  NetIn: " << task.net_in_rate_rate * 100 << "%, "
               << "NetOut: " << task.net_out_rate_rate * 100 << "%" << std::endl;
 
-    std::cout << "\n--- Database ---" << std::endl;
-    std::cout << "  Data saved to MySQL (monitor_db)" << std::endl;
     std::cout << "====================================================\n"
               << std::endl;
   }

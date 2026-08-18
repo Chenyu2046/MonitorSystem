@@ -14,7 +14,8 @@ class PersistenceWorker {
  public:
   using TaskHandler = std::function<void(PersistenceTask&&)>;
 
-  PersistenceWorker(std::size_t queue_capacity, TaskHandler handler);
+  PersistenceWorker(std::size_t queue_capacity, std::size_t queue_max_bytes,
+                    TaskHandler handler);
   ~PersistenceWorker();
 
   PersistenceWorker(const PersistenceWorker&) = delete;
@@ -23,6 +24,8 @@ class PersistenceWorker {
   void Start();
   bool Enqueue(PersistenceTask task);
   void Stop();
+  std::size_t PeakQueueDepth() const;
+  std::size_t PeakQueueBytes() const;
 
  private:
   void Run();
