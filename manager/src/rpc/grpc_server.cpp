@@ -21,18 +21,30 @@ namespace monitor {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Missing hostname");
   }
 
-  // 存储数据
+  // 先确认 Manager 已接受数据，再更新 Pull 查询使用的最新快照。
+  if (callback_) {
+    const DataReceiveResult result = callback_(*request);
+    switch (result) {
+      case DataReceiveResult::kAccepted:
+        break;
+      case DataReceiveResult::kQueueFull:
+        return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED,
+                            "manager queue full");
+      case DataReceiveResult::kStopping:
+        return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                            "manager stopping");
+      case DataReceiveResult::kInvalidHost:
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                            "Invalid host identifier");
+    }
+  }
+
   {
     std::lock_guard<std::mutex> lock(mtx_);
     host_data_[hostname] = {*request, std::chrono::system_clock::now()};
   }
 
   std::cout << "Received monitor data from: " << hostname << std::endl;
-
-  // 调用回调函数
-  if (callback_) {
-    callback_(*request);
-  }
 
   return grpc::Status::OK;
 }

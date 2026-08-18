@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <chrono>
 
+#include "data_receive_result.h"
 #include "monitor_info.grpc.pb.h"
 #include "monitor_info.pb.h"
 
@@ -20,7 +21,8 @@ struct HostData {
 };
 
 // 数据接收回调函数类型
-using DataReceivedCallback = std::function<void(const monitor::proto::MonitorInfo&)>;
+using DataReceivedCallback =
+    std::function<DataReceiveResult(const monitor::proto::MonitorInfo&)>;
 
 // gRPC 服务实现类 - 接收工作者推送的监控数据
 class GrpcServerImpl : public monitor::proto::GrpcManager::Service {

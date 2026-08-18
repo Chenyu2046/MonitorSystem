@@ -13,7 +13,7 @@
 | 87.11 Gb/s、24.82 万 packets/s | TC eBPF 挂载 A/B 的最高 eBPF 轮次 | WSL2 中 `iperf3` JSON、BPF map dump、`/proc/net/dev` | eBPF 计数在高吞吐虚拟链路下可工作 | 物理网卡线速或生产环境 NIC 能力 |
 | 3 轮 RX/TX 0 偏差 | eBPF map 增量与同一 veth 的 `/proc/net/dev` 增量 | 每轮 before/after 快照 | 同一统计口径的字节一致性 | eBPF 与 iperf 应用层字节数完全相同 |
 | CPU 中位数相差 0.51 个百分点 | TC filter 未挂载/挂载 A/B 的 `mpstat` | 3 轮 A/B 的 `mpstat 1 10` | 当前受控 WSL2 流量下未观察到明显全机 CPU 差异 | eBPF 程序独占 CPU 开销为 0.51% |
-| 75 节点、10 分钟、45,000 次 | Manager -> MySQL 错峰稳定性压测 | `hard-stagger-75w-600s.csv` + MySQL 精确计数 | 中心端同步处理与写库的端到端稳定性 | 真实 Worker 采集成本、跨机器网络延迟或生产集群容量 |
+| 75 节点、10 分钟、45,000 次 | Manager -> MySQL 错峰稳定性压测 | `hard-stagger-75w-600s.csv` + MySQL 精确计数 + Manager processing_stats | 中心端异步接收、顺序处理和写库的端到端稳定性 | 真实 Worker 采集成本、跨机器网络延迟或生产集群容量 |
 | 100% 成功/精确落库 | 成功 gRPC 样本数与按 `run-id` 查询到的 MySQL 行数相等 | CSV + `server_performance` 查询 | 每条成功 gRPC 对应一条本轮持久化记录 | 断网重试、WAL 补传或 exactly-once 语义 |
 | P99 676.736 ms | 45,000 条成功请求延迟排序后的第 44,550 条 | CSV `latency_us` | 该场景下端到端调用尾延迟 | 仅 eBPF 或仅 MySQL 的延迟 |
 | Manager 8.68% CPU / 13.3 MiB | 稳定性轮次每秒 Docker stats 采样 | 运行期 `docker stats --no-stream` | 该容器/主机组合的资源占用 | 其他机器、不同 Docker 配额或单进程精确资源画像 |
@@ -56,18 +56,18 @@ veth 是内存中的虚拟网卡对，排除了物理网卡、驱动、交换机
 ### 3.1 被测路径
 
 负载发生器为每一个模拟节点创建一个 gRPC channel/stub，并以固定周期调用
-`GrpcManager::SetMonitorInfo`。Manager 接收后进入 `HostManager::OnDataReceived`，
-计算主机状态与变化率，随后调用 `WriteToMysql` 写入 MySQL。当前压测部署设置
-`MONITOR_VERBOSE_METRICS=0`，避免逐条控制台输出占用 I/O；gRPC 返回仍发生在
-`OnDataReceived` 完成之后，未改为异步确认。
+`GrpcManager::SetMonitorInfo`。Manager 接收后将数据按 Host 哈希提交到有界 shard 队列，
+由固定 worker 计算主机状态与变化率，再将 `PersistenceTask` 交给单独 DB Writer
+调用 `WriteToMysql` 写入 MySQL。当前压测部署设置 `MONITOR_VERBOSE_METRICS=0`，避免
+逐条控制台输出占用 I/O；gRPC `OK` 表示进入 shard 队列，不表示已经完成 MySQL 写入。
 
 ```text
 模拟 Worker 线程
   -> SetMonitorInfo(gRPC)
-  -> Manager::OnDataReceived
+  -> Manager shard queue / ProcessOne
   -> 评分 / 变化率计算
-  -> WriteToMysql
-  -> gRPC OK + CSV 记录延迟
+  -> PersistenceTask / DB Writer / WriteToMysql
+  -> gRPC OK + CSV 记录 accepted 延迟
 ```
 
 每条消息包含 CPU、load、内存、网络与磁盘字段，字段构造可见于
@@ -93,8 +93,8 @@ veth 是内存中的虚拟网卡对，排除了物理网卡、驱动、交换机
 
 ### 3.3 延迟、成功率和持久化口径
 
-单条延迟从 gRPC 调用前的 `steady_clock` 取样开始，到 `SetMonitorInfo` 返回结束，
-以微秒写入 CSV：
+单条 accepted 延迟从 gRPC 调用前的 `steady_clock` 取样开始，到 `SetMonitorInfo` 返回结束，
+以微秒写入 CSV。该指标只代表进入 Manager shard 队列的延迟：
 
 ```text
 latency_us = steady_clock_after_rpc - steady_clock_before_rpc
@@ -111,11 +111,13 @@ Pp = sorted_latency[index(p)]
 例如 45,000 条成功样本的 P99 索引为 `ceil(45000 × 0.99) - 1 = 44,549`，即排序后
 第 44,550 条样本（从 1 开始计数）。
 
-本项目把“端到端持久化成功”定义为以下三项同时成立：
+本项目把“端到端持久化成功”定义为以下四项同时成立：
 
 1. CSV 中该轮每条样本的 gRPC 状态为 `OK`；
 2. 成功样本数等于期望样本数；
 3. `server_performance` 中 hostname 前缀匹配本轮 `run-id` 的行数，等于成功样本数。
+4. Manager 优雅退出日志中的 `processing_stats` 满足 `accepted == processed`，且
+   `server_performance` 行数在 drain 等待窗口内追平 accepted 数。
 
 SQL 核验示例：
 
@@ -128,10 +130,10 @@ WHERE server_name LIKE 'hard-stagger-75w-600s-worker-%';
 这不是消息队列语义测试：Worker 当前没有 WAL、补发队列或幂等序列号，故不宣称
 at-least-once 或 exactly-once。
 
-`run-windows-benchmark.ps1` 的通用自动检查使用“落库行数不少于成功样本数”，用于
-快速发现明显落库缺失；本文列出的 75 节点正式结果在脚本外额外执行了上面的前缀 SQL，
-并确认行数**严格等于** 45,000。因此，复跑正式简历数据时应保留严格相等的人工 SQL
-核验，而不是只依赖通用脚本的下限检查。
+`run-windows-benchmark.ps1` 会在停止 Manager 前等待按 run-id 的落库行数追平 accepted
+数，并在优雅退出后校验 `processing_stats`。本文列出的正式结果仍应额外执行上面的
+前缀 SQL，并确认行数**严格等于**预期样本数；脚本的“行数不少于”检查只用于快速发现
+明显落库缺失。
 
 ### 3.4 75 节点、10 分钟稳定性实验
 

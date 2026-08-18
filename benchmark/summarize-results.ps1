@@ -15,6 +15,7 @@ function Get-Percentile([double]$Percentile) {
 [pscustomobject]@{
     csv = Split-Path -Leaf $CsvPath
     samples = $Rows.Count
+    accepted = $Success.Count
     success = $Success.Count
     success_rate_percent = [Math]::Round(100 * $Success.Count / $Rows.Count, 2)
     p50_us = Get-Percentile 0.50

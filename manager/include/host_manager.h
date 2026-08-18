@@ -13,17 +13,27 @@
 #include <unordered_set>
 #include <vector>
 
+#include "data_receive_result.h"
 #include "diagnostics/diagnostic_persistence.h"
 #include "diagnostics/incident_store.h"
+#include "host_shard_executor.h"
+#include "persistence_history.h"
+#include "persistence_task.h"
+#include "persistence_worker.h"
 
 #include "monitor_info.pb.h"
 
 namespace monitor {
 
-struct HostScore {
-  monitor::proto::MonitorInfo info;
-  double score;
-  std::chrono::system_clock::time_point timestamp;
+struct PerfSample {
+  float cpu_percent = 0, usr_percent = 0, system_percent = 0;
+  float nice_percent = 0, idle_percent = 0, io_wait_percent = 0;
+  float irq_percent = 0, soft_irq_percent = 0;
+  float steal_percent = 0, guest_percent = 0, guest_nice_percent = 0;
+  float load_avg_1 = 0, load_avg_3 = 0, load_avg_15 = 0;
+  float mem_used_percent = 0, mem_total = 0, mem_free = 0, mem_avail = 0;
+  float net_in_rate = 0, net_out_rate = 0;
+  float score = 0;
 };
 
 class DiagnosticPersistenceState {
@@ -69,8 +79,8 @@ class HostManager {
   void Start();
   void Stop();
 
-  // 接收工作者推送的数据（由 gRPC 服务调用）
-  void OnDataReceived(const monitor::proto::MonitorInfo& info);
+  // 校验并将工作者数据提交到对应 Host 分片。
+  DataReceiveResult Submit(const monitor::proto::MonitorInfo& info);
 
   // 获取所有主机评分
   std::unordered_map<std::string, HostScore> GetAllHostScores();
@@ -96,6 +106,9 @@ class HostManager {
 
  private:
   void ProcessLoop();
+  void ProcessOne(std::size_t shard_id, const std::string& host_name,
+                  const monitor::proto::MonitorInfo& info);
+  void PersistTask(PersistenceTask task);
   double CalcScore(const monitor::proto::MonitorInfo& info);
   void WriteToMysql(const std::string& host_name, const HostScore& host_score,
                     double net_in_rate, double net_out_rate,
@@ -113,10 +126,16 @@ class HostManager {
 
   std::unordered_map<std::string, HostScore> host_scores_;
   std::mutex mtx_;
-  std::mutex processing_mtx_;
   std::condition_variable process_condition_;
   std::atomic<bool> running_;
   std::unique_ptr<std::thread> thread_;
+  std::unique_ptr<HostShardExecutor> shard_executor_;
+  std::unique_ptr<PersistenceWorker> persistence_worker_;
+  std::vector<std::unordered_map<std::string, PerfSample>> shard_perf_samples_;
+  std::atomic<std::uint64_t> accepted_count_{0};
+  std::atomic<std::uint64_t> processed_count_{0};
+  std::atomic<std::uint64_t> persistence_task_count_{0};
+  PersistenceHistory persistence_history_;
   diagnostics::EvidenceBuilder evidence_builder_;
   diagnostics::RootCauseEngine root_cause_engine_;
   diagnostics::IncidentStore incident_store_;
