@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -35,6 +36,22 @@ struct PerfSample {
   float net_in_rate = 0, net_out_rate = 0;
   float score = 0;
 };
+
+struct CpuOverview {
+  float cpu_percent = 0;
+  float usr_percent = 0;
+  float system_percent = 0;
+  float nice_percent = 0;
+  float idle_percent = 0;
+  float io_wait_percent = 0;
+  float irq_percent = 0;
+  float soft_irq_percent = 0;
+  std::size_t cpu_count = 0;
+  std::string peak_core_name;
+  float peak_cpu_percent = 0;
+};
+
+CpuOverview BuildCpuOverview(const monitor::proto::MonitorInfo& info);
 
 class DiagnosticPersistenceState {
  public:

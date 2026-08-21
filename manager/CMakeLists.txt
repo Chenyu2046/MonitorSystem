@@ -85,4 +85,21 @@ if(BUILD_TESTING)
     )
     target_link_libraries(manager_concurrency_test PRIVATE monitor_proto)
     add_test(NAME manager_concurrency_test COMMAND manager_concurrency_test)
+
+    add_executable(manager_cpu_overview_test
+        tests/cpu_overview_test.cpp
+        src/host_manager.cpp
+        src/host_shard_executor.cpp
+        src/persistence_worker.cpp
+        src/mysql_timeout_config.cpp
+        src/diagnostics/evidence_builder.cpp
+        src/diagnostics/root_cause_engine.cpp
+        src/diagnostics/incident_store.cpp
+        src/diagnostics/diagnostic_persistence.cpp
+    )
+    target_include_directories(manager_cpu_overview_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/manager/include
+    )
+    target_link_libraries(manager_cpu_overview_test PRIVATE monitor_proto)
+    add_test(NAME manager_cpu_overview_test COMMAND manager_cpu_overview_test)
 endif()

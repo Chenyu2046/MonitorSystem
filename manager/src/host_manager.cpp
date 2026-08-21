@@ -89,6 +89,42 @@ std::string HostNameForInfo(const monitor::proto::MonitorInfo& info) {
 
 }  // namespace
 
+CpuOverview BuildCpuOverview(const monitor::proto::MonitorInfo& info) {
+  CpuOverview overview;
+  for (const auto& cpu : info.cpu_stat()) {
+    overview.cpu_percent += cpu.cpu_percent();
+    overview.usr_percent += cpu.usr_percent();
+    overview.system_percent += cpu.system_percent();
+    overview.nice_percent += cpu.nice_percent();
+    overview.idle_percent += cpu.idle_percent();
+    overview.io_wait_percent += cpu.io_wait_percent();
+    overview.irq_percent += cpu.irq_percent();
+    overview.soft_irq_percent += cpu.soft_irq_percent();
+
+    if (overview.cpu_count == 0 ||
+        cpu.cpu_percent() > overview.peak_cpu_percent) {
+      overview.peak_core_name = cpu.cpu_name();
+      overview.peak_cpu_percent = cpu.cpu_percent();
+    }
+    ++overview.cpu_count;
+  }
+
+  if (overview.cpu_count == 0) {
+    return overview;
+  }
+
+  const float divisor = static_cast<float>(overview.cpu_count);
+  overview.cpu_percent /= divisor;
+  overview.usr_percent /= divisor;
+  overview.system_percent /= divisor;
+  overview.nice_percent /= divisor;
+  overview.idle_percent /= divisor;
+  overview.io_wait_percent /= divisor;
+  overview.irq_percent /= divisor;
+  overview.soft_irq_percent /= divisor;
+  return overview;
+}
+
 #ifdef ENABLE_MYSQL
 namespace {
 const char* MYSQL_HOST = "127.0.0.1";
@@ -309,17 +345,15 @@ void HostManager::ProcessOne(
 
   // 当前采样
   PerfSample curr;
-  if (info.cpu_stat_size() > 0) {
-    const auto& cpu = info.cpu_stat(0);
-    curr.cpu_percent = cpu.cpu_percent();
-    curr.usr_percent = cpu.usr_percent();
-    curr.system_percent = cpu.system_percent();
-    curr.nice_percent = cpu.nice_percent();
-    curr.idle_percent = cpu.idle_percent();
-    curr.io_wait_percent = cpu.io_wait_percent();
-    curr.irq_percent = cpu.irq_percent();
-    curr.soft_irq_percent = cpu.soft_irq_percent();
-  }
+  const CpuOverview cpu = BuildCpuOverview(info);
+  curr.cpu_percent = cpu.cpu_percent;
+  curr.usr_percent = cpu.usr_percent;
+  curr.system_percent = cpu.system_percent;
+  curr.nice_percent = cpu.nice_percent;
+  curr.idle_percent = cpu.idle_percent;
+  curr.io_wait_percent = cpu.io_wait_percent;
+  curr.irq_percent = cpu.irq_percent;
+  curr.soft_irq_percent = cpu.soft_irq_percent;
   if (info.has_cpu_load()) {
     curr.load_avg_1 = info.cpu_load().load_avg_1();
     curr.load_avg_3 = info.cpu_load().load_avg_3();
@@ -404,7 +438,7 @@ void HostManager::ProcessOne(
 
     // CPU 详细信息
     std::cout << "\n--- CPU ---" << std::endl;
-    std::cout << "  Usage: " << curr.cpu_percent << "%, "
+    std::cout << "  Host CPU: " << curr.cpu_percent << "%, "
               << "User: " << curr.usr_percent << "%, "
               << "System: " << curr.system_percent << "%" << std::endl;
     std::cout << "  Nice: " << curr.nice_percent << "%, "
@@ -412,6 +446,10 @@ void HostManager::ProcessOne(
               << "IOWait: " << curr.io_wait_percent << "%" << std::endl;
     std::cout << "  IRQ: " << curr.irq_percent << "%, "
               << "SoftIRQ: " << curr.soft_irq_percent << "%" << std::endl;
+    if (cpu.cpu_count > 0) {
+      std::cout << "  Peak Core: " << cpu.peak_core_name << " at "
+                << cpu.peak_cpu_percent << "%" << std::endl;
+    }
     std::cout << "  Load: " << curr.load_avg_1 << "/" << curr.load_avg_3 << "/"
               << curr.load_avg_15 << std::endl;
 
@@ -570,9 +608,10 @@ double HostManager::CalcScore(const monitor::proto::MonitorInfo& info) {
   double net_recv_rate = 0, net_send_rate = 0, disk_util = 0;
   int cpu_cores = 1;
 
-  if (info.cpu_stat_size() > 0) {
-    cpu_percent = info.cpu_stat(0).cpu_percent();
-    cpu_cores = info.cpu_stat_size() - 1;
+  const CpuOverview cpu = BuildCpuOverview(info);
+  if (cpu.cpu_count > 0) {
+    cpu_percent = cpu.cpu_percent;
+    cpu_cores = static_cast<int>(cpu.cpu_count);
     if (cpu_cores < 1) cpu_cores = 1;
   }
   if (info.has_cpu_load()) {
@@ -658,17 +697,15 @@ void HostManager::WriteToMysql(
       send_rate = info.net_info(0).send_rate() / 1024.0;
       rcv_rate = info.net_info(0).rcv_rate() / 1024.0;
     }
-    if (info.cpu_stat_size() > 0) {
-      const auto& cpu = info.cpu_stat(0);
-      cpu_percent = cpu.cpu_percent();
-      usr_percent = cpu.usr_percent();
-      system_percent = cpu.system_percent();
-      nice_percent = cpu.nice_percent();
-      idle_percent = cpu.idle_percent();
-      io_wait_percent = cpu.io_wait_percent();
-      irq_percent = cpu.irq_percent();
-      soft_irq_percent = cpu.soft_irq_percent();
-    }
+    const CpuOverview cpu = BuildCpuOverview(info);
+    cpu_percent = cpu.cpu_percent;
+    usr_percent = cpu.usr_percent;
+    system_percent = cpu.system_percent;
+    nice_percent = cpu.nice_percent;
+    idle_percent = cpu.idle_percent;
+    io_wait_percent = cpu.io_wait_percent;
+    irq_percent = cpu.irq_percent;
+    soft_irq_percent = cpu.soft_irq_percent;
     if (info.has_cpu_load()) {
       load_avg_1 = info.cpu_load().load_avg_1();
       load_avg_3 = info.cpu_load().load_avg_3();

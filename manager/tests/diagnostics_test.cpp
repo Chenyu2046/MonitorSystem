@@ -31,6 +31,22 @@ monitor::proto::MonitorInfo MakeCpuProfileInfo() {
   return info;
 }
 
+void TestCpuEvidenceUsesPeakCore() {
+  monitor::proto::MonitorInfo info;
+  info.add_cpu_stat()->set_cpu_percent(20.0);
+  info.add_cpu_stat()->set_cpu_percent(95.0);
+
+  monitor::diagnostics::EvidenceBuilder builder;
+  const auto evidence = builder.Build(info, std::chrono::system_clock::now());
+  for (const auto& item : evidence) {
+    if (item.type == monitor::diagnostics::EvidenceType::kCpuUsage) {
+      assert(item.value == 95.0);
+      return;
+    }
+  }
+  assert(false);
+}
+
 void TestCpuRuleRequiresMultipleSignals() {
   monitor::diagnostics::EvidenceBuilder builder;
   monitor::diagnostics::RootCauseEngine engine;
@@ -280,6 +296,7 @@ void TestMysqlTimeoutParsing() {
 }  // namespace
 
 int main() {
+  TestCpuEvidenceUsesPeakCore();
   TestCpuRuleRequiresMultipleSignals();
   TestDiskRuleAndIncidentStore();
   TestNetworkEvidenceRequiresAllSignals();

@@ -71,6 +71,15 @@ void TestAnomalyDetector() {
   assert(cpu.should_diagnose);
   assert(cpu.should_profile);
 
+  auto hot_core_info = MakeBaseInfo();
+  hot_core_info.mutable_cpu_stat(0)->set_cpu_percent(20.0);
+  auto* hot_core = hot_core_info.add_cpu_stat();
+  hot_core->set_cpu_percent(95.0);
+  hot_core_info.mutable_cpu_load()->set_load_avg_1(8.0);
+  const auto hot_core_result = detector.Evaluate(hot_core_info);
+  assert(hot_core_result.should_diagnose);
+  assert(hot_core_result.should_profile);
+
   auto disk_info = MakeBaseInfo();
   disk_info.mutable_cpu_stat(0)->set_io_wait_percent(30.0);
   disk_info.mutable_disk_info(0)->set_util_percent(95.0);
