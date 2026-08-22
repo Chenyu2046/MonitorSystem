@@ -3,9 +3,9 @@
  * @file net_stats.bpf.c
  * @brief 基于 TC ingress/egress hook 的接口级网络流量统计程序。
  *
- * TC 位于网络协议栈 L2/L3 边界：ingress 统计进入协议栈的包，egress
- * 统计离开协议栈的包。per-CPU map 以 ifindex 为 key，用户态负责把每
- * 个 CPU 的 value 聚合，再计算包/字节速率；程序始终返回 TC_ACT_OK，
+ * 程序挂载在 Linux TC/qdisc ingress/egress 路径，对经过 hook 的 skb 做
+ * 接口级流量统计。per-CPU map 使用 skb->ifindex 作为 key，用户态负责
+ * 把每个 CPU 的 value 聚合，再计算包/字节速率；程序始终返回 TC_ACT_OK，
  * 不改变数据包转发行为。
  *
  * 当前 map 只提供接口级普通监控；TCP retransmission 和任务级诊断由
@@ -80,8 +80,8 @@ static __always_inline void update_stats(__u32 ifindex, __u32 len, bool is_rx)
 /*
  * TC Ingress Hook - 入方向流量统计
  * 
- * 当数据包从网卡进入协议栈时触发
- * ctx->ingress_ifindex 包含入口网卡的 ifindex
+ * 当数据包经过 TC ingress hook 时触发；当前实现使用 skb->ifindex
+ * 作为入口网卡的 map key。
  */
 SEC("tc/ingress")
 int tc_ingress(struct __sk_buff *skb)

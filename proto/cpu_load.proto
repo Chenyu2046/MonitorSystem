@@ -1,8 +1,8 @@
 syntax = "proto3";
 package monitor.proto;
 
-// Worker 主机级 load average；1/3/15 分钟窗口用于调度压力观察，
-// 不等同于逐核 CPU busy 百分比。
+// Worker 主机级 load average；Linux /proc/loadavg 的窗口实际为 1/5/15 分钟。
+// load_avg_3 保留历史字段名，但实际对应 5 分钟窗口；它不等同于逐核 CPU busy 百分比。
 message CpuLoad {
     float load_avg_1 = 1;
     float load_avg_3 = 2;
