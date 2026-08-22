@@ -3,7 +3,9 @@
 本文解释简历中出现的性能数字是如何得到的，包括测试对象、输入负载、成功判定、
 统计公式、复跑命令和不能外推的边界。结果汇总见
 [`TEST_RESULTS_2026-08-12.md`](TEST_RESULTS_2026-08-12.md)，原始延迟样本保存在
-`benchmark/results/`。
+历史临时结果保存在 `benchmark/results/`；Current Sharded smoke 的可提交证据保存在
+`benchmark/evidence/manager-sharded-10host-20260818/`；本轮 Legacy/Current A/B 证据保存在
+`benchmark/evidence/manager-concurrency-ab-20260818/`。
 
 ## 1. 数字与实验的对应关系
 
@@ -13,10 +15,37 @@
 | 87.11 Gb/s、24.82 万 packets/s | TC eBPF 挂载 A/B 的最高 eBPF 轮次 | WSL2 中 `iperf3` JSON、BPF map dump、`/proc/net/dev` | eBPF 计数在高吞吐虚拟链路下可工作 | 物理网卡线速或生产环境 NIC 能力 |
 | 3 轮 RX/TX 0 偏差 | eBPF map 增量与同一 veth 的 `/proc/net/dev` 增量 | 每轮 before/after 快照 | 同一统计口径的字节一致性 | eBPF 与 iperf 应用层字节数完全相同 |
 | CPU 中位数相差 0.51 个百分点 | TC filter 未挂载/挂载 A/B 的 `mpstat` | 3 轮 A/B 的 `mpstat 1 10` | 当前受控 WSL2 流量下未观察到明显全机 CPU 差异 | eBPF 程序独占 CPU 开销为 0.51% |
-| 75 节点、10 分钟、45,000 次 | Manager -> MySQL 错峰稳定性压测 | `hard-stagger-75w-600s.csv` + MySQL 精确计数 | 中心端同步处理与写库的端到端稳定性 | 真实 Worker 采集成本、跨机器网络延迟或生产集群容量 |
-| 100% 成功/精确落库 | 成功 gRPC 样本数与按 `run-id` 查询到的 MySQL 行数相等 | CSV + `server_performance` 查询 | 每条成功 gRPC 对应一条本轮持久化记录 | 断网重试、WAL 补传或 exactly-once 语义 |
-| P99 676.736 ms | 45,000 条成功请求延迟排序后的第 44,550 条 | CSV `latency_us` | 该场景下端到端调用尾延迟 | 仅 eBPF 或仅 MySQL 的延迟 |
-| Manager 8.68% CPU / 13.3 MiB | 稳定性轮次每秒 Docker stats 采样 | 运行期 `docker stats --no-stream` | 该容器/主机组合的资源占用 | 其他机器、不同 Docker 配额或单进程精确资源画像 |
+| Legacy 75 节点、10 分钟、45,000 次 | Legacy Manager 同步 MySQL 错峰稳定性压测 | `hard-stagger-75w-600s.csv` + MySQL 精确计数 + Docker stats | 旧架构历史稳定性 | 当前 Sharded Manager 的容量、延迟或生产集群能力 |
+| Legacy 100% 成功/精确落库 | Legacy 成功 gRPC 样本数与按 `run-id` 查询到的 MySQL 行数相等 | CSV + `server_performance` 查询 | 旧架构该轮持久化结果 | 当前异步 ACK、WAL、补传或 exactly-once 语义 |
+| Legacy synchronous P99 676.736 ms | Legacy 45,000 条同步 RPC 延迟排序后的第 44,550 条 | CSV `latency_us` | 旧同步 Manager 的 RPC -> MySQL 端到端尾延迟 | 当前 T0/T1/T2 任一阶段延迟 |
+| Legacy Manager 8.68% CPU / 13.3 MiB | Legacy 稳定性轮次 Docker stats 采样 | 运行期 `docker stats --no-stream` | 旧架构该容器/主机组合的资源占用 | 当前 Sharded Manager 或其他机器资源画像 |
+
+### 1.1 Benchmark evidence ownership
+
+本文件同时记录两套不可混淆的证据。
+
+#### Legacy Manager Baseline
+
+- 架构版本：全局串行 `HostManager` + 同步 `WriteToMysql`，RPC 返回前等待 MySQL。
+- 数据来源：历史 `benchmark/results/*.csv`、历史 SQL 计数、历史 Docker stats。
+- 测试时间：2026-08-12 的历史测试记录。
+- 保留范围：10 Host/300 reports、25/30/35/50/60/65/70/75 reports/s、75 Host/45,000 reports、100 Host、300 Host 和 500 Host aborted。
+- 历史 `676.736 ms` 只能标记为 `Legacy synchronous RPC P99`，不得标记为 current accepted/T0 P99。
+
+#### Current Sharded Manager Baseline
+
+- 本轮 Current A/B HEAD：`dcdf9791c1893eaecc0b4b993abbe7a248c4a8fb`，分支为
+  `codex/kernscope-manager-concurrency`。
+- 当前链路：gRPC -> Shard Queue -> Shard Worker -> Persistence Queue -> Single DB Writer -> MySQL。
+- 本轮以该 HEAD 重新执行了 Legacy/Current A/B 矩阵，并保存每轮 raw CSV、资源采样、Manager
+  stats、loadgen log 和 SHA-256 manifest；汇总与边界见
+  `benchmark/evidence/manager-concurrency-ab-20260818/README.md`。
+- 当前已验证的是本报告列出的 Windows Docker 合成负载；T1/T2 逐请求分位延迟、物理机/生产
+  集群容量和可靠投递语义仍必须标记 `NOT VERIFIED`。
+
+数据归属规则：`Legacy synchronous RPC latency` 不等于 `Current T0 accepted latency`，也不等于
+`Current T1 processed latency` 或 `Current T2 persisted latency`。只有 workload、duration、arrival
+model、机器、MySQL 和资源配置全部一致时，才允许做 Before/After 比较。
 
 ## 2. 公共环境与原则
 
@@ -35,7 +64,7 @@
 压测客户端是项目内的 C++ 程序
 [`push_benchmark.cpp`](src/push_benchmark.cpp)。它构造合法的 `MonitorInfo`，但不调用
 真实 Worker 的 `/proc`、内核模块或 eBPF 采集。因此 Manager 数据用于证明**中心端
-接收、计算、同步持久化**能力，不能用于证明 Worker 采集性能。
+接收、计算、异步持久化**能力，不能用于证明 Worker 采集性能。
 
 ### 2.2 WSL2 的 eBPF 测试环境
 
@@ -56,18 +85,18 @@ veth 是内存中的虚拟网卡对，排除了物理网卡、驱动、交换机
 ### 3.1 被测路径
 
 负载发生器为每一个模拟节点创建一个 gRPC channel/stub，并以固定周期调用
-`GrpcManager::SetMonitorInfo`。Manager 接收后进入 `HostManager::OnDataReceived`，
-计算主机状态与变化率，随后调用 `WriteToMysql` 写入 MySQL。当前压测部署设置
-`MONITOR_VERBOSE_METRICS=0`，避免逐条控制台输出占用 I/O；gRPC 返回仍发生在
-`OnDataReceived` 完成之后，未改为异步确认。
+`GrpcManager::SetMonitorInfo`。Manager 接收后将数据按 Host 哈希提交到有界 shard 队列，
+由固定 worker 计算主机状态与变化率，再将 `PersistenceTask` 交给单独 DB Writer
+调用 `WriteToMysql` 写入 MySQL。当前压测部署设置 `MONITOR_VERBOSE_METRICS=0`，避免
+逐条控制台输出占用 I/O；gRPC `OK` 表示进入 shard 队列，不表示已经完成 MySQL 写入。
 
 ```text
 模拟 Worker 线程
   -> SetMonitorInfo(gRPC)
-  -> Manager::OnDataReceived
+  -> Manager shard queue / ProcessOne
   -> 评分 / 变化率计算
-  -> WriteToMysql
-  -> gRPC OK + CSV 记录延迟
+  -> PersistenceTask / DB Writer / WriteToMysql
+  -> gRPC OK + CSV 记录 accepted 延迟
 ```
 
 每条消息包含 CPU、load、内存、网络与磁盘字段，字段构造可见于
@@ -91,16 +120,25 @@ veth 是内存中的虚拟网卡对，排除了物理网卡、驱动、交换机
 错峰模型与整秒突发模型不能混为同一基线。前者用于稳定部署下的持续能力，后者用于
 定位集中突发时的排队边界。
 
-### 3.3 延迟、成功率和持久化口径
+### 3.3 三阶段延迟、成功率和持久化口径
 
-单条延迟从 gRPC 调用前的 `steady_clock` 取样开始，到 `SetMonitorInfo` 返回结束，
-以微秒写入 CSV：
+本架构必须把三个阶段分开记录，不能把新的 accepted RPC 延迟当成旧同步架构的
+端到端延迟：
+
+| 阶段 | 定义 | 当前 benchmark 证据 |
+| --- | --- | --- |
+| T0 accepted latency | client RPC 调用 -> Manager 接受并进入 shard queue | CSV `latency_us`，脚本输出 `accepted_p50/p95/p99_us` |
+| T1 processed latency | ingress `received_at/enqueued_at` -> `ProcessOne` 完成并接受 PersistenceTask | Manager `processing_stats` 的 processed 计数和 queue delay 汇总；逐条 T1 延迟当前 NOT VERIFIED |
+| T2 persisted latency | ingress -> MySQL 对应 `server_performance` 行可查询 | 按 run-id 的精确行数和 drain 结果；逐条 T2 P50/P95/P99 当前 NOT VERIFIED |
+
+单条 accepted 延迟从 gRPC 调用前的 `steady_clock` 取样开始，到 `SetMonitorInfo` 返回结束，
+以微秒写入 CSV。该指标只代表 T0 接收层延迟，不代表 T1/T2：
 
 ```text
 latency_us = steady_clock_after_rpc - steady_clock_before_rpc
 ```
 
-只有 gRPC `status.ok()` 的样本参与 P50/P95/P99。对排序后的成功延迟数组（长度为
+只有 gRPC `status.ok()` 的样本参与 T0 P50/P95/P99。对排序后的成功延迟数组（长度为
 `N`），分位点使用：
 
 ```text
@@ -111,11 +149,14 @@ Pp = sorted_latency[index(p)]
 例如 45,000 条成功样本的 P99 索引为 `ceil(45000 × 0.99) - 1 = 44,549`，即排序后
 第 44,550 条样本（从 1 开始计数）。
 
-本项目把“端到端持久化成功”定义为以下三项同时成立：
+本项目把“该轮持久化稳定完成”定义为以下四项同时成立：
 
 1. CSV 中该轮每条样本的 gRPC 状态为 `OK`；
 2. 成功样本数等于期望样本数；
 3. `server_performance` 中 hostname 前缀匹配本轮 `run-id` 的行数，等于成功样本数。
+4. Manager 优雅退出日志中的 `processing_stats` 满足
+   `accepted == processed == persistence_tasks` 且 `persistence_rejected == 0`，并且
+   `server_performance` 行数在 drain 等待窗口内严格追平 accepted 数。
 
 SQL 核验示例：
 
@@ -128,12 +169,17 @@ WHERE server_name LIKE 'hard-stagger-75w-600s-worker-%';
 这不是消息队列语义测试：Worker 当前没有 WAL、补发队列或幂等序列号，故不宣称
 at-least-once 或 exactly-once。
 
-`run-windows-benchmark.ps1` 的通用自动检查使用“落库行数不少于成功样本数”，用于
-快速发现明显落库缺失；本文列出的 75 节点正式结果在脚本外额外执行了上面的前缀 SQL，
-并确认行数**严格等于** 45,000。因此，复跑正式简历数据时应保留严格相等的人工 SQL
-核验，而不是只依赖通用脚本的下限检查。
+`run-windows-benchmark.ps1` 会在停止 Manager 前等待按 run-id 的落库行数严格等于
+accepted 数，并在优雅退出后校验 `accepted == processed == persistence_tasks` 且
+`persistence_rejected == 0`。脚本同时输出 `accepted / processed / persisted /
+queue_full / persistence_rejected` 阶段计数和 queue delay/queue peak 统计。逐条 T1/T2
+延迟没有被当前 CSV 或 SQL 直接关联，因此在补充关联 ID/时间采样前必须标记
+`NOT VERIFIED`。
 
-### 3.4 75 节点、10 分钟稳定性实验
+### 3.4 Legacy Manager Baseline：75 节点、10 分钟历史稳定性实验
+
+本节所有结果来自旧的全局串行 + 同步 MySQL Manager，属于 Legacy Baseline，不能归因于
+当前 Host Sharding 或 Persistence Worker。
 
 #### 输入
 
@@ -195,23 +241,70 @@ docker stats --no-stream --format '{{.CPUPerc}}|{{.MemUsage}}' `
 | --- | --- |
 | CSV 样本 / gRPC 成功 | 45,000 / 45,000 |
 | MySQL 精确落库 | 45,000 |
-| P50 / P95 / P99 | 13.119 / 459.494 / 676.736 ms |
+| Legacy synchronous RPC P50 / P95 / P99 | 13.119 / 459.494 / 676.736 ms |
 | Manager 最终状态 | `running` |
 | MySQL 最终状态 | `healthy` |
 
-### 3.5 集中突发容量边界
+### 3.5 Legacy Manager Baseline：集中突发历史容量扫描
 
-100 和 300 节点测试保持 1 s 周期、60 s 时长，但不启用 `--stagger-start`。它们的
-作用是验证“所有节点同一时刻到达”时全局串行计算和同步 MySQL 写入的排队效应：
+100 和 300 节点测试保持 1 s 周期、60 s 时长，但不启用 `--stagger-start`。它们来自旧的
+全局串行 + 同步 MySQL Manager，不能解释为当前 shard worker 或单 DB Writer 的容量边界：
 
-| 场景 | 成功 / 落库 | P99 | 解释 |
+| Legacy 场景 | 成功 / 落库 | Legacy synchronous P99 | 解释 |
 | --- | --- | --- | --- |
 | 100 节点整秒突发 | 6,000 / 6,000 | 1,300.236 ms | 未丢失，但已经越过 1 s 尾延迟目标 |
 | 300 节点整秒突发 | 18,000 / 18,000 | 3,883.510 ms | 排队显著，不能称为稳定档 |
 | 500 节点整秒突发 | 中止 | 无完整终态 | 8 分钟内未完成，停止前写入 17,521 行，不纳入结果 |
 
 500 节点中止后，Manager 继续处理在途工作；后续独立稳定性轮次前重建 Manager。
-因此“中止后未立即恢复”是当前同步串行设计的过载现象记录，不是 500 节点成功率。
+因此“中止后未立即恢复”是该过载场景的排水边界记录，不是 500 节点成功率。
+
+### 3.6 Current Sharded Manager Baseline
+
+本节只记录以当前 HEAD 重新运行得到的结果。当前异步 ACK 只代表 T0 accepted，
+`processed` 代表业务处理完成且 PersistenceTask 被 Persistence Worker 接受，
+`persistence_tasks` 代表任务进入单 DB Writer，`persisted` 代表按 run-id 查询到的 MySQL 行。
+没有逐条 correlation ID，因此不得从本节数据推导 T1/T2 P50/P95/P99。
+
+#### Historical Current Sharded Smoke Baseline (7ff8d142)
+
+| 项目 | 当前结果 |
+| --- | --- |
+| historical smoke commit | `7ff8d142e5699e68c51f8402adeb17cd00414d94` |
+| workload | 10 Host、30 s、1 s/report/Host、默认整秒到达 |
+| evidence | `benchmark/evidence/manager-sharded-10host-20260818/` |
+| raw CSV | `benchmark/evidence/manager-sharded-10host-20260818/result.csv` |
+| CSV SHA-256 | `B92BAED901A15B977053CC2E609DE37729D758E71EC0A9A8D4480A3EC902683E` |
+| accepted / processed / persistence_tasks / persisted | 300 / 300 / 300 / 300 |
+| queue_full / persistence_rejected | 0 / 0 |
+| accepted P50 / P95 / P99 | 1,451 / 2,171 / 7,096 us |
+| queue delay mean / max | 80.14 / 395 us |
+| max shard queue depth / bytes | 2 / 852 |
+| max persistence queue depth / bytes | 9 / 6,419 |
+| Manager CPU / RSS | `NOT VERIFIED` |
+
+这是一组历史 smoke 记录，不是本轮 `dcdf9791` A/B 的 Current Baseline，也不是
+1/10/50/75/100 Host 正式容量矩阵。正式 Current A/B 结果以
+`benchmark/evidence/manager-concurrency-ab-20260818/` 为准。
+
+#### Current Sharded Manager Legacy/Current A/B Evidence (dcdf9791)
+
+本轮在同一 Windows Docker/MySQL 环境中分别运行 Legacy commit
+`5c29c4a452a095b77c5e46f5b9d25c7629e6461c` 与 Current commit
+`dcdf9791c1893eaecc0b4b993abbe7a248c4a8fb`。错峰矩阵覆盖 1/10/25/50/75/100 Host，
+整秒突发矩阵覆盖 10/25/50/75/100/150/200 Host；10/50/75/100 Host 的关键档位至少
+执行 3 次。75 Host 另有 600 s 长稳定性轮次。
+
+Current 错峰 60 s 的有效 PASS 结果在 100 Host 为 3/3，Legacy 为 3/3；中位数总完成时间
+分别为 69.490 s 与 78.698 s，Current 比 Legacy 低 11.70%，持久化吞吐比为 1.133x。
+Current 整秒突发在 100 Host 为 3/3；150 Host 出现 902 次 `queue_full`，200 Host 出现
+3,534 次 `queue_full`，均未出现 `persistence_rejected`。Current 75 Host、600 s 错峰
+轮次完成 45,000/45,000/45,000 accepted/processed/persisted，accepted P99 为 1,403 us，
+queue delay mean/max 为 74.07/3,646 us。
+
+这些结果只支持同负载下的总完成时间、精确落库数、持久化吞吐、容量边界和资源样本比较。
+Current accepted P99 不得与 Legacy synchronous RPC P99 直接比较；T1/T2 逐请求 P50/P95/P99
+仍为 `NOT VERIFIED`。完整汇总、失败样本和每轮 SHA-256 见上述 README 与 manifest。
 
 ## 4. TC eBPF 网络采集 A/B 测试
 
@@ -363,9 +456,10 @@ ip netns del ebpfbench-ns
 > 3 轮 A/B 压测中，最高覆盖 87.11 Gb/s、24.82 万 packets/s，eBPF 聚合值与
 > `/proc/net/dev` 的 RX/TX 字节增量均为 0 偏差。
 
-> 在 75 节点、1s 周期、10 分钟端到端稳定性压测中，完成 45,000 次
-> `gRPC -> Manager -> MySQL` 同步持久化，成功率与精确落库率均为 100%，P99 为
-> 676.7ms；Manager 平均 CPU 8.68%、峰值内存 13.3MiB。
+> Legacy Manager 在 75 节点、1s 周期、10 分钟历史稳定性压测中完成 45,000 次
+> `gRPC -> Manager -> MySQL` 同步持久化，成功率与精确落库率均为 100%；676.7ms 是
+> Legacy synchronous RPC P99，不是当前 Sharded Manager 的 T0/T1/T2 延迟。该数字不能
+> 用于描述当前并发架构。
 
 不可写：
 
@@ -374,6 +468,9 @@ ip netns del ebpfbench-ns
 - “网卡性能达到 87.11 Gb/s”：该值来自 WSL2 veth；
 - “系统支持 300 节点稳定运行”：300 节点整秒突发的 P99 是 3.88 s；
 - “45,000 条数据 exactly-once”：测试只证明该轮成功请求与落库行数相等。
+- “新版 accepted P99 比旧版同步 RPC P99 降低 X%”：两者阶段定义不同，不能直接比较；
+- “T1/T2 P50/P95/P99”：当前 benchmark 未逐条关联处理完成和 DB 完成时间，必须标记
+  `NOT VERIFIED`。
 
 ## 6. 复跑检查清单
 

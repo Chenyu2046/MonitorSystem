@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+<defs>
+  <linearGradient id="dbg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#07111f"/><stop offset="1" stop-color="#0d1b2a"/></linearGradient>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#000" flood-opacity="0.35"/></filter>
+  <style>
+    .mono{font-family:JetBrains Mono,Consolas,Menlo,monospace}
+    .title{font:700 34px Inter,Segoe UI,Arial,sans-serif;fill:#f8fafc}
+    .sub{font:400 18px Inter,Segoe UI,Arial,sans-serif;fill:#94a3b8}
+    .h{font:700 18px Inter,Segoe UI,Arial,sans-serif;fill:#e2e8f0}
+    .v{font:700 23px Inter,Segoe UI,Arial,sans-serif;fill:#f8fafc}
+    .small{font:500 15px Inter,Segoe UI,Arial,sans-serif;fill:#94a3b8}
+    .e{font:600 17px JetBrains Mono,Consolas,monospace;fill:#e2e8f0}
+    .muted{font:500 15px JetBrains Mono,Consolas,monospace;fill:#94a3b8}
+  </style>
+</defs>
+<rect width="1600" height="900" rx="26" fill="url(#dbg)"/>
+<rect x="70" y="60" width="1460" height="780" rx="24" fill="#0b1220" stroke="#243244" stroke-width="2" filter="url(#shadow)"/>
+
+<!-- terminal chrome -->
+<circle cx="110" cy="100" r="8" fill="#ef4444"/><circle cx="136" cy="100" r="8" fill="#f59e0b"/><circle cx="162" cy="100" r="8" fill="#22c55e"/>
+<text x="200" y="108" class="small mono">kernscope / diagnostic incident</text>
+<line x1="90" y1="130" x2="1510" y2="130" stroke="#1f2b3a"/>
+
+<text x="110" y="185" class="title">DISK_IO_SATURATION</text>
+<text x="110" y="218" class="sub">Repository diagnostic test case · TestDiskRuleAndIncidentStore</text>
+
+<!-- summary cards -->
+<rect x="110" y="260" width="290" height="105" rx="16" fill="#111c2d" stroke="#25364a"/>
+<text x="135" y="291" class="small">HOST</text><text x="135" y="329" class="v mono">host-a</text>
+<rect x="425" y="260" width="290" height="105" rx="16" fill="#111c2d" stroke="#25364a"/>
+<text x="450" y="291" class="small">STATE</text><text x="450" y="329" class="v mono" fill="#60a5fa">DIAGNOSTIC</text>
+<rect x="740" y="260" width="290" height="105" rx="16" fill="#111c2d" stroke="#25364a"/>
+<text x="765" y="291" class="small">CONFIDENCE</text><text x="765" y="329" class="v mono" style="fill:#34d399">1.00</text>
+<rect x="1055" y="260" width="290" height="105" rx="16" fill="#111c2d" stroke="#25364a"/>
+<text x="1080" y="291" class="small">INCIDENT</text><text x="1080" y="329" class="v mono" style="fill:#f59e0b">ACTIVE</text>
+
+<text x="110" y="425" class="h">Matched Evidence</text>
+<text x="110" y="457" class="small">4 independent signals matched; rule requires at least 3</text>
+
+<!-- evidence rows -->
+<rect x="110" y="485" width="1380" height="62" rx="12" fill="#101a29" stroke="#1e293b"/>
+<text x="135" y="523" class="e">io_wait</text><text x="470" y="523" class="e" style="fill:#fbbf24">30.0 %</text><text x="690" y="523" class="muted">severity 1.00</text><text x="1010" y="523" class="muted">MonitorInfo.cpu_stat</text>
+<rect x="110" y="558" width="1380" height="62" rx="12" fill="#101a29" stroke="#1e293b"/>
+<text x="135" y="596" class="e">disk_util</text><text x="470" y="596" class="e" style="fill:#fbbf24">98.0 %</text><text x="690" y="596" class="muted">severity 1.00</text><text x="1010" y="596" class="muted">MonitorInfo.disk_info</text>
+<rect x="110" y="631" width="1380" height="62" rx="12" fill="#101a29" stroke="#1e293b"/>
+<text x="135" y="669" class="e">disk_latency</text><text x="470" y="669" class="e" style="fill:#fbbf24">50.0 ms</text><text x="690" y="669" class="muted">severity 1.00</text><text x="1010" y="669" class="muted">MonitorInfo.disk_info</text>
+<rect x="110" y="704" width="1380" height="62" rx="12" fill="#101a29" stroke="#1e293b"/>
+<text x="135" y="742" class="e">bpf_block_latency</text><text x="470" y="742" class="e" style="fill:#34d399">50.0 ms</text><text x="690" y="742" class="muted">severity 1.00</text><text x="1010" y="742" class="muted">DiagnosticSnapshot.block_io</text>
+
+<rect x="110" y="785" width="1380" height="36" rx="10" fill="#0f2a22" stroke="#14532d"/>
+<text x="135" y="809" class="muted" style="fill:#86efac">root_cause_engine: DISK_IO_SATURATION  confidence=1.00  matched=4/4</text>
+<text x="80" y="870" class="small">Source: manager/tests/diagnostics_test.cpp · values are taken from the repository test case, not illustrative placeholders.</text>
+</svg>

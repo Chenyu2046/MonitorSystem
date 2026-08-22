@@ -16,6 +16,15 @@ endif()
 # eBPF 支持选项
 option(ENABLE_EBPF "Enable eBPF-based network monitoring" ON)
 
+set(DIAGNOSTICS_SOURCES
+    src/diagnostics/observability_config.cpp
+    src/diagnostics/anomaly_detector.cpp
+    src/diagnostics/observability_state.cpp
+    src/diagnostics/probe_controller.cpp
+    src/diagnostics/profile_session.cpp
+    src/diagnostics/symbolizer.cpp
+)
+
 # 查找 libbpf
 if(ENABLE_EBPF)
     find_library(LIBBPF_LIBRARY bpf PATHS /usr/lib64 /usr/lib/x86_64-linux-gnu /usr/local/lib)
@@ -41,12 +50,20 @@ endif()
 if(EBPF_FOUND)
     set(EBPF_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf)
     set(EBPF_SKEL_H ${CMAKE_CURRENT_SOURCE_DIR}/include/monitor/net_stats.skel.h)
+    set(EBPF_PROGRAM_SRCS
+        ${EBPF_SRC_DIR}/net_stats.bpf.c
+        ${EBPF_SRC_DIR}/tcp_diag.bpf.c
+        ${EBPF_SRC_DIR}/block_io_diag.bpf.c
+        ${EBPF_SRC_DIR}/sched_diag.bpf.c
+        ${EBPF_SRC_DIR}/oncpu_profile.bpf.c
+        ${EBPF_SRC_DIR}/offcpu_profile.bpf.c
+    )
     
     add_custom_command(
         OUTPUT ${EBPF_SKEL_H}
         COMMAND make -C ${EBPF_SRC_DIR}
         COMMAND ${CMAKE_COMMAND} -E copy ${EBPF_SRC_DIR}/.output/net_stats.skel.h ${EBPF_SKEL_H}
-        DEPENDS ${EBPF_SRC_DIR}/net_stats.bpf.c
+        DEPENDS ${EBPF_PROGRAM_SRCS}
         COMMENT "Building eBPF program and generating skeleton"
     )
     add_custom_target(ebpf_skeleton DEPENDS ${EBPF_SKEL_H})
@@ -64,7 +81,9 @@ set(WORKER_SOURCES
     src/monitor/disk_monitor.cpp
     src/monitor/host_info_monitor.cpp
     src/rpc/monitor_pusher.cpp
+    src/rpc/monitor_send_queue.cpp
     src/utils/read_file.cpp
+    ${DIAGNOSTICS_SOURCES}
 )
 
 # 根据 eBPF 支持选择网络监控实现
@@ -91,6 +110,42 @@ if(EBPF_FOUND)
 endif()
 
 target_link_libraries(worker PUBLIC ${WORKER_LIBS})
+
+if(BUILD_TESTING)
+    add_executable(diagnostics_test
+        tests/diagnostics_test.cpp
+        src/rpc/monitor_send_queue.cpp
+        ${DIAGNOSTICS_SOURCES}
+    )
+    target_include_directories(diagnostics_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/worker/include
+    )
+    target_link_libraries(diagnostics_test PRIVATE monitor_proto)
+    add_test(NAME diagnostics_test COMMAND diagnostics_test)
+
+    add_executable(cpu_stat_monitor_test
+        tests/cpu_stat_monitor_test.cpp
+        src/monitor/cpu_stat_monitor.cpp
+    )
+    target_include_directories(cpu_stat_monitor_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/worker/include
+    )
+    target_link_libraries(cpu_stat_monitor_test PRIVATE monitor_proto)
+    add_test(NAME cpu_stat_monitor_test COMMAND cpu_stat_monitor_test)
+
+    add_executable(observability_overhead_test
+        tests/observability_overhead_test.cpp
+        src/rpc/monitor_send_queue.cpp
+        src/diagnostics/observability_config.cpp
+        src/diagnostics/anomaly_detector.cpp
+        src/diagnostics/observability_state.cpp
+    )
+    target_include_directories(observability_overhead_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/worker/include
+    )
+    target_link_libraries(observability_overhead_test PRIVATE monitor_proto)
+    add_test(NAME observability_overhead_test COMMAND observability_overhead_test)
+endif()
 
 # 内核模块构建（可选）
 add_custom_target(kernel_modules

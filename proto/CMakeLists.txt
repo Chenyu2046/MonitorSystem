@@ -26,6 +26,7 @@ set(PROTO_FILES
     mem_info.proto
     net_info.proto
     disk_info.proto
+    diagnostic.proto
     query_api.proto
 )
 

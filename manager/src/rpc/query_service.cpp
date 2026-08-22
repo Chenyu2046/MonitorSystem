@@ -1,14 +1,26 @@
+/**
+ * @file query_service.cpp
+ * @brief QueryService RPC 参数校验、查询调用和 protobuf response 转换。
+ *
+ * 调用链为客户端 protobuf -> QueryService handler -> QueryManager/MySQL
+ * 或 HostManager 内存 fallback -> C++ record -> protobuf repeated/分页字段。
+ * 本层不直接拼接 SQL，也不修改实时 host 状态。
+ */
+
 #include "rpc/query_service.h"
 
+#include <algorithm>
 #include <iostream>
 
 namespace monitor {
 
-QueryServiceImpl::QueryServiceImpl(QueryManager* query_manager)
-    : query_manager_(query_manager) {}
+QueryServiceImpl::QueryServiceImpl(QueryManager* query_manager,
+                                   HostManager* host_manager)
+    : query_manager_(query_manager), host_manager_(host_manager) {}
 
 TimeRange QueryServiceImpl::ConvertTimeRange(
     const ::monitor::proto::TimeRange& proto_range) {
+  // API 当前按 seconds 传递时间；统一转换为 QueryManager 使用的时钟类型。
   TimeRange range;
   range.start_time = std::chrono::system_clock::from_time_t(
       proto_range.start_time().seconds());
@@ -20,9 +32,10 @@ TimeRange QueryServiceImpl::ConvertTimeRange(
 void QueryServiceImpl::SetTimestamp(
     ::google::protobuf::Timestamp* ts,
     const std::chrono::system_clock::time_point& tp) {
-  auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
-                     tp.time_since_epoch())
-                     .count();
+  // response Timestamp 当前只写秒，保持现有接口精度语义。
+  auto seconds =
+      std::chrono::duration_cast<std::chrono::seconds>(tp.time_since_epoch())
+          .count();
   ts->set_seconds(seconds);
   ts->set_nanos(0);
 }
@@ -107,8 +120,8 @@ void QueryServiceImpl::SetTimestamp(
                         "Invalid time range: start_time > end_time");
   }
 
-  auto records = query_manager_->QueryTrend(
-      request->server_name(), time_range, request->interval_seconds());
+  auto records = query_manager_->QueryTrend(request->server_name(), time_range,
+                                            request->interval_seconds());
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_records();
@@ -161,9 +174,9 @@ void QueryServiceImpl::SetTimestamp(
       request->mem_threshold() > 0 ? request->mem_threshold() : 90.0f;
   thresholds.disk_threshold =
       request->disk_threshold() > 0 ? request->disk_threshold() : 85.0f;
-  thresholds.change_rate_threshold =
-      request->change_rate_threshold() > 0 ? request->change_rate_threshold()
-                                           : 0.5f;
+  thresholds.change_rate_threshold = request->change_rate_threshold() > 0
+                                         ? request->change_rate_threshold()
+                                         : 0.5f;
 
   int page = request->pagination().page();
   int page_size = request->pagination().page_size();
@@ -171,9 +184,9 @@ void QueryServiceImpl::SetTimestamp(
   if (page_size < 1) page_size = 100;
 
   int total_count = 0;
-  auto records = query_manager_->QueryAnomaly(
-      request->server_name(), time_range, thresholds, page, page_size,
-      &total_count);
+  auto records =
+      query_manager_->QueryAnomaly(request->server_name(), time_range,
+                                   thresholds, page, page_size, &total_count);
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_anomalies();
@@ -192,7 +205,6 @@ void QueryServiceImpl::SetTimestamp(
 
   return grpc::Status::OK;
 }
-
 
 ::grpc::Status QueryServiceImpl::QueryScoreRank(
     ::grpc::ServerContext* context,
@@ -466,6 +478,142 @@ void QueryServiceImpl::SetTimestamp(
   response->set_page(page);
   response->set_page_size(page_size);
 
+  return grpc::Status::OK;
+}
+
+void QueryServiceImpl::SetIncident(const diagnostics::IncidentRecord& incident,
+                                   ::monitor::proto::Incident* output) {
+  // Incident 是 C++ root-cause/evidence 聚合到跨进程 protobuf 的边界；
+  // repeated root_causes/evidence 保留可追溯关联，不压缩成单一摘要。
+  output->set_id(incident.id);
+  output->set_server_name(incident.server_name);
+  output->set_severity(incident.severity);
+  output->set_state(incident.state);
+  output->set_active(incident.active);
+  output->set_start_time_ms(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          incident.start_time.time_since_epoch())
+          .count());
+  output->set_end_time_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
+                              incident.end_time.time_since_epoch())
+                              .count());
+
+  for (const auto& cause : incident.root_causes) {
+    auto* proto_cause = output->add_root_causes();
+    proto_cause->set_type(diagnostics::RootCauseTypeName(cause.type));
+    proto_cause->set_confidence(cause.confidence);
+    for (const auto& evidence_id : cause.evidence_ids) {
+      proto_cause->add_evidence_ids(evidence_id);
+    }
+    proto_cause->set_summary(cause.summary);
+  }
+
+  for (const auto& evidence : incident.evidence) {
+    auto* proto_evidence = output->add_evidence();
+    proto_evidence->set_id(evidence.id);
+    proto_evidence->set_type(diagnostics::EvidenceTypeName(evidence.type));
+    proto_evidence->set_source(evidence.source);
+    proto_evidence->set_target(evidence.target);
+    proto_evidence->set_value(evidence.value);
+    proto_evidence->set_unit(evidence.unit);
+    proto_evidence->set_severity(evidence.severity);
+    proto_evidence->set_timestamp_ms(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            evidence.timestamp.time_since_epoch())
+            .count());
+    proto_evidence->set_detail(evidence.detail);
+  }
+}
+
+::grpc::Status QueryServiceImpl::GetIncidents(
+    ::grpc::ServerContext* context,
+    const ::monitor::proto::GetIncidentsRequest* request,
+    ::monitor::proto::GetIncidentsResponse* response) {
+  // MySQL 和内存 IncidentStore 二选一：只有持久化可用且未降级时分页由
+  // QueryManager 执行，否则先取内存全量再在本层做页切片。
+  (void)context;
+  if (!host_manager_) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "Host manager not initialized");
+  }
+
+  auto start_time = std::chrono::system_clock::time_point::min();
+  auto end_time = std::chrono::system_clock::time_point::max();
+  if (request->has_time_range()) {
+    const auto range = ConvertTimeRange(request->time_range());
+    start_time = range.start_time;
+    end_time = range.end_time;
+  }
+  int page = request->pagination().page();
+  int page_size = request->pagination().page_size();
+  if (page < 1) page = 1;
+  if (page_size < 1) page_size = 100;
+  const bool persisted =
+      query_manager_ && query_manager_->IsInitialized() &&
+      !host_manager_->IsDiagnosticPersistenceDegraded();
+  int total_count = 0;
+  auto incidents =
+      persisted ? query_manager_->QueryIncidents(
+                      request->server_name(), TimeRange{start_time, end_time},
+                      request->root_cause(), request->severity(), page,
+                      page_size, &total_count)
+                : host_manager_->GetIncidents(
+                      request->server_name(), start_time, end_time,
+                      request->root_cause(), request->severity());
+  if (total_count == 0 && !persisted) {
+    total_count = static_cast<int>(incidents.size());
+  }
+  const std::size_t begin =
+      persisted ? 0 : static_cast<std::size_t>(page - 1) * page_size;
+  const std::size_t end =
+      std::min(incidents.size(), begin + static_cast<std::size_t>(page_size));
+  for (std::size_t index = begin; index < end; ++index) {
+    SetIncident(incidents[index], response->add_incidents());
+  }
+  response->set_total_count(total_count);
+  response->set_page(page);
+  response->set_page_size(page_size);
+  return grpc::Status::OK;
+}
+
+::grpc::Status QueryServiceImpl::GetIncidentDetail(
+    ::grpc::ServerContext* context,
+    const ::monitor::proto::GetIncidentDetailRequest* request,
+    ::monitor::proto::GetIncidentDetailResponse* response) {
+  (void)context;
+  if (!host_manager_) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "Host manager not initialized");
+  }
+  const auto incident =
+      query_manager_ && query_manager_->IsInitialized() &&
+              !host_manager_->IsDiagnosticPersistenceDegraded()
+          ? query_manager_->QueryIncident(request->incident_id())
+          : host_manager_->GetIncident(request->incident_id());
+  if (!incident) {
+    return grpc::Status(grpc::StatusCode::NOT_FOUND, "Incident not found");
+  }
+  SetIncident(*incident, response->mutable_incident());
+  return grpc::Status::OK;
+}
+
+::grpc::Status QueryServiceImpl::GetActiveDiagnosis(
+    ::grpc::ServerContext* context,
+    const ::monitor::proto::GetActiveDiagnosisRequest* request,
+    ::monitor::proto::GetActiveDiagnosisResponse* response) {
+  (void)context;
+  if (!host_manager_) {
+    return grpc::Status(grpc::StatusCode::UNAVAILABLE,
+                        "Host manager not initialized");
+  }
+  const auto incidents =
+      query_manager_ && query_manager_->IsInitialized() &&
+              !host_manager_->IsDiagnosticPersistenceDegraded()
+          ? query_manager_->QueryActiveIncidents(request->server_name())
+          : host_manager_->GetActiveIncidents(request->server_name());
+  for (const auto& incident : incidents) {
+    SetIncident(incident, response->add_incidents());
+  }
   return grpc::Status::OK;
 }
 

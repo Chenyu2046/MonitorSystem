@@ -1,0 +1,7 @@
+ Container manager-ab-ab-sharded-stagger-100-r1-20260818-mysql-1 Running
+ Container manager-ab-ab-sharded-stagger-100-r1-20260818-manager-1 Running
+ Container manager-ab-ab-sharded-stagger-100-r1-20260818-mysql-1 Waiting
+ Container manager-ab-ab-sharded-stagger-100-r1-20260818-mysql-1 Healthy
+ Container manager-ab-ab-sharded-stagger-100-r1-20260818-loadgen-run-4b24c1f9db63 Creating
+ Container manager-ab-ab-sharded-stagger-100-r1-20260818-loadgen-run-4b24c1f9db63 Created
+samples=6000 success=6000 success_rate=100% reports_per_second=100.012 accepted_p50_us=599 accepted_p95_us=879 accepted_p99_us=1551

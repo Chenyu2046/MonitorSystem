@@ -1,3 +1,12 @@
+/**
+ * @file metric_collector.cpp
+ * @brief Worker 基础指标采集器的组装与执行实现。
+ *
+ * 数据流为：主机名与各监控器读取 Linux/内核数据 -> 共同填充
+ * MonitorInfo -> MonitorPusher 继续执行异常判断和诊断快照。
+ * 本文件只负责监控器生命周期和采集编排，不聚合 CPU 核、不判定异常。
+ */
+
 #include "monitor/metric_collector.h"
 
 #include <unistd.h>
@@ -20,7 +29,8 @@
 namespace monitor {
 
 MetricCollector::MetricCollector() {
-  // 获取主机名
+  // 获取主机名。gethostname() 失败时保留可识别的 unknown，避免采集
+  // 流程因主机标识缺失而中断；Manager 后续仍可收到这轮指标。
   char hostname[256];
   if (gethostname(hostname, sizeof(hostname)) == 0) {
     hostname_ = hostname;
@@ -28,7 +38,8 @@ MetricCollector::MetricCollector() {
     hostname_ = "unknown";
   }
 
-  // 初始化所有监控器
+  // 初始化所有监控器。各实例按固定顺序写入同一个 MonitorInfo，
+  // 这里不创建线程；周期调度由 MonitorPusher 完成。
   monitors_.push_back(std::make_unique<CpuLoadMonitor>());
   monitors_.push_back(std::make_unique<CpuStatMonitor>());
   monitors_.push_back(std::make_unique<CpuSoftIrqMonitor>());
@@ -43,6 +54,8 @@ MetricCollector::MetricCollector() {
 }
 
 MetricCollector::~MetricCollector() {
+  // 先通知每个监控器停止其外部资源，例如 eBPF attach 或 mmap 关联的
+  // 设备访问，再由 unique_ptr 自动释放对象。
   for (auto& monitor : monitors_) {
     monitor->Stop();
   }
@@ -53,10 +66,11 @@ void MetricCollector::CollectAll(monitor::proto::MonitorInfo* monitor_info) {
     return;
   }
 
-  // 设置主机名
+  // 设置主机名，作为 Manager 侧按主机分片和持久化的主键语义之一。
   monitor_info->set_name(hostname_);
 
-  // 调用每个监控器的 UpdateOnce 方法
+  // 每个监控器只负责自己的 Protobuf 字段。采集器不在这里做异常判断，
+  // 因此普通监控路径和诊断路径仍由 MonitorPusher 分阶段处理。
   for (auto& monitor : monitors_) {
     monitor->UpdateOnce(monitor_info);
   }

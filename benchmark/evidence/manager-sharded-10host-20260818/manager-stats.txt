@@ -1,0 +1,7 @@
+run_id=benchmark-20260818-160301
+server_performance_rows=300
+expected_successful_reports=300
+processing_stats accepted=300 queue_full=0 processed=300 persistence_tasks=300 persistence_rejected=0 queue_delay_samples=300 queue_delay_total_us=24042 max_queue_delay_us=395 max_shard_queue_depth=2 max_shard_queue_bytes=852 max_persistence_queue_depth=9 max_persistence_queue_bytes=6419
+accepted_p50_us=1451
+accepted_p95_us=2171
+accepted_p99_us=7096

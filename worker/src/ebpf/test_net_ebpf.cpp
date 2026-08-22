@@ -1,6 +1,7 @@
 /**
- * test_net_ebpf.cpp - eBPF TC Hook 网络监控测试程序
- * 
+ * @file test_net_ebpf.cpp
+ * @brief 独立验证 TC hook、Per-CPU map 读取和网卡速率计算的工具。
+ *
  * 编译:
  * g++ -o test_net_ebpf test_net_ebpf.cpp -I../../include -lbpf -lelf -lz -std=c++17
  * 
@@ -40,7 +41,7 @@ void sig_handler(int sig) {
     running = false;
 }
 
-// 获取所有网卡 ifindex
+// 获取所有非 loopback 网卡的 ifindex，供测试程序逐个挂载 TC hook。
 std::vector<uint32_t> get_all_ifindexes() {
     std::vector<uint32_t> indexes;
     DIR* dir = opendir("/sys/class/net");
@@ -64,13 +65,13 @@ int main() {
     struct net_stats_bpf* skel = nullptr;
     int err;
 
-    // 设置信号处理
+    // 设置信号处理，使 Ctrl+C 能进入统一清理流程。
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
 
     printf("Loading eBPF TC hook program...\n");
 
-    // 打开 BPF skeleton
+    // 打开并加载 skeleton；失败时直接结束独立验证程序。
     skel = net_stats_bpf__open();
     if (!skel) {
         fprintf(stderr, "Failed to open BPF skeleton\n");
@@ -91,7 +92,7 @@ int main() {
     int ingress_fd = bpf_program__fd(skel->progs.tc_ingress);
     int egress_fd = bpf_program__fd(skel->progs.tc_egress);
 
-    // 获取所有网卡并附加 TC hook
+    // 获取所有网卡并分别附加 ingress/egress TC hook。
     auto ifindexes = get_all_ifindexes();
     
     for (uint32_t ifindex : ifindexes) {
@@ -161,7 +162,7 @@ int main() {
     }
     std::vector<net_stats> per_cpu_stats(static_cast<size_t>(possible_cpus));
 
-    // 上一次的统计数据
+    // 保存上一次累计字节数，输出两秒窗口的字节速率。
     struct PrevStats {
         uint64_t rcv_bytes;
         uint64_t snd_bytes;
@@ -190,7 +191,7 @@ int main() {
                 }
                 char ifname[IF_NAMESIZE];
                 if (if_indextoname(next_key, ifname) != nullptr) {
-                    // 计算速率 (2秒间隔)
+                    // 测试工具固定每两秒采集一次，因此用累计差值除以 2。
                     const auto previous = prev_stats.find(next_key);
                     const uint64_t previous_rx = previous == prev_stats.end()
                                                      ? 0
@@ -218,7 +219,7 @@ int main() {
 
     printf("\nCleaning up TC hooks...\n");
     
-    // 分离 TC hook
+    // 分离 TC hook，避免独立测试程序退出后留下挂载点。
     for (uint32_t ifindex : attached_ifindexes) {
         LIBBPF_OPTS(bpf_tc_hook, hook,
             .ifindex = static_cast<int>(ifindex),

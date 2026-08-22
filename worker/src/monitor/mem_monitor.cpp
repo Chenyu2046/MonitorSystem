@@ -1,3 +1,12 @@
+/**
+ * @file mem_monitor.cpp
+ * @brief 读取 /proc/meminfo 并生成主机级内存概览。
+ *
+ * 读取阶段按字段名解析 Linux 内核提供的 KB 值，输出阶段计算
+ * used_percent=(total-available)/total，并把各分类转换为 protobuf 使用
+ * 的 GB 近似值。这里没有进程级 RSS/泄漏追踪能力。
+ */
+
 #include "monitor/mem_monitor.h"
 #include "utils/read_file.h"
 
@@ -5,6 +14,8 @@ namespace monitor {
 static constexpr float KBToGB = 1000 * 1000;
 
 void MemMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
+  // /proc/meminfo 是本轮快照而非累计计数器，因此不需要前后轮缓存；
+  // 每个字段按名称解析，未知字段被忽略以兼容不同内核版本。
   ReadFile mem_file("/proc/meminfo");
   struct MenInfo mem_info;
   std::vector<std::string> mem_datas;
@@ -51,6 +62,8 @@ void MemMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
     mem_datas.clear();
   }
 
+  // MemAvailable 更接近内核对“可立即分配内存”的估计，项目用它而非
+  // MemFree 计算 used_percent；buffer/cache 等分类仍单独上报供解释。
   auto mem_detail = monitor_info->mutable_mem_info();
 
   mem_detail->set_used_percent((mem_info.total - mem_info.avail) * 1.0 /

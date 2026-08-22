@@ -1,19 +1,25 @@
+/**
+ * @file read_file.cpp
+ * @brief 实现按行读取并拆分空格字段的辅助类。
+ */
+
 #include "utils/read_file.h"
 
 namespace monitor {
 bool ReadFile::ReadLine(std::vector<std::string>* args) {
+  // 一次调用只消费一行，调用方负责决定是否继续读取。
   std::string line;
-  std::getline(ifs_, line); //从文件流读取一行
-  if (ifs_.eof() || line.empty()) {   //文件结束或空行
+  std::getline(ifs_, line);
+  if (ifs_.eof() || line.empty()) {
     return false;
   }
 
-  //将读取到的行转换为字符串流
+  // 将文本行交给字符串流，按默认空白规则拆分字段。
   std::istringstream line_ss(line);
   while (!line_ss.eof()) {  
     std::string word;
-    line_ss >> word;  //按空格分割字符串
-    args->push_back(word);//将每个单词存入传入的args向量中。
+    line_ss >> word;
+    args->push_back(word);
   }
   return true;
 }

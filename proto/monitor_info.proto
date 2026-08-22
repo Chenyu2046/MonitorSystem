@@ -1,6 +1,9 @@
 syntax = "proto3";
 package monitor.proto;
 
+// Worker -> Manager 的普通监控和诊断消息。repeated 字段保留 CPU 核、网卡、
+// 磁盘和 SoftIRQ 的逐实体粒度；Manager 再分别生成平均概览与异常 max-core。
+
 import "google/protobuf/empty.proto";
 import "net_info.proto";
 import "mem_info.proto";
@@ -8,6 +11,7 @@ import "cpu_stat.proto";
 import "cpu_softirq.proto";
 import "cpu_load.proto";
 import "disk_info.proto";
+import "diagnostic.proto";
 
 // message MemInfo {
 //   int64 total = 1;
@@ -78,11 +82,13 @@ import "disk_info.proto";
 
 
 // 主机标识信息 - 用于调度服务器识别和定位服务器
+// 主机归属/路由标识，不是资源指标。
 message HostInfo {
   string hostname = 1;       // 主机名
   string ip_address = 2;     // IP 地址（主网卡 IP）
 }
 
+// 一轮 Worker 采集结果：基础资源字段与可选 DiagnosticSnapshot 同时上报。
 message MonitorInfo{
   string name = 1;           // 主机名（保留兼容）
   HostInfo host_info = 2;    // 主机标识信息
@@ -92,8 +98,10 @@ message MonitorInfo{
   MemInfo mem_info = 7;
   repeated NetInfo net_info = 8;
   repeated DiskInfo disk_info = 9;
+  DiagnosticSnapshot diagnostic = 10;
 }
 
+// Worker push / Manager receive，以及保留的 Manager -> Worker pull RPC。
 service GrpcManager {
   // 工作者推送监控数据给管理者
   rpc SetMonitorInfo(MonitorInfo) returns (google.protobuf.Empty) {

@@ -1,3 +1,8 @@
+/**
+ * @file user_monitor.cpp
+ * @brief 通过 getuid 和 /etc/passwd 解析当前进程用户名。
+ */
+
 #include "monitor/user_monitor.h"
 
 #include <unistd.h>
@@ -19,7 +24,7 @@ std::string UserMonitor::GetUsernameByUid(uid_t uid) {
 
   std::string line;
   while (std::getline(passwd_file, line)) {
-    // /etc/passwd 格式: username:password:uid:gid:gecos:home:shell
+    // /etc/passwd 格式为 username:password:uid:gid:gecos:home:shell。
     // 字段以冒号分隔
     std::istringstream iss(line);
     std::string username, password, uid_str;
@@ -59,7 +64,7 @@ void UserMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
     return;
   }
 
-  // 使用系统调用获取当前进程的实际用户ID
+  // 使用系统调用获取真实 UID，不依赖 USER 等可能缺失或不可信的环境变量。
   uid_t uid = getuid();
 
   // 根据 UID 查找用户名

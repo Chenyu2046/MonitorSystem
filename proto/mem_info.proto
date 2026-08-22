@@ -1,6 +1,7 @@
 syntax = "proto3";
 package monitor.proto;
 
+// 主机级 /proc/meminfo 分类快照；当前协议不表达进程级内存归因。
 message MemInfo {
     float total = 1;
     float free = 2;

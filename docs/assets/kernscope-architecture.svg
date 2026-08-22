@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="940" viewBox="0 0 1600 940">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#f8fbff"/><stop offset="1" stop-color="#eef5ff"/>
+  </linearGradient>
+  <linearGradient id="worker" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#eef8ff"/><stop offset="1" stop-color="#f7fbff"/>
+  </linearGradient>
+  <linearGradient id="manager" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#f0fbf7"/><stop offset="1" stop-color="#f8fffc"/>
+  </linearGradient>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+    <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.10"/>
+  </filter>
+  <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+    <path d="M0,0 L0,6 L9,3 z" fill="#64748b"/>
+  </marker>
+  <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+    <path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/>
+  </marker>
+  <style>
+    .title{font:700 42px Inter,Segoe UI,Arial,sans-serif;fill:#0f172a}
+    .sub{font:400 20px Inter,Segoe UI,Arial,sans-serif;fill:#64748b}
+    .section{font:700 26px Inter,Segoe UI,Arial,sans-serif;fill:#0f172a}
+    .label{font:600 18px Inter,Segoe UI,Arial,sans-serif;fill:#1e293b}
+    .small{font:500 15px Inter,Segoe UI,Arial,sans-serif;fill:#64748b}
+    .chip{font:600 16px Inter,Segoe UI,Arial,sans-serif;fill:#1e3a8a}
+    .chip2{font:600 16px Inter,Segoe UI,Arial,sans-serif;fill:#065f46}
+  </style>
+</defs>
+<rect width="1600" height="940" rx="28" fill="url(#bg)"/>
+<text x="80" y="82" class="title">KernScope Architecture</text>
+<text x="80" y="118" class="sub">Adaptive Linux performance observability, profiling and root-cause diagnosis</text>
+
+<!-- Worker -->
+<rect x="70" y="160" width="1460" height="330" rx="26" fill="url(#worker)" stroke="#bfdbfe" stroke-width="2" filter="url(#shadow)"/>
+<text x="110" y="205" class="section">Worker-Agent</text>
+<text x="110" y="234" class="small">Low-overhead monitoring + anomaly-triggered deep diagnostics</text>
+
+<!-- source chips -->
+<rect x="110" y="270" width="245" height="70" rx="16" fill="#ffffff" stroke="#bfdbfe"/>
+<text x="232" y="301" text-anchor="middle" class="label">procfs</text><text x="232" y="324" text-anchor="middle" class="small">Memory / Disk / fallback</text>
+<rect x="380" y="270" width="245" height="70" rx="16" fill="#ffffff" stroke="#bfdbfe"/>
+<text x="502" y="301" text-anchor="middle" class="label">Kernel Module + mmap</text><text x="502" y="324" text-anchor="middle" class="small">CPU / SoftIRQ / Load</text>
+<rect x="650" y="270" width="245" height="70" rx="16" fill="#ffffff" stroke="#bfdbfe"/>
+<text x="772" y="301" text-anchor="middle" class="label">TC eBPF</text><text x="772" y="324" text-anchor="middle" class="small">Network data plane</text>
+<rect x="920" y="270" width="245" height="70" rx="16" fill="#ffffff" stroke="#bfdbfe"/>
+<text x="1042" y="301" text-anchor="middle" class="label">perf_event + eBPF</text><text x="1042" y="324" text-anchor="middle" class="small">On / Off-CPU profiling</text>
+<rect x="1190" y="270" width="270" height="70" rx="16" fill="#eff6ff" stroke="#93c5fd"/>
+<text x="1325" y="301" text-anchor="middle" class="label">Adaptive Controller</text><text x="1325" y="324" text-anchor="middle" class="small">NORMAL → DIAGNOSTIC</text>
+
+<!-- worker pipeline -->
+<line x1="232" y1="350" x2="232" y2="380" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="502" y1="350" x2="502" y2="380" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="772" y1="350" x2="772" y2="380" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+<line x1="1042" y1="350" x2="1042" y2="380" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M1325 350 L1325 365 L1090 365 L1090 380" fill="none" stroke="#2563eb" stroke-width="2" stroke-dasharray="7 6" marker-end="url(#arrowBlue)"/>
+<rect x="145" y="385" width="1015" height="70" rx="18" fill="#ffffff" stroke="#93c5fd" stroke-width="2"/>
+<text x="652" y="416" text-anchor="middle" class="label">MetricCollector + Diagnostic Snapshot</text>
+<text x="652" y="440" text-anchor="middle" class="small">MonitorInfo · metrics · probe status · profiling stacks</text>
+<rect x="1190" y="385" width="270" height="70" rx="18" fill="#dbeafe" stroke="#60a5fa" stroke-width="2"/>
+<text x="1325" y="416" text-anchor="middle" class="label">Bounded Queue</text>
+<text x="1325" y="440" text-anchor="middle" class="small">deadline · retry · backoff</text>
+<line x1="1160" y1="420" x2="1186" y2="420" stroke="#2563eb" stroke-width="3" marker-end="url(#arrowBlue)"/>
+
+<!-- gRPC bridge -->
+<line x1="1325" y1="455" x2="1325" y2="550" stroke="#2563eb" stroke-width="4" marker-end="url(#arrowBlue)"/>
+<rect x="1242" y="492" width="166" height="38" rx="19" fill="#2563eb"/>
+<text x="1325" y="517" text-anchor="middle" style="font:700 16px Inter,Segoe UI,Arial,sans-serif;fill:white">gRPC Push</text>
+
+<!-- Manager -->
+<rect x="70" y="550" width="1460" height="320" rx="26" fill="url(#manager)" stroke="#bbf7d0" stroke-width="2" filter="url(#shadow)"/>
+<text x="110" y="595" class="section">Manager</text>
+<text x="110" y="624" class="small">Concurrent host processing, evidence correlation and persistence</text>
+
+<rect x="110" y="665" width="210" height="82" rx="18" fill="#ffffff" stroke="#a7f3d0"/>
+<text x="215" y="700" text-anchor="middle" class="label">gRPC Receiver</text><text x="215" y="725" text-anchor="middle" class="small">SetMonitorInfo</text>
+<rect x="355" y="665" width="220" height="82" rx="18" fill="#ffffff" stroke="#a7f3d0"/>
+<text x="465" y="700" text-anchor="middle" class="label">Host Hash Shards</text><text x="465" y="725" text-anchor="middle" class="small">ordered per host</text>
+<rect x="610" y="665" width="220" height="82" rx="18" fill="#ffffff" stroke="#a7f3d0"/>
+<text x="720" y="700" text-anchor="middle" class="label">Anomaly Engine</text><text x="720" y="725" text-anchor="middle" class="small">score + state</text>
+<rect x="865" y="665" width="220" height="82" rx="18" fill="#ffffff" stroke="#a7f3d0"/>
+<text x="975" y="700" text-anchor="middle" class="label">Evidence Builder</text><text x="975" y="725" text-anchor="middle" class="small">multi-signal correlation</text>
+<rect x="1120" y="665" width="220" height="82" rx="18" fill="#dcfce7" stroke="#34d399" stroke-width="2"/>
+<text x="1230" y="700" text-anchor="middle" class="label">Root Cause Engine</text><text x="1230" y="725" text-anchor="middle" class="small">Incident + confidence</text>
+<rect x="1370" y="665" width="120" height="82" rx="18" fill="#ffffff" stroke="#a7f3d0"/>
+<text x="1430" y="699" text-anchor="middle" class="label">Query</text><text x="1430" y="724" text-anchor="middle" class="small">API</text>
+
+<g stroke="#64748b" stroke-width="2.5" marker-end="url(#arrow)">
+<line x1="320" y1="706" x2="350" y2="706"/><line x1="575" y1="706" x2="605" y2="706"/><line x1="830" y1="706" x2="860" y2="706"/><line x1="1085" y1="706" x2="1115" y2="706"/><line x1="1340" y1="706" x2="1365" y2="706"/>
+</g>
+
+<rect x="355" y="785" width="985" height="50" rx="14" fill="#ffffff" stroke="#bbf7d0"/>
+<text x="847" y="816" text-anchor="middle" class="label">Async Persistence Queue → MySQL / IncidentStore</text>
+<line x1="1230" y1="750" x2="1230" y2="780" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+
+<text x="80" y="910" class="small">KernScope · Worker-Agent / Manager architecture</text>
+</svg>

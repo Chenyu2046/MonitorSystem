@@ -1,19 +1,22 @@
 #pragma once
 
+/**
+ * @file utils.h
+ * @brief Worker 通用时间换算辅助函数。
+ */
+
 #include <boost/chrono.hpp>
 
-//用于精确计算两个时间点之间的时间差（以秒为单位）
 namespace monitor {
+/** 提供无需实例化即可调用的稳态时钟换算工具。 */
 class Utils {
  public:
- //静态方法，可以直接通过类名调用，无需创建类的实例
- //duration对象表示一段时间间隔
- //chrono 库中提供了一个表示时间点的类 time_point
+  /** 返回 t1 - t2 的秒数，适用于不受系统校时影响的 steady_clock。 */
   static double SteadyTimeSecond(
       const boost::chrono::steady_clock::time_point &t1,
       const boost::chrono::steady_clock::time_point &t2) {
     boost::chrono::duration<double> time_second = t1 - t2;
-    return time_second.count(); //count()是duration类的方法，返回时间间隔的数值部分
+    return time_second.count();
   }
 };
 }  // namespace monitor

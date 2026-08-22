@@ -1,6 +1,7 @@
 /*
- * test_cpu_stat.c - CPU 状态采集内核模块测试程序
+ * test_cpu_stat.c - CPU 状态采集内核模块测试程序。
  *
+ * 通过设备文件 mmap 读取内核模块提供的共享快照，不参与生产采集链路。
  * 编译: gcc -o test_cpu_stat test_cpu_stat.c
  * 运行: ./test_cpu_stat
  */
@@ -16,7 +17,7 @@
 #define DEVICE_PATH "/dev/cpu_stat_monitor"
 #define MAX_CPUS 256
 
-/* CPU 状态统计结构体 - 必须与内核模块定义一致 */
+/* CPU 状态统计结构体；字段布局必须与内核模块保持一致。 */
 struct cpu_stat {
     char cpu_name[16];
     uint64_t user;
@@ -51,7 +52,7 @@ int main(int argc, char *argv[])
     printf("=== CPU Stat Monitor Test ===\n");
     printf("Collecting %d samples with %d second interval\n\n", count, interval);
 
-    /* 打开设备 */
+    /* 打开只读设备文件，验证内核模块是否已注册。 */
     fd = open(DEVICE_PATH, O_RDONLY);
     if (fd < 0) {
         perror("Failed to open device");
@@ -60,10 +61,10 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* 计算映射大小 */
+    /* 共享区域按固定最大 CPU 数计算映射大小。 */
     data_size = sizeof(struct cpu_stat) * MAX_CPUS;
 
-    /* 映射共享内存 */
+    /* 只读 mmap，直接观察内核模块更新的快照。 */
     addr = mmap(NULL, data_size, PROT_READ, MAP_SHARED, fd, 0);
     if (addr == MAP_FAILED) {
         perror("Failed to mmap");
@@ -73,7 +74,7 @@ int main(int argc, char *argv[])
 
     stats = (struct cpu_stat *)addr;
 
-    /* 采集数据 */
+    /* 按命令行指定次数打印每个 CPU 的累计计数。 */
     for (int sample = 0; sample < count; sample++) {
         printf("--- Sample %d ---\n", sample + 1);
         printf("%-8s %12s %12s %12s %12s %12s %12s %12s %12s\n",
@@ -103,7 +104,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* 清理 */
+    /* 解除映射并关闭设备，完成测试资源清理。 */
     munmap(addr, data_size);
     close(fd);
 

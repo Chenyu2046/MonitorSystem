@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file rpc_client.h
+ * @brief Manager 侧兼容性 MonitorInfo 拉取客户端。
+ */
+
 #include <grpc/grpc.h>
 #include <grpcpp/create_channel.h>
 #include <grpcpp/grpcpp.h>
@@ -11,18 +16,20 @@
 
 namespace monitor {
 
-// RPC 客户端 - 用于从远程主机获取监控数据
+/** 从远程 Worker/Manager 端拉取 MonitorInfo 的 gRPC 客户端。 */
 class RpcClient {
  public:
+  /** 创建到指定地址的非加密 gRPC channel。 */
   explicit RpcClient(const std::string& host_address = "localhost:50051");
+  /** 释放 gRPC stub。 */
   ~RpcClient();
 
   // SetMonitorInfo 已移除 - Server 端现在本地采集数据
 
-  // 从远程主机获取监控数据
+  /** 同步调用 GetMonitorInfo，成功时写入输出消息。 */
   bool GetMonitorInfo(monitor::proto::MonitorInfo* monitor_info);
 
-  // 获取连接的主机地址
+  /** 返回构造时保存的目标地址。 */
   const std::string& GetHostAddress() const { return host_address_; }
 
  private:

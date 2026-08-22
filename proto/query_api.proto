@@ -1,17 +1,21 @@
 syntax = "proto3";
 package monitor.proto;
 
+// Manager 查询 API：客户端 request -> QueryService -> MySQL 或内存 fallback
+// -> response。分页字段只影响查询视图，不改变实时采集/诊断状态。
+
 import "google/protobuf/timestamp.proto";
+import "diagnostic.proto";
 
 // ========== 基础类型 ==========
 
-// 时间范围
+// 历史查询的起止时间。
 message TimeRange {
     google.protobuf.Timestamp start_time = 1;
     google.protobuf.Timestamp end_time = 2;
 }
 
-// 分页参数
+// 分页参数，page 从 1 开始，page_size 缺省时由服务端补默认值。
 message Pagination {
     int32 page = 1;      // 页码，从1开始
     int32 page_size = 2; // 每页大小，默认100
@@ -74,9 +78,40 @@ message QueryDetailRequest {
     Pagination pagination = 3;
 }
 
+message GetIncidentsRequest {
+    string server_name = 1;
+    TimeRange time_range = 2;
+    string root_cause = 3;
+    string severity = 4;
+    Pagination pagination = 5;
+}
+
+message GetIncidentsResponse {
+    repeated Incident incidents = 1;
+    int32 total_count = 2;
+    int32 page = 3;
+    int32 page_size = 4;
+}
+
+message GetIncidentDetailRequest {
+    uint64 incident_id = 1;
+}
+
+message GetIncidentDetailResponse {
+    Incident incident = 1;
+}
+
+message GetActiveDiagnosisRequest {
+    string server_name = 1;
+}
+
+message GetActiveDiagnosisResponse {
+    repeated Incident incidents = 1;
+}
+
 // ========== 数据记录 ==========
 
-// 性能数据记录
+// 主表性能快照，普通值和变化率字段共存。
 message PerformanceRecord {
     string server_name = 1;
     google.protobuf.Timestamp timestamp = 2;
@@ -119,7 +154,7 @@ message PerformanceRecord {
     float rcv_rate_rate = 80;
 }
 
-// 异常记录
+// 基于历史阈值筛选得到的异常记录。
 message AnomalyRecord {
     string server_name = 1;
     google.protobuf.Timestamp timestamp = 2;
@@ -130,7 +165,7 @@ message AnomalyRecord {
     string metric_name = 7;       // 指标名称
 }
 
-// 服务器评分摘要
+// 单服务器最新评分和关键主机指标摘要。
 message ServerScoreSummary {
     string server_name = 1;
     float score = 2;
@@ -143,7 +178,7 @@ message ServerScoreSummary {
     float load_avg_1 = 13;
 }
 
-// 集群统计信息
+// 最新评分查询的集群级聚合统计。
 message ClusterStats {
     int32 total_servers = 1;
     int32 online_servers = 2;
@@ -196,7 +231,7 @@ message QueryLatestScoreResponse {
 
 // ========== 详细数据记录 ==========
 
-// 网络详细数据
+// 单网卡历史 detail 记录。
 message NetDetailRecord {
     string server_name = 1;
     string net_name = 2;
@@ -220,7 +255,7 @@ message NetDetailRecord {
     float drop_out_rate = 35;
 }
 
-// 磁盘详细数据
+// 单磁盘历史 detail 记录。
 message DiskDetailRecord {
     string server_name = 1;
     string disk_name = 2;
@@ -241,7 +276,7 @@ message DiskDetailRecord {
     float util_percent_rate = 24;
 }
 
-// 内存详细数据
+// 主机内存分类历史 detail 记录。
 message MemDetailRecord {
     string server_name = 1;
     google.protobuf.Timestamp timestamp = 2;
@@ -270,7 +305,7 @@ message MemDetailRecord {
     float inactive_rate = 34;
 }
 
-// 软中断详细数据
+// 单 CPU 核 SoftIRQ 历史 detail 记录。
 message SoftIrqDetailRecord {
     string server_name = 1;
     string cpu_name = 2;
@@ -327,6 +362,7 @@ message QuerySoftIrqDetailResponse {
 
 // ========== 查询服务定义 ==========
 
+// QueryService 将历史性能、详细资源和 incident 视图暴露为 gRPC RPC。
 service QueryService {
     // 时间段性能数据查询
     rpc QueryPerformance(QueryPerformanceRequest) returns (QueryPerformanceResponse);
@@ -348,4 +384,7 @@ service QueryService {
     rpc QueryDiskDetail(QueryDetailRequest) returns (QueryDiskDetailResponse);
     rpc QueryMemDetail(QueryDetailRequest) returns (QueryMemDetailResponse);
     rpc QuerySoftIrqDetail(QueryDetailRequest) returns (QuerySoftIrqDetailResponse);
+    rpc GetIncidents(GetIncidentsRequest) returns (GetIncidentsResponse);
+    rpc GetIncidentDetail(GetIncidentDetailRequest) returns (GetIncidentDetailResponse);
+    rpc GetActiveDiagnosis(GetActiveDiagnosisRequest) returns (GetActiveDiagnosisResponse);
 }

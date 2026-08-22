@@ -1,6 +1,8 @@
 syntax = "proto3";
 package monitor.proto;
 
+// Worker 逐核 CPU 百分比样本。Manager 普通概览会对有效核求平均，
+// 异常路径仍可使用逐核最大值。
 message CpuStat{
     string cpu_name = 1;
     float cpu_percent = 2;

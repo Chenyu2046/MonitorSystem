@@ -1,3 +1,12 @@
+/**
+ * @file host_info_monitor.cpp
+ * @brief 主机名和主网卡 IPv4 标识采集实现。
+ *
+ * 主机标识属于每轮 MonitorInfo 的路由/归属信息，不是资源指标。首次
+ * 采集通过 gethostname() 和网卡枚举获取值，之后复用缓存，避免每个
+ * 采样周期重复访问系统接口。
+ */
+
 #include "monitor/host_info_monitor.h"
 
 #include <unistd.h>
@@ -20,6 +29,7 @@
 namespace monitor {
 
 std::string HostInfoMonitor::GetHostname() {
+  // 主机名获取失败时返回稳定的占位值，保证上层仍能构造完整消息。
   char hostname[256];
   if (gethostname(hostname, sizeof(hostname)) == 0) {
     return std::string(hostname);
@@ -28,6 +38,8 @@ std::string HostInfoMonitor::GetHostname() {
 }
 
 std::string HostInfoMonitor::GetPrimaryIpAddress() {
+  // 枚举接口只选择第一个非 loopback、非常见虚拟网卡的 IPv4 地址；
+  // 这不是网络吞吐采集，也不保证返回所有地址。
   struct ifaddrs* ifaddr = nullptr;
   struct ifaddrs* ifa = nullptr;
   std::string result;
@@ -79,7 +91,8 @@ void HostInfoMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
     return;
   }
 
-  // 主机信息通常不变，只需获取一次并缓存
+  // 主机信息通常不变，只需获取一次并缓存；缓存只在采集线程访问，
+  // 不与 gRPC 发送线程共享可变状态。
   if (!info_cached_) {
     cached_hostname_ = GetHostname();
     cached_ip_ = GetPrimaryIpAddress();
