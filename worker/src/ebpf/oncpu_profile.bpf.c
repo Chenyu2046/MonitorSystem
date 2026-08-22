@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Bounded perf-event On-CPU stack sampling. */
+/**
+ * @file oncpu_profile.bpf.c
+ * @brief perf_event 周期采样的 On-CPU 任务与调用栈聚合程序。
+ *
+ * perf_event 在当前占用 CPU 的任务上下文中触发，使用
+ * bpf_get_current_pid_tgid() 获取 TGID/PID，并通过 stack trace map 保存
+ * 用户/内核栈地址。LRU_PERCPU_HASH 只累计采样次数；采样次数是抽样
+ * 证据，不等同于精确的进程 CPU 百分比。
+ */
 
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
@@ -8,6 +16,7 @@
 #define MAX_STACK_DEPTH 64
 
 struct oncpu_stack_key {
+    /* TGID 表示进程，PID 表示线程；stack id 作为调用路径维度。 */
     __u32 tgid;
     __u32 pid;
     __s32 user_stack_id;
@@ -32,8 +41,10 @@ struct {
     __type(value, struct oncpu_stack_value);
 } oncpu_stack_counts SEC(".maps");
 
+/* 每次 perf_event 采样增加当前任务和调用栈组合的 samples。 */
 SEC("perf_event")
 int oncpu_sample(struct bpf_perf_event_data *ctx) {
+    /* 当前上下文就是被采样任务；用户态负责把 stack id 再读回地址。 */
     const __u64 pid_tgid = bpf_get_current_pid_tgid();
     struct oncpu_stack_key key = {
         .tgid = pid_tgid >> 32,

@@ -1,5 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Bounded sched_switch Off-CPU duration aggregation. */
+/**
+ * @file offcpu_profile.bpf.c
+ * @brief sched_switch 驱动的 Off-CPU 阻塞时长聚合程序。
+ *
+ * switch_out 记录被换出线程的时间戳和内核栈，switch_in 用当前时间减去
+ * 起始时间并按 PID/stack 聚合。offcpu_start 是临时状态，aggregate 是
+ * 用户态读取的总时长/样本数；这些样本描述等待/未运行时间，不是 CPU
+ * 使用率。
+ */
 
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
@@ -7,11 +15,13 @@
 #define MAX_STACK_DEPTH 64
 
 struct offcpu_start_value {
+    /* 每个 PID 一份临时换出状态，直到同一线程再次被调度入。 */
     __u64 timestamp_ns;
     __s32 kernel_stack_id;
 };
 
 struct offcpu_key {
+    /* 按线程和换出时内核栈归并 Off-CPU 时长。 */
     __u32 pid;
     __s32 kernel_stack_id;
 };
@@ -44,6 +54,7 @@ struct {
 
 static __always_inline void record_switch_out(
     struct trace_event_raw_sched_switch *ctx) {
+    /* sched_switch 中 prev_pid 是即将停止运行的任务；记录时间起点。 */
     if (ctx->prev_pid <= 0) {
         return;
     }
@@ -57,6 +68,7 @@ static __always_inline void record_switch_out(
 
 static __always_inline void record_switch_in(
     struct trace_event_raw_sched_switch *ctx) {
+    /* next_pid 恢复运行时闭合该线程的等待区间并写入 aggregate。 */
     if (ctx->next_pid <= 0) {
         return;
     }
@@ -87,6 +99,7 @@ static __always_inline void record_switch_in(
 
 SEC("tracepoint/sched/sched_switch")
 int offcpu_sched_switch(struct trace_event_raw_sched_switch *ctx) {
+    /* 同一 tracepoint 同时完成 out/in，形成尽可能完整的调度等待窗口。 */
     record_switch_out(ctx);
     record_switch_in(ctx);
     return 0;

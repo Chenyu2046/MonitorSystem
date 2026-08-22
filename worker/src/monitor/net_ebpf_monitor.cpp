@@ -1,3 +1,11 @@
+/**
+ * @file net_ebpf_monitor.cpp
+ * @brief 实现 TC/eBPF 网卡流量采集、Per-CPU 汇总和速率计算。
+ *
+ * 初始化阶段为每个非 loopback 网卡挂载 TC ingress/egress 程序；采集阶段
+ * 读取累计计数、与上次快照做差，再按实际时间间隔换算成协议需要的速率。
+ */
+
 #include "monitor/net_ebpf_monitor.h"
 
 #include <dirent.h>
@@ -25,7 +33,7 @@
 
 namespace monitor {
 
-// 获取系统所有网卡的 ifindex
+// 枚举 /sys/class/net，得到当前系统可见网卡的 ifindex。
 static std::vector<uint32_t> GetAllIfIndexes() {
   std::vector<uint32_t> indexes;
   DIR* dir = opendir("/sys/class/net");
@@ -44,7 +52,7 @@ static std::vector<uint32_t> GetAllIfIndexes() {
   return indexes;
 }
 
-// TC qdisc 操作辅助函数
+// 创建指定网卡的 clsact qdisc，为 TC ingress/egress 挂载提供容器。
 static int tc_qdisc_create_clsact(int ifindex) {
   // 使用 system 调用 tc 命令创建 clsact qdisc
   // 这是最简单可靠的方式
@@ -94,7 +102,7 @@ bool NetEbpfMonitor::InitEbpf() {
   struct net_stats_bpf* skel = nullptr;
   int err;
 
-  // 打开并加载 BPF 程序
+  // 先打开 skeleton，再加载程序和 map；任一步失败都回退到 proc 路径。
   skel = net_stats_bpf__open();
   if (!skel) {
     std::cerr << "Failed to open BPF skeleton" << std::endl;
@@ -108,7 +116,7 @@ bool NetEbpfMonitor::InitEbpf() {
     return false;
   }
 
-  // 获取 map fd
+  // 保存 Per-CPU 网卡计数 map 的 fd，后续按 ifindex 读取。
   map_fd_ = bpf_map__fd(skel->maps.net_stats_map);
   if (map_fd_ < 0) {
     std::cerr << "Failed to get map fd" << std::endl;
@@ -125,7 +133,7 @@ bool NetEbpfMonitor::InitEbpf() {
   }
   per_cpu_stats_.resize(static_cast<size_t>(possible_cpus));
 
-  // 获取所有网卡并附加 TC hook
+  // 为每个非 loopback 网卡创建 clsact，并分别挂载 ingress/egress 程序。
   auto ifindexes = GetAllIfIndexes();
   int ingress_fd = bpf_program__fd(skel->progs.tc_ingress);
   int egress_fd = bpf_program__fd(skel->progs.tc_egress);
@@ -175,7 +183,7 @@ bool NetEbpfMonitor::InitEbpf() {
     }
   }
 
-  // 保存 skeleton 指针
+  // 将 skeleton 交给成员管理，CleanupEbpf 负责统一销毁。
   bpf_obj_ = reinterpret_cast<struct bpf_object*>(skel);
 
   if (attached_ifindexes_.empty()) {
@@ -274,6 +282,7 @@ bool NetEbpfMonitor::ReadAggregatedStats(uint32_t ifindex, NetStats* stats) {
     return false;
   }
 
+  // Per-CPU map 每个槽位对应一个 CPU，需要在用户态相加后再计算速率。
   *stats = {};
   for (const auto& cpu_stats : per_cpu_stats_) {
     stats->rcv_bytes += cpu_stats.rcv_bytes;
@@ -295,6 +304,7 @@ void NetEbpfMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
     return;
   }
 
+  // 加载失败时保持既有 /proc/net/dev 采集行为，避免影响普通监控链路。
   if (!loaded_ || map_fd_ < 0) {
     UpdateFallback(monitor_info);
     return;
@@ -305,7 +315,7 @@ void NetEbpfMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
       std::chrono::duration_cast<std::chrono::milliseconds>(now - last_update_)
           .count();
 
-  // 避免除零
+  // 时间间隔极短时仍使用 1 ms，避免速率计算除零。
   if (duration == 0) {
     duration = 1;
   }
@@ -320,6 +330,7 @@ void NetEbpfMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
   const void* key = nullptr;
   int result = 0;
 
+  // 逐个遍历 map key；任意一次读取失败都放弃本轮 eBPF 快照。
   while ((result = bpf_map_get_next_key(map_fd_, key, &next_key)) == 0) {
     NetStats stats;
     if (!ReadAggregatedStats(next_key, &stats)) {
@@ -369,7 +380,7 @@ void NetEbpfMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
                 << ifname << std::endl;
     }
 
-    // 查找上次的缓存数据
+    // 根据 ifindex 找到上一次累计值；首次采集没有可计算的时间差。
     auto cache_it = cache_.find(interface_stats.ifindex);
     if (cache_it != cache_.end()) {
       const auto& old = cache_it->second;
@@ -378,7 +389,7 @@ void NetEbpfMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
                               .count();
 
       if (old_duration > 0) {
-        // 计算速率：协议字段要求字节速率使用 kB/s。
+        // 累计值做差后除以秒数；协议字段要求字节速率使用 kB/s。
         const uint64_t rcv_diff = stats.rcv_bytes >= old.rcv_bytes
                                       ? stats.rcv_bytes - old.rcv_bytes
                                       : stats.rcv_bytes;
@@ -406,7 +417,7 @@ void NetEbpfMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
       net_info->set_send_packets_rate(0);
     }
 
-    // 更新缓存
+    // 缓存本次累计值，供下一轮计算差分速率。
     cache_[interface_stats.ifindex] = {stats.rcv_bytes, stats.rcv_packets,
                                        stats.snd_bytes, stats.snd_packets, now};
   }

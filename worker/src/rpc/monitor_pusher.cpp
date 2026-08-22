@@ -1,3 +1,13 @@
+/**
+ * @file monitor_pusher.cpp
+ * @brief Worker 采集控制循环、诊断转换和 gRPC 重试实现。
+ *
+ * 每轮流程固定为：采集基础指标 -> 计算异常分数 -> 推进状态机 ->
+ * 按状态 attach/detach Probe -> 读取诊断快照 -> 转换 DiagnosticSnapshot
+ * protobuf -> 放入有界发送队列。发送线程随后执行 protobuf RPC，失败时
+ * 仅对 UNAVAILABLE/DEADLINE_EXCEEDED/RESOURCE_EXHAUSTED 做有限退避重试。
+ */
+
 #include "rpc/monitor_pusher.h"
 
 #include <algorithm>
@@ -13,6 +23,11 @@
 
 namespace {
 
+/**
+ * @brief 读取一个必须为正整数的环境变量，非法值回退到默认值。
+ *
+ * 配置解析发生在 Worker 启动阶段；不会在每轮采样读取环境变量。
+ */
 void ApplyPositiveEnv(const char* name, int default_value, int* target) {
   const char* raw = std::getenv(name);
   if (!raw) {
@@ -32,16 +47,24 @@ void ApplyPositiveEnv(const char* name, int default_value, int* target) {
   *target = static_cast<int>(parsed);
 }
 
+/** @brief 判断是否开启高噪声的基础指标日志。 */
 bool IsMetricsLogEnabled() {
   const char* value = std::getenv("MONITOR_VERBOSE_METRICS");
   return value && std::string(value) == "1";
 }
 
+/** @brief 判断是否开启诊断状态/Probe 日志。 */
 bool IsDiagnosticLogEnabled() {
   const char* value = std::getenv("KERNSCOPE_DIAGNOSTIC_LOG");
   return value && std::string(value) == "1";
 }
 
+/**
+ * @brief 将构造参数和环境变量合并为运行时可观测性配置。
+ *
+ * interval_seconds 只覆盖 NORMAL 基础间隔；诊断间隔、profiling 上限、
+ * cooldown、采样频率和 eBPF object 目录由环境变量按合法性校验覆盖。
+ */
 monitor::diagnostics::ObservabilityConfig MakeObservabilityConfig(
     int interval_seconds) {
   monitor::diagnostics::ObservabilityConfig config;
@@ -80,6 +103,12 @@ monitor::diagnostics::ObservabilityConfig MakeObservabilityConfig(
   return config;
 }
 
+/**
+ * @brief 根据异常信号选择 OnCPU 或 OffCPU profiling。
+ *
+ * 磁盘/IOWait 触发更适合观察等待时间，因此选择 OffCPU；其他异常默认
+ * 选择 OnCPU。这里只选择策略类型，不启动 profiling。
+ */
 monitor::diagnostics::ProfileType SelectProfileType(
     const monitor::diagnostics::AnomalyResult& anomaly) {
   for (const auto& signal : anomaly.signals) {
@@ -92,6 +121,7 @@ monitor::diagnostics::ProfileType SelectProfileType(
   return monitor::diagnostics::ProfileType::kOnCpu;
 }
 
+/** @brief 把内部状态机枚举映射为跨 gRPC 的 Protobuf 枚举。 */
 monitor::proto::ObservabilityState ToProtoState(
     monitor::diagnostics::ObservabilityState state) {
   switch (state) {
@@ -109,6 +139,7 @@ monitor::proto::ObservabilityState ToProtoState(
   return monitor::proto::OBSERVABILITY_NORMAL;
 }
 
+/** @brief 为诊断日志提供稳定的状态名称。 */
 const char* StateName(monitor::diagnostics::ObservabilityState state) {
   switch (state) {
     case monitor::diagnostics::ObservabilityState::kNormal:
@@ -125,6 +156,7 @@ const char* StateName(monitor::diagnostics::ObservabilityState state) {
   return "UNKNOWN";
 }
 
+/** @brief 把内部异常域映射为 Diagnostic protobuf 域枚举。 */
 monitor::proto::DiagnosticDomain ToProtoDomain(
     monitor::diagnostics::AnomalyDomain domain) {
   switch (domain) {
@@ -142,6 +174,7 @@ monitor::proto::DiagnosticDomain ToProtoDomain(
   return monitor::proto::DOMAIN_UNKNOWN;
 }
 
+/** @brief 为 ProbeStatus protobuf 和日志提供 Probe 名称。 */
 const char* ProbeName(monitor::diagnostics::ProbeKind kind) {
   switch (kind) {
     case monitor::diagnostics::ProbeKind::kTcp:
@@ -158,6 +191,13 @@ const char* ProbeName(monitor::diagnostics::ProbeKind kind) {
   return "UNKNOWN";
 }
 
+/**
+ * @brief 将 C++ 诊断快照和状态转换成 MonitorInfo.diagnostic。
+ *
+ * 基础 anomaly signals、Probe 状态、TCP/block/scheduler evidence 和
+ * top-N profiling 样本都在此完成 Protobuf 边界转换；profiling 按样本数
+ * 或 OffCPU 总时长排序，但不把排序结果解释成精确 CPU 百分比。
+ */
 void FillDiagnosticProto(
     const monitor::diagnostics::AnomalyResult& anomaly,
     monitor::diagnostics::ObservabilityState state,
@@ -200,6 +240,7 @@ void FillDiagnosticProto(
     signal->set_target("pid:" + std::to_string(sample.pid) +
                        "/tgid:" + std::to_string(sample.tgid));
   }
+  // Block I/O 的平均延迟只有在 count>0 时才有意义，单位从 ns 转为 ms。
   for (const auto& sample : snapshot.block_io) {
     if (sample.count == 0) {
       continue;
@@ -228,6 +269,8 @@ void FillDiagnosticProto(
     wakeups->set_target("pid:" + std::to_string(sample.pid));
   }
 
+  // 复制后排序只影响本轮 protobuf 的 top-N 顺序，不改变 ProbeController
+  // 持有的快照，也不把 samples 当作精确的进程 CPU 利用率。
   std::vector<monitor::diagnostics::OnCpuProfileSample> on_cpu =
       snapshot.profiling.on_cpu;
   std::sort(on_cpu.begin(), on_cpu.end(),
@@ -296,12 +339,13 @@ MonitorPusher::MonitorPusher(const std::string& manager_address,
                         observability_config_.profiling_max_duration_sec),
       send_queue_(observability_config_.sender_max_queue_items,
                   observability_config_.sender_max_queue_bytes) {
-  // 创建 gRPC channel 和 stub
+  // 创建 gRPC channel 和 stub。这里使用不带 TLS 的现有部署语义；RPC
+  // deadline 和重试策略在 SendWithRetry() 中统一控制。
   auto channel =
       grpc::CreateChannel(manager_address, grpc::InsecureChannelCredentials());
   stub_ = monitor::proto::GrpcManager::NewStub(channel);
 
-  // 创建指标采集器
+  // 创建指标采集器和内核符号索引；符号化失败不会阻断普通监控发送。
   collector_ = std::make_unique<MetricCollector>();
   symbolizer_.LoadKernelSymbols();
 }
@@ -309,11 +353,14 @@ MonitorPusher::MonitorPusher(const std::string& manager_address,
 MonitorPusher::~MonitorPusher() { Stop(); }
 
 void MonitorPusher::Start() {
+  // lifecycle_mutex_ 串行化 Start/Stop；compare_exchange 防止重复启动
+  // 两套采集/发送线程。
   std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
   bool expected = false;
   if (!running_.compare_exchange_strong(expected, true)) {
     return;
   }
+  // 先打开队列，再启动消费者，保证采集线程创建后可以立即入队。
   send_queue_.Open();
   sender_thread_ =
       std::make_unique<std::thread>(&MonitorPusher::SendLoop, this);
@@ -327,6 +374,8 @@ void MonitorPusher::Start() {
 }
 
 void MonitorPusher::Stop() {
+  // 先把 running_ 置 false 并唤醒等待，再 join 采集线程；采集停止后
+  // 关闭队列，让 sender thread 发送完剩余项或在空队列退出。
   std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
   if (!running_.exchange(false)) {
     return;
@@ -342,6 +391,7 @@ void MonitorPusher::Stop() {
 }
 
 void MonitorPusher::PushLoop() {
+  // 采集线程不直接做网络 RPC，避免 Manager 慢或重试阻塞下一次采样。
   while (running_) {
     if (!PushOnce()) {
       std::cerr << "Dropped monitor data before send to " << manager_address_
@@ -353,13 +403,19 @@ void MonitorPusher::PushLoop() {
 }
 
 bool MonitorPusher::PushOnce() {
-  // 采集监控数据
+  // ---------- 1. 采集本轮基础监控数据 ----------
+  // MetricCollector 只填充 CPU/内存/磁盘/网络/主机等普通指标。
   monitor::proto::MonitorInfo info;
   collector_->CollectAll(&info);
 
+  // ---------- 2. 根据基础指标计算异常程度 ----------
+  // AnomalyDetector 输出逐核/逐设备 max 和整体 max 分数，不改写 info。
   const auto anomaly = anomaly_detector_.Evaluate(info);
+  // ---------- 3. 推进异常诊断状态机 ----------
+  // 状态转换依赖连续样本而非单次尖峰，避免瞬时抖动直接启用重型 Probe。
   state_machine_.Update(anomaly);
   const auto state = state_machine_.state();
+  // ---------- 4. 根据状态按需开启/关闭诊断 Probe ----------
   const bool probes_ready =
       probe_controller_.Apply(state, SelectProfileType(anomaly));
   if (IsDiagnosticLogEnabled()) {
@@ -382,11 +438,14 @@ bool MonitorPusher::PushOnce() {
     }
     std::cout << " probes_ready=" << probes_ready << std::endl;
   }
+  // ---------- 5. 读取本轮 eBPF/profiling 诊断快照 ----------
   diagnostics::DiagnosticSnapshot diagnostic_snapshot;
   probe_controller_.CollectSnapshot(&diagnostic_snapshot);
+  // ---------- 6. 将诊断结果填入 protobuf ----------
   FillDiagnosticProto(anomaly, state, diagnostic_snapshot,
                       probe_controller_, symbolizer_, info.mutable_diagnostic());
 
+  // 可选的 verbose 日志只读本轮 protobuf，不参与业务处理。
   if (IsMetricsLogEnabled()) {
     // 打印采集到的所有指标
     std::cout << "\n================== Collected Metrics =================="
@@ -510,10 +569,13 @@ bool MonitorPusher::PushOnce() {
               << std::endl;
   }
 
+  // ---------- 7. 放入发送队列，由发送线程异步上报 Manager ----------
   return send_queue_.Push(std::move(info));
 }
 
 void MonitorPusher::SendLoop() {
+  // sender thread 与 PushLoop 解耦；队列关闭后 Pop() 会在剩余消息发送
+  // 完成时返回 false，形成可等待的退出边界。
   monitor::proto::MonitorInfo info;
   while (send_queue_.Pop(&info)) {
     if (!SendWithRetry(info)) {
@@ -524,6 +586,8 @@ void MonitorPusher::SendLoop() {
 }
 
 bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
+  // 每次尝试创建独立 ClientContext，设置 RPC deadline；只重试明确的
+  // 瞬态 gRPC 错误，避免把协议/参数错误重复发送。
   if (!running_.load()) {
     return false;
   }
@@ -548,6 +612,8 @@ bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
       return false;
     }
 
+    // 指数退避叠加 jitter，避免多个 Worker 同时失败后形成同步重试；
+    // WaitForRetry() 可被 Stop() 中的 notify 提前打断。
     static thread_local std::mt19937 random_engine(
         static_cast<std::mt19937::result_type>(
             std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -568,12 +634,16 @@ bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
 }
 
 bool MonitorPusher::WaitForRetry(std::chrono::milliseconds delay) {
+  // condition_variable 同时承担 backoff 定时和停止通知，避免 sleep 让
+  // Stop() 最多还要等待整个 retry delay。
   std::unique_lock<std::mutex> lock(stop_mutex_);
   return stop_condition_.wait_for(lock, delay,
                                   [this] { return !running_.load(); });
 }
 
 bool MonitorPusher::IsRetryable(const grpc::Status& status) {
+  // 仅网络暂不可用、deadline 和资源耗尽属于当前策略允许重试的错误；
+  // 其他状态直接失败，保留服务端/协议错误的可见性。
   switch (status.error_code()) {
     case grpc::StatusCode::UNAVAILABLE:
     case grpc::StatusCode::DEADLINE_EXCEEDED:
@@ -585,6 +655,8 @@ bool MonitorPusher::IsRetryable(const grpc::Status& status) {
 }
 
 void MonitorPusher::WaitForNextSample() {
+  // 用 100ms 小片段等待自适应间隔，既响应 running_ 停止，也让状态机
+  // 在下一轮采集时按 NORMAL/SUSPECT/DIAGNOSTIC 选择不同频率。
   constexpr int kWaitSliceMs = 100;
   const int interval_ms = state_machine_.CurrentIntervalMs();
   for (int elapsed_ms = 0; running_ && elapsed_ms < interval_ms;

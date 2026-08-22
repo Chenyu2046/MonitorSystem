@@ -1,3 +1,13 @@
+/**
+ * @file probe_controller.cpp
+ * @brief eBPF/perf Probe 的加载、attach、map 聚合和状态控制实现。
+ *
+ * 状态机 -> DesiredFor() -> LoadProbe()/Attach -> BPF map ->
+ * CollectSnapshot() -> MonitorPusher protobuf。ENABLE_EBPF 未启用时，
+ * Controller 保留 unavailable 语义，不改变普通监控路径；attach 失败
+ * 按固定次数和递增间隔重试，避免每轮采集反复创建内核对象。
+ */
+
 #include "diagnostics/probe_controller.h"
 
 #include <algorithm>
@@ -25,12 +35,16 @@ namespace {
 constexpr std::uint32_t kMaxAttachRetries = 3;
 constexpr auto kAttachRetryBaseDelay = std::chrono::seconds(5);
 
+/** @brief 判断一个失败 Probe 是否已达到下一次 attach 重试时间。 */
 bool AttachRetryDue(const ProbeController::ProbeStatus& status,
                    ProfileSession::Clock::time_point now) {
   return status.retry_count < kMaxAttachRetries &&
          now >= status.next_retry_at;
 }
 
+/**
+ * @brief 按 5s、10s 等递增间隔安排 attach 重试，最多尝试三次。
+ */
 void ScheduleAttachRetry(ProbeController::ProbeStatus* status,
                          ProfileSession::Clock::time_point now) {
   if (!status) return;
@@ -44,6 +58,7 @@ void ScheduleAttachRetry(ProbeController::ProbeStatus* status,
       now + kAttachRetryBaseDelay * static_cast<int>(multiplier);
 }
 
+/** @brief attach 成功或 Probe 被撤销时清空重试状态。 */
 void ClearAttachRetry(ProbeController::ProbeStatus* status) {
   if (!status) return;
   status->retry_count = 0;
@@ -53,6 +68,7 @@ void ClearAttachRetry(ProbeController::ProbeStatus* status) {
 #ifdef ENABLE_EBPF
 
 struct TcpKey {
+  // 以 TGID/PID 区分进程与线程，value 记录该任务的 TCP 重传累计次数。
   std::uint32_t tgid;
   std::uint32_t pid;
 };
@@ -62,6 +78,7 @@ struct TcpValue {
 };
 
 struct BlockValue {
+  // block_io_stats_map 的聚合值；latency 单位是纳秒，count 用于求平均。
   std::uint64_t count;
   std::uint64_t read_count;
   std::uint64_t write_count;
@@ -70,11 +87,13 @@ struct BlockValue {
 };
 
 struct SchedulerValue {
+  // Scheduler Probe 按任务累计上下文切换和唤醒次数。
   std::uint64_t switches;
   std::uint64_t wakeups;
 };
 
 struct OnCpuKey {
+  // On-CPU map 按任务和 user/kernel stack id 聚合 perf_event 采样次数。
   std::uint32_t tgid;
   std::uint32_t pid;
   std::int32_t user_stack_id;
@@ -86,6 +105,7 @@ struct OnCpuValue {
 };
 
 struct OffCpuKey {
+  // Off-CPU map 按线程和内核栈聚合阻塞时长。
   std::uint32_t pid;
   std::int32_t kernel_stack_id;
 };
@@ -96,11 +116,17 @@ struct OffCpuValue {
 };
 
 struct LoadedProbe {
+  // 一个已加载 BPF object 及其 link/perf fd 的 RAII 前置状态；销毁函数
+  // 负责 detach link、关闭 perf fd 并释放 object。
   bpf_object* object = nullptr;
   std::vector<bpf_link*> links;
   std::vector<int> perf_fds;
 };
 
+/**
+ * @brief 从 BPF stack map 读取 stack id 对应的地址序列。
+ * @return 成功读取且至少可遍历 map 时返回 true；0 地址作为序列结束。
+ */
 bool ReadStackTrace(int map_fd, std::int32_t stack_id,
                     std::vector<std::uint64_t>* addresses) {
   if (!addresses || stack_id < 0 || map_fd < 0) {
@@ -464,6 +490,9 @@ ProbeController::~ProbeController() {
 
 bool ProbeController::Apply(ObservabilityState state, ProfileType profile_type,
                             ProfileSession::Clock::time_point now) {
+  // Apply 是状态机与内核 Probe 之间的唯一编排点：先处理 profiling
+  // session 生命周期，再根据目标集合增量 attach/detach，最后更新重试
+  // 状态。调用发生在 MonitorPusher 的控制循环中。
   const bool profiling_requested = state == ObservabilityState::kProfiling;
   if (!profiling_requested) {
     profile_expired_ = false;
@@ -489,6 +518,8 @@ bool ProbeController::Apply(ObservabilityState state, ProfileType profile_type,
 
   const bool profile_active =
       profile_session_ && profile_session_->active() && profiling_requested;
+  // desired 只描述当前状态所需的 Probe；例如 SUSPECT 只需要 TCP/Block
+  // I/O，DIAGNOSTIC 再增加 Scheduler，profiling 才增加一种 stack Probe。
   const auto desired = DesiredFor(state, profile_type, profile_active);
   const bool changed = !initialized_ || desired != desired_probes_;
 
@@ -518,6 +549,8 @@ bool ProbeController::Apply(ObservabilityState state, ProfileType profile_type,
 #endif
   }
 
+  // 对五类 Probe 统一处理 requested/available/attached 状态。非 requested
+  // 的 Probe 必须释放旧 runtime，避免状态降级后继续持有内核资源。
   bool all_available = true;
   for (ProbeKind kind :
        {ProbeKind::kTcp, ProbeKind::kBlockIo, ProbeKind::kScheduler,
@@ -548,6 +581,8 @@ bool ProbeController::Apply(ObservabilityState state, ProfileType profile_type,
     }
     DestroyLoadedProbe(&runtime_->probes[Index(kind)]);
     status.last_error = 0;
+    // LoadProbe 内部完成 BPF object load、hook/perf attach 和 map 准备；
+    // 失败只记录状态并安排有限重试，不阻塞基础 MonitorInfo 上报。
     status.attached =
         LoadProbe(object_dir_, kind, profile_sample_hz_,
                   &runtime_->probes[Index(kind)], &status.last_error);
@@ -572,6 +607,8 @@ bool ProbeController::Apply(ObservabilityState state, ProfileType profile_type,
 }
 
 bool ProbeController::CollectSnapshot(DiagnosticSnapshot* snapshot) const {
+  // 先清空输出，避免把上一轮诊断样本误带入当前 protobuf；每种 Probe
+  // 只在 attached 时读取对应 map，读取失败通过返回值暴露给调用方。
   if (!snapshot) {
     return false;
   }
@@ -641,6 +678,8 @@ std::size_t ProbeController::Index(ProbeKind kind) {
 std::set<ProbeKind> ProbeController::DesiredFor(ObservabilityState state,
                                                 ProfileType profile_type,
                                                 bool profile_active) {
+  // 状态到 Probe 的映射体现诊断成本分层：普通/怀疑/诊断逐级增加资源，
+  // profiling 只在 ProfileSession 已 active 时 attach OnCPU 或 OffCPU。
   std::set<ProbeKind> desired;
   switch (state) {
     case ObservabilityState::kNormal:

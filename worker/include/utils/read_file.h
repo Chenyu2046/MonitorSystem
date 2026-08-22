@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file read_file.h
+ * @brief 面向空格分隔文本的轻量文件读取辅助类。
+ */
+
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -7,12 +12,15 @@
 #include <vector>
 
 namespace monitor {
+/** 逐行读取文件并把空格分隔字段追加到调用方容器。 */
 class ReadFile {
  public:
- //接受文件名作为参数，并初始化文件输入流ifs_
+  /** 打开指定文件；后续 ReadLine 复用该输入流。 */
   explicit ReadFile(const std::string& name) : ifs_(name) {}
+  /** 关闭文件输入流。 */
   ~ReadFile() { ifs_.close(); }
 
+  /** 读取下一行；遇到 EOF 或空行时返回 false。 */
   bool ReadLine(std::vector<std::string>* args);
   // static std::vector<std::string> GetStatsLines(const std::string& stat_file,
   //                                               const int line_count) {
@@ -30,6 +38,6 @@ class ReadFile {
   // }
 
  private:
-  std::ifstream ifs_;  //定义了一个私有的文件输入流对象，用于实际的文件读取操作
+  std::ifstream ifs_;  // 保存实际执行文件读取的输入流。
 };
 }  // namespace monitor

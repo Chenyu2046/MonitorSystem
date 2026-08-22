@@ -1,5 +1,14 @@
 #pragma once
 
+/**
+ * @file monitor_pusher.h
+ * @brief Worker 采集、异常判断、诊断控制、队列和 gRPC 上报总编排接口。
+ *
+ * 主流程为：MetricCollector -> AnomalyDetector -> StateMachine ->
+ * ProbeController -> DiagnosticSnapshot/Protobuf -> MonitorSendQueue ->
+ * gRPC SetMonitorInfo。采集线程和发送线程分离，队列负责背压与优先级。
+ */
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -24,9 +33,11 @@
 namespace monitor {
 
 /**
- * 监控数据推送器
+ * @brief Worker 端周期采集和异步上报控制器。
  *
- * Adaptive sampling (10 seconds in NORMAL) pushes metrics over gRPC.
+ * PushLoop 只负责采集/诊断/入队，SendLoop 负责带 deadline 和有限重试的
+ * gRPC 发送；Stop() 通过 running_、condition_variable 和 join 保证两个
+ * 后台线程在对象析构前退出。
  */
 class MonitorPusher {
  public:
@@ -39,22 +50,29 @@ class MonitorPusher {
                          int interval_seconds = 10);
   ~MonitorPusher();
 
-  // 启动推送线程
+  /** @brief 打开发送队列并启动采集线程、发送线程。 */
   void Start();
 
-  // 停止推送
+  /** @brief 停止采集、关闭队列并等待发送线程退出。 */
   void Stop();
 
   // 获取管理者地址
   const std::string& GetManagerAddress() const { return manager_address_; }
 
  private:
+  /** @brief 周期执行 PushOnce，并按状态机选择下一轮间隔。 */
   void PushLoop();
+  /** @brief 从队列取消息并串行执行 gRPC 发送/重试。 */
   void SendLoop();
+  /** @brief 执行一次完整采集、诊断、protobuf 填充和入队。 */
   bool PushOnce();
+  /** @brief 用可中断等待实现自适应采样间隔。 */
   void WaitForNextSample();
+  /** @brief 按配置 deadline/retry policy 发送一条 MonitorInfo。 */
   bool SendWithRetry(const monitor::proto::MonitorInfo& info);
+  /** @brief 在 retry backoff 期间等待，Stop() 时提前唤醒。 */
   bool WaitForRetry(std::chrono::milliseconds delay);
+  /** @brief 判断 gRPC 状态是否属于可安全重试的瞬态错误。 */
   static bool IsRetryable(const grpc::Status& status);
 
   std::string manager_address_;

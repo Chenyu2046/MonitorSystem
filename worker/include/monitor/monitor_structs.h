@@ -1,5 +1,14 @@
 #pragma once
 
+/**
+ * @file monitor_structs.h
+ * @brief 内核模块与 Worker 共享的 mmap 数据布局。
+ *
+ * 这些 C-compatible 结构必须与 worker/src/kmod 中的定义保持字段顺序、
+ * 类型和容量一致。内核模块写入累计 CPU/SoftIRQ/load 值，用户态只读
+ * 映射并自行计算 delta、速率和 Protobuf；修改布局会破坏 mmap ABI。
+ */
+
 #include <stdint.h>
 
 /*
@@ -11,7 +20,7 @@
 extern "C" {
 #endif
 
-/* 软中断统计结构体 */
+/* 逐核 SoftIRQ 累计计数；cpu_name 为空表示数组结束。 */
 struct softirq_stat {
     char cpu_name[16];      /* CPU 名称，如 "cpu0" */
     uint64_t hi;            /* HI_SOFTIRQ - 高优先级软中断 */
@@ -26,14 +35,14 @@ struct softirq_stat {
     uint64_t rcu;           /* RCU_SOFTIRQ - RCU 软中断 */
 };
 
-/* CPU 负载统计结构体 */
+/* 主机 load average 窗口值；不是 CPU busy 百分比。 */
 struct cpu_load {
     float load_avg_1;       /* 1 分钟平均负载 */
     float load_avg_3;       /* 5 分钟平均负载 (注：实际是 5 分钟) */
     float load_avg_15;      /* 15 分钟平均负载 */
 };
 
-/* CPU 使用率统计结构体 */
+/* 逐核 CPU 累计时间快照；百分比由用户态前后采样计算。 */
 struct cpu_stat {
     char cpu_name[16];      /* CPU 名称 */
     uint64_t user;          /* 用户态时间 */

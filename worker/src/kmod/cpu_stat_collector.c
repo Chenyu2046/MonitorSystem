@@ -1,15 +1,13 @@
-/*
- * cpu_stat_collector.c - CPU 状态统计数据采集内核模块
+/**
+ * @file cpu_stat_collector.c
+ * @brief 通过字符设备和 mmap 暴露逐核 CPU 累计时间的 Linux 内核模块。
  *
- * 功能：
- * 1. 在内核空间分配结构体数组内存，存放所有 CPU 的状态统计数据
- * 2. 使用高精度定时器每秒从 per_cpu(kstat_cpu, cpu).cpustat[] 读取数据并更新
- * 3. 注册字符设备 /dev/cpu_stat_monitor，通过 mmap 暴露给用户空间
+ * 数据流：per-CPU kernel_cpustat -> 每秒 hrtimer 更新共享数组 ->
+ * /dev/cpu_stat_monitor -> Worker mmap -> 前后快照 delta。该模块只提供
+ * 自系统启动以来的累计值，不计算百分比，也不持有用户态缓存。
  *
- * 数据来源：
- * - Linux 内核中每个 CPU 都有一个 struct kernel_cpustat 类型的 per-CPU 变量
- * - 该结构体中的 cpustat[] 数组记录 CPU 在不同状态下的累计时间
- * - 状态包括：user, nice, system, idle, iowait, irq, softirq, steal, guest, guest_nice
+ * 边界：共享数组容量固定为 MAX_CPUS，cpu_name 为空作为用户态遍历结束
+ * 标志；时间单位转换为 clock_t/jiffies 后由 Worker 解释为累计计数。
  */
 
 #include <linux/module.h>
@@ -43,7 +41,7 @@ MODULE_AUTHOR("Monitor System");
 MODULE_DESCRIPTION("CPU statistics collector via mmap");
 MODULE_VERSION("1.0");
 
-/* CPU 状态统计结构体 - 与用户空间共享 */
+/* 与 Worker monitor_structs.h 布局保持一致的用户态/内核态共享结构。 */
 struct cpu_stat {
     char cpu_name[16];      /* CPU 名称，如 "cpu0" */
     uint64_t user;          /* 用户态时间 */
@@ -71,9 +69,12 @@ static int num_cpus;                         /* CPU 数量 */
 static struct hrtimer update_timer;          /* 高精度定时器 */
 static ktime_t timer_interval;               /* 定时器间隔 */
 
-/*
- * 获取 CPU 空闲时间
- * 需要考虑 NO_HZ 模式下的空闲时间统计
+/**
+ * @brief 获取一个 CPU 的累计 idle 时间。
+ *
+ * NO_HZ/tickless 内核优先使用 get_cpu_idle_time_us() 的精确值；返回
+ * -1 时回退到 kernel_cpustat 的传统累计值。两条路径最后都转换到
+ * jiffies/clock_t 语义供共享结构和 Worker 使用。
  */
 static u64 cpu_stat_get_idle_time(int cpu)
 {
@@ -94,9 +95,11 @@ static u64 cpu_stat_get_idle_time(int cpu)
     return idle_time;
 }
 
-/*
- * 获取 CPU I/O 等待时间
- * 需要考虑 NO_HZ 模式下的 iowait 时间统计
+/**
+ * @brief 获取一个 CPU 的累计 IOWait 时间，并处理 NO_HZ fallback。
+ *
+ * IOWait 仍作为 CPU total 的组成部分传给 Worker，但是否计入 busy 由
+ * Worker 的百分比公式决定；内核模块只负责提供原始累计计数。
  */
 static u64 cpu_stat_get_iowait_time(int cpu)
 {
@@ -117,9 +120,12 @@ static u64 cpu_stat_get_iowait_time(int cpu)
     return iowait_time;
 }
 
-/*
- * 更新 CPU 状态统计数据
- * 从内核的 kcpustat_cpu 读取数据并填充到共享内存
+/**
+ * @brief 遍历 possible CPU 并刷新 mmap 共享数组。
+ *
+ * for_each_possible_cpu() 给出内核允许存在的 CPU 集合；每项写入 cpu
+ * 名称和各状态累计值，数组末尾写入空名称作为用户态边界。该函数在
+ * 模块初始化和 hrtimer 回调中执行，不进行用户态通知。
  */
 static void update_cpu_stats(void)
 {
@@ -158,9 +164,11 @@ static void update_cpu_stats(void)
     }
 }
 
-/*
- * 高精度定时器回调函数
- * 每秒触发一次，更新 CPU 状态统计数据
+/**
+ * @brief hrtimer 周期回调，每秒刷新一次 CPU 累计统计。
+ *
+ * hrtimer_forward_now() 重新计算下一次到期时间；回调返回
+ * HRTIMER_RESTART 让内核继续调度同一个定时器。
  */
 static enum hrtimer_restart timer_callback(struct hrtimer *timer)
 {
@@ -189,8 +197,11 @@ static int cpu_stat_release(struct inode *inode, struct file *file)
     return 0;
 }
 
-/*
- * mmap 回调 - 将内核数据映射到用户空间
+/**
+ * @brief 将内核共享数组映射到 Worker 用户空间。
+ *
+ * 只接受不超过 data_size 的映射请求，并通过 remap_pfn_range() 暴露
+ * 物理页。用户态以只读方式访问；这里不复制数据或建立 protobuf。
  */
 static int cpu_stat_mmap(struct file *file, struct vm_area_struct *vma)
 {

@@ -1,3 +1,11 @@
+/**
+ * @file diagnostics_test.cpp
+ * @brief 验证 Worker 异常评分、状态机、Probe、profiling 和发送队列。
+ *
+ * 这些测试覆盖 NORMAL -> SUSPECT -> DIAGNOSTIC -> PROFILING -> COOLDOWN
+ * 的连续样本语义，以及 ENABLE_EBPF 不可用时的显式降级状态。
+ */
+
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -27,6 +35,7 @@ using monitor::diagnostics::ProfileSession;
 using monitor::diagnostics::ProfileType;
 using monitor::diagnostics::Symbolizer;
 
+/** @brief 构造基础异常评估输入。 */
 monitor::proto::MonitorInfo MakeBaseInfo() {
   monitor::proto::MonitorInfo info;
   auto* cpu = info.add_cpu_stat();
@@ -58,6 +67,7 @@ AnomalyResult HighAnomaly() {
 
 AnomalyResult Recovery() { return {}; }
 
+/** @brief 验证阈值归一化、逐核最大值和 profile/diagnose 建议。 */
 void TestAnomalyDetector() {
   AnomalyDetector detector;
   const auto normal = detector.Evaluate(MakeBaseInfo());
@@ -98,6 +108,7 @@ void TestAnomalyDetector() {
   assert(disk.overall_score >= 0.8);
 }
 
+/** @brief 验证异常状态按连续样本和 profiling 时限推进。 */
 void TestStateMachineTransitions() {
   ObservabilityConfig config;
   assert(config.IsValid());
@@ -135,6 +146,7 @@ void TestStateMachineTransitions() {
   assert(machine.CurrentIntervalMs() == config.normal_interval_ms);
 }
 
+/** @brief 验证恢复也需要连续样本并经过 cooldown。 */
 void TestRecoveryHysteresis() {
   ObservabilityStateMachine machine;
   const auto start = ObservabilityStateMachine::Clock::now();
@@ -148,6 +160,7 @@ void TestRecoveryHysteresis() {
   assert(machine.state() == ObservabilityState::kNormal);
 }
 
+/** @brief 验证各状态所需 Probe 集合、重试和 unavailable 语义。 */
 void TestProbeController() {
   ProbeController controller;
   assert(controller.Apply(ObservabilityState::kNormal));
@@ -179,6 +192,7 @@ void TestProbeController() {
   assert(controller.DesiredProbes().count(ProbeKind::kOnCpuProfile) == 0);
 }
 
+/** @brief 验证 profiling session start/expire/close 幂等行为。 */
 void TestProfileSession() {
   bool detached = false;
   ProfileSession session(1, ProfileType::kOnCpu, std::chrono::seconds(2),
@@ -193,6 +207,7 @@ void TestProfileSession() {
   assert(detached);
 }
 
+/** @brief 验证符号文件不可读时回退为地址文本。 */
 void TestSymbolizerFallback() {
   Symbolizer symbolizer;
   assert(!symbolizer.LoadKernelSymbols("missing-kallsyms"));
@@ -211,6 +226,7 @@ void TestSymbolizerFallback() {
   std::filesystem::remove(symbols_path);
 }
 
+/** @brief 验证可读 stack frame 被保留用于 protobuf/evidence。 */
 void TestProfileStackFrames() {
   monitor::diagnostics::OnCpuProfileSample sample;
   sample.user_stack_id = -1;
@@ -231,6 +247,7 @@ void TestProfileStackFrames() {
   assert(entry.kernel_stack_size() == 1);
 }
 
+/** @brief 验证 Probe runtime status 的 requested/available/attached 字段。 */
 void TestProbeRuntimeStatusProto() {
   monitor::proto::DiagnosticSnapshot diagnostic;
   auto* status = diagnostic.add_probe_status();
@@ -245,6 +262,7 @@ void TestProbeRuntimeStatusProto() {
   assert(diagnostic.probe_status(0).last_error() == -95);
 }
 
+/** @brief 验证诊断消息优先于普通基础指标保留。 */
 void TestMonitorSendQueuePriority() {
   monitor::MonitorSendQueue queue(2, 1024);
   queue.Open();

@@ -1,12 +1,17 @@
 #pragma once
 
+/**
+ * @file host_info_monitor.h
+ * @brief Worker 主机标识采集器接口。
+ */
+
 #include <string>
 #include "monitor/monitor_inter.h"
 
 namespace monitor {
 
 /**
- * 主机标识信息监控器
+ * @brief 主机标识信息监控器。
  * 
  * 采集服务器的标识信息，用于调度服务器识别和定位：
  * - hostname: 主机名，通过 gethostname() 获取
@@ -21,6 +26,7 @@ class HostInfoMonitor : public MonitorInter {
   HostInfoMonitor() = default;
   ~HostInfoMonitor() override = default;
 
+  /** @brief 填充缓存的 hostname 和主网卡 IPv4 地址。 */
   void UpdateOnce(monitor::proto::MonitorInfo* monitor_info) override;
   void Stop() override {}
 

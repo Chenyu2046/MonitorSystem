@@ -1,8 +1,18 @@
+/**
+ * @file observability_config.cpp
+ * @brief 可观测性配置的一致性校验实现。
+ *
+ * 校验结果用于阻止不可能的状态机阈值、负间隔、无界 profiling 或错误
+ * 重试窗口进入运行时；本文件不修改配置，也不读取环境变量。
+ */
+
 #include "diagnostics/observability_config.h"
 
 namespace monitor::diagnostics {
 
 bool ObservabilityConfig::IsValid() const {
+  // 所有比较集中在这里，确保状态机、ProbeController 和发送队列看到的
+  // 参数处于同一组基本不变量内；具体业务阈值仍由调用方解释。
   return normal_interval_ms > 0 && suspect_interval_ms > 0 &&
          diagnostic_interval_ms > 0 && anomaly_enter_count > 0 &&
          diagnostic_enter_count > 0 && anomaly_exit_count > 0 &&

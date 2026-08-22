@@ -1,3 +1,12 @@
+/**
+ * @file net_monitor.cpp
+ * @brief 基于 /proc/net/dev 的普通网络监控和速率 fallback。
+ *
+ * /proc/net/dev 提供接口级累计字节、包、错误和丢弃计数；本文件用
+ * steady_clock 的前后快照计算 KB/s 和 packets/s。TCP 重传、任务级网络
+ * 证据和 TC per-CPU 聚合属于独立的 eBPF 诊断/增强路径。
+ */
+
 #include "monitor/net_monitor.h"
 #include <chrono>
 #include <string>
@@ -11,6 +20,7 @@
 namespace monitor {
 
 struct NetStat {
+    // Linux 接口统计中的累计值；速率只能由相邻采样差值获得。
     std::string name;
     uint64_t rcv_bytes;
     uint64_t rcv_packets;
@@ -22,7 +32,11 @@ struct NetStat {
     uint64_t drop_out;
 };
 
-// 从 /proc/net/dev 读取网络统计信息
+/**
+ * @brief 解析 /proc/net/dev 中的接口累计统计。
+ *
+ * @return 非 loopback 接口的当前累计快照；文件不可读时返回空数组。
+ */
 static std::vector<NetStat> get_net_stats_from_proc() {
     std::vector<NetStat> stats;
     std::ifstream file("/proc/net/dev");
@@ -67,6 +81,8 @@ static std::vector<NetStat> get_net_stats_from_proc() {
 }
 
 void NetMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
+    // 这是普通主机/接口级监控路径；这里只计算吞吐和包速率，不生成
+    // TCP 异常证据，也不访问 eBPF map。
     auto now = std::chrono::steady_clock::now();
     auto stats = get_net_stats_from_proc();
 
@@ -85,7 +101,7 @@ void NetMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
             }
         }
 
-        // 填充 protobuf
+        // 将本轮速率和累计错误/丢弃计数写入 protobuf；错误字段不是速率。
         auto net_info = monitor_info->add_net_info();
         net_info->set_name(stat.name);
         net_info->set_rcv_rate(rcv_rate);
@@ -98,7 +114,7 @@ void NetMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
         net_info->set_drop_in(stat.drop_in);
         net_info->set_drop_out(stat.drop_out);
 
-        // 更新缓存
+        // 更新当前接口基线，下一轮按相同接口名称计算变化率。
         last_net_info_[stat.name] = NetInfo{
             stat.name, stat.rcv_bytes, stat.rcv_packets, stat.snd_bytes, stat.snd_packets,
             stat.err_in, stat.err_out, stat.drop_in, stat.drop_out, now

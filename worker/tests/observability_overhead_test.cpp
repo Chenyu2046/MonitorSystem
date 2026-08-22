@@ -1,3 +1,11 @@
+/**
+ * @file observability_overhead_test.cpp
+ * @brief 以固定迭代次数比较 NORMAL/DIAGNOSTIC/PROFILING 控制循环开销。
+ *
+ * 测试覆盖 anomaly evaluate、状态机更新、队列入出队和 profiling payload
+ * 的控制路径；输出是微基准观测，不把结果作为绝对性能承诺。
+ */
+
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -10,6 +18,7 @@
 
 namespace {
 
+/** @brief 构造指定状态和 profiling payload 的控制循环输入。 */
 monitor::proto::MonitorInfo MakeInfo(monitor::proto::ObservabilityState state,
                                      bool with_profile) {
   monitor::proto::MonitorInfo info;
@@ -31,6 +40,7 @@ monitor::proto::MonitorInfo MakeInfo(monitor::proto::ObservabilityState state,
   return info;
 }
 
+/** @brief 重复运行一组控制操作并返回耗时微秒。 */
 std::int64_t Measure(const monitor::proto::MonitorInfo& info,
                      std::size_t iterations) {
   monitor::diagnostics::ObservabilityConfig config;

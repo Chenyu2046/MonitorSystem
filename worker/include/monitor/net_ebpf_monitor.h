@@ -1,5 +1,13 @@
 #pragma once
 
+/**
+ * @file net_ebpf_monitor.h
+ * @brief 基于 TC/eBPF 的网卡流量采集接口。
+ *
+ * 该监控器读取每个 CPU 上的网卡累计计数，并在用户态汇总后按时间差
+ * 计算速率；eBPF 不可用或连续读取失败时沿用 /proc/net/dev 回退路径。
+ */
+
 #include <chrono>
 #include <memory>
 #include <string>
@@ -14,30 +22,34 @@ struct bpf_object;
 namespace monitor {
 
 /**
- * 基于 eBPF 的网络流量监控器
+ * 基于 eBPF 的网络流量监控器。
  *
  * 使用 eBPF tracepoint 挂载到内核网络路径，
  * 实时统计每个网卡的收发流量。
  */
 class NetEbpfMonitor : public MonitorInter {
  public:
+  /** 构造回退监控器并尝试加载 TC/eBPF 程序。 */
   NetEbpfMonitor();
+  /** 释放 eBPF 对象及已附加的 TC hook。 */
   ~NetEbpfMonitor() override;
 
+  /** 采集各网卡流量、包数、错误和丢包，并转换为协议字段。 */
   void UpdateOnce(monitor::proto::MonitorInfo* monitor_info) override;
+  /** 主动停止并清理 eBPF 资源。 */
   void Stop() override;
 
-  // 检查 eBPF 是否成功加载
+  /** 返回当前 eBPF 数据路径是否仍处于可用状态。 */
   bool IsLoaded() const { return loaded_; }
 
  private:
-  // 初始化 eBPF 程序
+  /** 打开 skeleton、读取 map，并为可用网卡附加 ingress/egress TC hook。 */
   bool InitEbpf();
 
-  // 清理 eBPF 资源
+  /** 分离已挂载的 TC hook，并销毁 skeleton。 */
   void CleanupEbpf();
 
-  // 根据 ifindex 获取网卡名称
+  /** 根据 ifindex 获取网卡名称，优先使用用户态缓存。 */
   std::string GetIfName(uint32_t ifindex);
 
   struct NetStats {
@@ -47,7 +59,9 @@ class NetEbpfMonitor : public MonitorInter {
     uint64_t snd_packets = 0;
   };
 
+  /** 读取 Per-CPU map 并把同一网卡的计数合并为一个快照。 */
   bool ReadAggregatedStats(uint32_t ifindex, NetStats* stats);
+  /** eBPF 路径不可用时委托给 /proc/net/dev 监控器。 */
   void UpdateFallback(monitor::proto::MonitorInfo* monitor_info);
 
   // 上一次采集的数据，用于计算速率

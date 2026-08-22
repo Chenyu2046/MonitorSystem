@@ -1,10 +1,13 @@
-/*
- * softirq_collector.c - 软中断统计数据采集内核模块
+/**
+ * @file softirq_collector.c
+ * @brief 通过字符设备和 mmap 暴露逐核 SoftIRQ 累计次数的内核模块。
  *
- * 功能：
- * 1. 在内核空间分配结构体数组内存，存放所有 CPU 的软中断统计数据
- * 2. 使用高精度定时器每秒从 kstat_softirqs 读取数据并更新
- * 3. 注册字符设备 /dev/cpu_softirq_monitor，通过 mmap 暴露给用户空间
+ * 数据流：kstat_softirqs_cpu() -> 每秒 hrtimer 更新共享数组 ->
+ * /dev/cpu_softirq_monitor -> Worker mmap -> 前后快照速率。模块只提供
+ * 累计计数，不将 SoftIRQ 转换为速率或异常分数。
+ *
+ * 边界：数组容量固定为 MAX_CPUS，cpu_name 为空表示结束；NET_RX/NET_TX
+ * 等类型仍按 CPU 保留，便于用户态和网络指标联合诊断。
  */
 
 #include <linux/module.h>
@@ -32,7 +35,7 @@ MODULE_AUTHOR("Monitor System");
 MODULE_DESCRIPTION("Softirq statistics collector via mmap");
 MODULE_VERSION("1.0");
 
-/* 软中断统计结构体 - 与用户空间共享 */
+/* 与 Worker monitor_structs.h 对齐的用户态/内核态共享结构。 */
 struct softirq_stat {
     char cpu_name[16];      /* CPU 名称，如 "cpu0" */
     uint64_t hi;            /* HI_SOFTIRQ */
@@ -60,9 +63,12 @@ static int num_cpus;                         /* CPU 数量 */
 static struct hrtimer update_timer;          /* 高精度定时器 */
 static ktime_t timer_interval;               /* 定时器间隔 */
 
-/*
- * 更新软中断统计数据
- * 从内核的 kstat_softirqs 读取数据并填充到共享内存
+/**
+ * @brief 遍历 possible CPU 并刷新各类 SoftIRQ 累计计数。
+ *
+ * kstat_softirqs_cpu() 返回指定 CPU 和 SoftIRQ 类型的累计次数；用户态
+ * 会用相邻两轮差值除以时间间隔得到每秒速率。空 cpu_name 是数组结束
+ * 标志，不代表一个真实的 CPU 样本。
  */
 static void update_softirq_stats(void)
 {
@@ -98,9 +104,8 @@ static void update_softirq_stats(void)
     }
 }
 
-/*
- * 高精度定时器回调函数
- * 每秒触发一次，更新软中断统计数据
+/**
+ * @brief hrtimer 周期回调，每秒刷新一次 SoftIRQ 共享数组。
  */
 static enum hrtimer_restart timer_callback(struct hrtimer *timer)
 {
@@ -129,8 +134,11 @@ static int softirq_release(struct inode *inode, struct file *file)
     return 0;
 }
 
-/*
- * mmap 回调 - 将内核数据映射到用户空间
+/**
+ * @brief 将 SoftIRQ 共享数组映射到 Worker 用户空间。
+ *
+ * 映射大小不能超过分配区域；建立映射后，用户态只读消费，速率和
+ * protobuf 转换仍由 CpuSoftIrqMonitor 执行。
  */
 static int softirq_mmap(struct file *file, struct vm_area_struct *vma)
 {

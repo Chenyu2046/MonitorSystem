@@ -1,20 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0
-/*
- * net_stats.bpf.c - 基于 TC Hook 的 eBPF 网络流量统计程序
+/**
+ * @file net_stats.bpf.c
+ * @brief 基于 TC ingress/egress hook 的接口级网络流量统计程序。
  *
- * 功能：
- * 1. 使用 TC (Traffic Control) hook 挂载到网络协议栈
- * 2. 在 ingress/egress 方向分别统计流量
- * 3. 通过 BPF map 将数据暴露给用户空间
+ * TC 位于网络协议栈 L2/L3 边界：ingress 统计进入协议栈的包，egress
+ * 统计离开协议栈的包。per-CPU map 以 ifindex 为 key，用户态负责把每
+ * 个 CPU 的 value 聚合，再计算包/字节速率；程序始终返回 TC_ACT_OK，
+ * 不改变数据包转发行为。
  *
- * Hook 点：
- * - TC ingress: 入方向（接收）- 数据包进入协议栈时
- * - TC egress: 出方向（发送）- 数据包离开协议栈时
- *
- * TC hook 位于网络协议栈的 L2/L3 边界，可以：
- * - 访问完整的 skb 结构
- * - 修改、丢弃、重定向数据包
- * - 获取精确的网卡信息
+ * 当前 map 只提供接口级普通监控；TCP retransmission 和任务级诊断由
+ * tcp_diag.bpf.c 等独立 Probe 负责。
  */
 
 #include "vmlinux.h"
@@ -26,7 +21,7 @@
 #define TC_ACT_SHOT     2
 #define TC_ACT_UNSPEC   -1
 
-/* 网络统计结构体 - 与用户空间共享 */
+/* 与用户态 NetStats 对齐的接口累计字节/包计数结构。 */
 struct net_stats {
     __u64 rcv_bytes;      /* 接收字节数 */
     __u64 rcv_packets;    /* 接收包数 */
@@ -47,11 +42,12 @@ struct {
 } net_stats_map SEC(".maps");
 
 /*
- * 更新当前 CPU 上的网卡统计数据。
- * Per-CPU map 为每个 CPU 提供独立 value，不需要跨 CPU 原子操作。
+ * 更新当前 CPU 上的网卡统计数据。Per-CPU map 为每个 CPU 提供独立
+ * value，不需要跨 CPU 原子操作；用户态读取时必须归并所有 CPU。
  */
 static __always_inline void update_stats(__u32 ifindex, __u32 len, bool is_rx)
 {
+    /* ifindex 是 TC skb 绑定的网卡标识，is_rx 决定写入收包还是发包字段。 */
     struct net_stats *stats;
     struct net_stats new_stats = {};
 
@@ -90,6 +86,7 @@ static __always_inline void update_stats(__u32 ifindex, __u32 len, bool is_rx)
 SEC("tc/ingress")
 int tc_ingress(struct __sk_buff *skb)
 {
+    /* ingress 在数据包进入协议栈时触发，统计后放行原包。 */
     __u32 ifindex = skb->ifindex;
     __u32 len = skb->len;
 
@@ -111,6 +108,7 @@ int tc_ingress(struct __sk_buff *skb)
 SEC("tc/egress")
 int tc_egress(struct __sk_buff *skb)
 {
+    /* egress 在数据包离开协议栈时触发，统计后放行原包。 */
     __u32 ifindex = skb->ifindex;
     __u32 len = skb->len;
 

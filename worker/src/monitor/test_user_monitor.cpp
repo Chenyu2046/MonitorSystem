@@ -1,6 +1,7 @@
 /**
- * 用户名信息采集测试程序
- * 
+ * @file test_user_monitor.cpp
+ * @brief 独立验证 UID 到用户名解析以及 USER 环境变量差异的工具。
+ *
  * 编译: g++ -o test_user_monitor test_user_monitor.cpp -std=c++11
  * 运行: ./test_user_monitor
  */
@@ -60,7 +61,7 @@ std::string GetUsernameByUid(uid_t uid) {
 }
 
 int main() {
-  // 使用系统调用获取当前进程的实际用户ID
+  // 使用系统调用获取当前进程的真实 UID，再与环境变量结果并列输出。
   uid_t uid = getuid();
   std::cout << "Current UID: " << uid << std::endl;
 

@@ -1,3 +1,12 @@
+/**
+ * @file anomaly_detector.cpp
+ * @brief 基于阈值的 CPU/内存/磁盘/网络/调度异常评估实现。
+ *
+ * CPU、IOWait、SoftIRQ 和磁盘指标按逐核/逐设备最大值保留尖峰；网络
+ * 包速率按接口求和。每个信号独立归一化，overall_score 取 max，最终
+ * 只给状态机和 ProbeController 提供建议，不直接改变采样路径。
+ */
+
 #include "diagnostics/anomaly_detector.h"
 
 #include <algorithm>
@@ -7,6 +16,12 @@
 namespace monitor::diagnostics {
 namespace {
 
+/**
+ * @brief 将 warning~critical 区间线性归一化到 0~1。
+ *
+ * warning 以下为 0，critical 以上为 1；阈值配置非法时返回 0，避免
+ * 在异常配置下产生无意义的分数。
+ */
 double Normalize(double value, double warning, double critical) {
   if (critical <= warning) {
     return 0.0;
@@ -14,6 +29,12 @@ double Normalize(double value, double warning, double critical) {
   return std::clamp((value - warning) / (critical - warning), 0.0, 1.0);
 }
 
+/**
+ * @brief 追加一个信号并用其分数更新全局最大分数。
+ *
+ * triggered 采用 0.5 分界，仅作为信号展示标志；状态机实际使用
+ * overall_score 和配置阈值。
+ */
 void AddSignal(AnomalyResult* result, AnomalyDomain domain, const char* metric,
                double value, double score) {
   result->signals.push_back(
@@ -28,11 +49,15 @@ AnomalyDetector::AnomalyDetector(ObservabilityConfig config)
 
 AnomalyResult AnomalyDetector::Evaluate(
     const monitor::proto::MonitorInfo& info) const {
+  // 一轮评估只读取 MonitorInfo，不修改输入，也不维护跨轮状态；连续
+  // 样本和恢复样本由 ObservabilityStateMachine 处理。
   AnomalyResult result;
 
   double max_cpu = 0.0;
   double max_io_wait = 0.0;
   double max_softirq = 0.0;
+  // 异常路径取所有 CPU 核的最大值，避免 cpu0=95% 而其他核空闲时被
+  // 主机平均值掩盖；普通概览的平均值与这里的 max-core 语义不同。
   for (const auto& cpu : info.cpu_stat()) {
     max_cpu = std::max(max_cpu, static_cast<double>(cpu.cpu_percent()));
     max_io_wait =
@@ -65,6 +90,7 @@ AnomalyResult AnomalyDetector::Evaluate(
                         config_.memory_critical_percent));
   }
 
+  // 磁盘同样保留最忙设备/最高延迟，防止一块热点盘被其他空闲设备稀释。
   double max_disk_util = 0.0;
   double max_disk_latency = 0.0;
   for (const auto& disk : info.disk_info()) {
@@ -83,6 +109,7 @@ AnomalyResult AnomalyDetector::Evaluate(
                         config_.disk_latency_critical_ms));
   }
 
+  // 网络包速率是各接口收发包速率之和，表示主机整体包处理压力。
   double packets_per_second = 0.0;
   for (const auto& net : info.net_info()) {
     packets_per_second += net.rcv_packets_rate() + net.send_packets_rate();
@@ -107,6 +134,8 @@ AnomalyResult AnomalyDetector::Evaluate(
                         config_.softirq_critical_per_sec));
   }
 
+  // 这里仅把分数映射为策略建议；连续样本、状态转换和具体 Probe 选择
+  // 分别由状态机与 ProbeController 负责。
   result.should_diagnose = result.overall_score >= config_.suspect_enter_score;
   result.should_profile = result.overall_score >= config_.profiling_enter_score;
   return result;

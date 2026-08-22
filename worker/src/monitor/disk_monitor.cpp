@@ -1,3 +1,12 @@
+/**
+ * @file disk_monitor.cpp
+ * @brief 基于 /proc/diskstats 前后采样计算磁盘 I/O 指标。
+ *
+ * 普通路径保留设备累计 reads/writes/sectors/time，并用相邻采样的
+ * 时间差计算 IOPS、吞吐、平均延迟和 util；block_io_diag.bpf.c 则是
+ * 另一条按任务/事件聚合的诊断路径，两者数据粒度不同。
+ */
+
 #include "monitor/disk_monitor.h"
 
 #include <ctime>
@@ -9,6 +18,8 @@
 namespace monitor {
 
 struct DiskSample {
+  // 这些字段直接对应 /proc/diskstats 的累计计数；只有相邻采样差值
+  // 才能解释为本轮速率或延迟。
   uint64_t reads, writes, sectors_read, sectors_written;
   uint64_t read_time_ms, write_time_ms, io_in_progress, io_time_ms,
       weighted_io_time_ms;
@@ -18,6 +29,8 @@ static std::map<std::string, DiskSample> last_samples;
 static std::map<std::string, double> last_time;
 
 void DiskMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
+  // 先写入当前累计值，再在存在上一轮基线且 dt>0 时计算变化率；首次
+  // 采集没有可比较的窗口，因此显式报告 0 速率。
   std::ifstream ifs("/proc/diskstats");
   std::string line;
   double now = ::time(nullptr);
@@ -46,7 +59,8 @@ void DiskMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
     disk->set_io_time_ms(curr.io_time_ms);
     disk->set_weighted_io_time_ms(curr.weighted_io_time_ms);
 
-    // 速率/变化率计算
+    // 速率/变化率计算：sectors 按 Linux 512-byte sector 转为字节，
+    // io_time 以毫秒计，除以 dt*1000 后得到设备忙碌百分比。
     auto it = last_samples.find(name);
     double dt = now - last_time[name];
     if (it != last_samples.end() && dt > 0) {

@@ -1,5 +1,14 @@
 #pragma once
 
+/**
+ * @file mem_monitor.h
+ * @brief Worker 主机级内存统计采集器接口。
+ *
+ * 数据源是 /proc/meminfo，输出为 MonitorInfo.mem_info。该监控器描述
+ * 主机级 total/free/available、buffer/cache 和页面分类，不做进程级
+ * 内存归因或泄漏定位。
+ */
+
 #include <string>
 #include <unordered_map>
 
@@ -7,6 +16,13 @@
 #include "monitor_info.pb.h"
 
 namespace monitor {
+
+/**
+ * @brief 采集 /proc/meminfo 中需要上报的内存字段。
+ *
+ * 结构中的值保持 /proc/meminfo 的原始 KB 语义，UpdateOnce() 再转换为
+ * protobuf 使用的单位；available 用于 used_percent 的分母计算。
+ */
 class MemMonitor : public MonitorInter {
   struct MenInfo {
     int64_t total;
@@ -32,6 +48,10 @@ class MemMonitor : public MonitorInter {
 
  public:
   MemMonitor() {}
+  /**
+   * @brief 读取主机内存概览并写入 MonitorInfo。
+   * @sideeffect 设置本轮主机级 memory message；不维护跨轮 delta。
+   */
   void UpdateOnce(monitor::proto::MonitorInfo* monitor_info) override;
   void Stop() override {}
 };
