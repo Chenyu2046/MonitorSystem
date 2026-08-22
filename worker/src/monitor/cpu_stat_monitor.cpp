@@ -10,6 +10,38 @@
 #include "monitor_info.pb.h"
 
 namespace monitor {
+
+namespace cpu_stat_detail {
+
+CpuStatDelta ComputeCpuStatDelta(const CpuStatSnapshot& current,
+                                 const CpuStatSnapshot& previous) {
+    CpuStatDelta delta;
+    delta.counter_reset =
+        current.user < previous.user || current.nice < previous.nice ||
+        current.system < previous.system || current.idle < previous.idle ||
+        current.io_wait < previous.io_wait || current.irq < previous.irq ||
+        current.soft_irq < previous.soft_irq || current.steal < previous.steal;
+    if (delta.counter_reset) {
+        return delta;
+    }
+
+    delta.user = current.user - previous.user;
+    delta.nice = current.nice - previous.nice;
+    delta.system = current.system - previous.system;
+    delta.idle = current.idle - previous.idle;
+    delta.io_wait = current.io_wait - previous.io_wait;
+    delta.irq = current.irq - previous.irq;
+    delta.soft_irq = current.soft_irq - previous.soft_irq;
+    delta.steal = current.steal - previous.steal;
+    delta.total = delta.user + delta.nice + delta.system + delta.idle +
+                  delta.io_wait + delta.irq + delta.soft_irq + delta.steal;
+    delta.busy = delta.user + delta.nice + delta.system + delta.irq +
+                 delta.soft_irq + delta.steal;
+    return delta;
+}
+
+}  // namespace cpu_stat_detail
+
 void CpuStatMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
     int fd = open("/dev/cpu_stat_monitor", O_RDONLY);
     if (fd < 0) {
@@ -23,8 +55,7 @@ void CpuStatMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
                 continue;
             }
 
-            CpuStat current;
-            current.cpu_name = cpu_name;
+            cpu_stat_detail::CpuStatSnapshot current;
             if (!(values >> current.user >> current.nice >> current.system >>
                   current.idle >> current.io_wait >> current.irq >>
                   current.soft_irq >> current.steal >> current.guest >>
@@ -34,40 +65,28 @@ void CpuStatMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
 
             const auto it = cpu_stat_map_.find(cpu_name);
             if (it != cpu_stat_map_.end()) {
-                const CpuStat& old = it->second;
-                const auto total =
-                    (current.user - old.user) + (current.nice - old.nice) +
-                    (current.system - old.system) +
-                    (current.idle - old.idle) +
-                    (current.io_wait - old.io_wait) +
-                    (current.irq - old.irq) +
-                    (current.soft_irq - old.soft_irq) +
-                    (current.steal - old.steal);
-                if (total != 0) {
+                const auto delta =
+                    cpu_stat_detail::ComputeCpuStatDelta(current, it->second);
+                if (delta.IsReportable()) {
                     auto* message = monitor_info->add_cpu_stat();
-                    const auto busy =
-                        (current.user - old.user) +
-                        (current.system - old.system) +
-                        (current.nice - old.nice) +
-                        (current.irq - old.irq) +
-                        (current.soft_irq - old.soft_irq) +
-                        (current.steal - old.steal);
+                    const double total = static_cast<double>(delta.total);
                     message->set_cpu_name(cpu_name);
-                    message->set_cpu_percent(100.0F * busy / total);
-                    message->set_usr_percent(
-                        100.0F * (current.user - old.user) / total);
-                    message->set_system_percent(
-                        100.0F * (current.system - old.system) / total);
-                    message->set_nice_percent(
-                        100.0F * (current.nice - old.nice) / total);
-                    message->set_idle_percent(
-                        100.0F * (current.idle - old.idle) / total);
-                    message->set_io_wait_percent(
-                        100.0F * (current.io_wait - old.io_wait) / total);
-                    message->set_irq_percent(
-                        100.0F * (current.irq - old.irq) / total);
-                    message->set_soft_irq_percent(
-                        100.0F * (current.soft_irq - old.soft_irq) / total);
+                    message->set_cpu_percent(static_cast<float>(
+                        static_cast<double>(delta.busy) / total * 100.0));
+                    message->set_usr_percent(static_cast<float>(
+                        static_cast<double>(delta.user) / total * 100.0));
+                    message->set_system_percent(static_cast<float>(
+                        static_cast<double>(delta.system) / total * 100.0));
+                    message->set_nice_percent(static_cast<float>(
+                        static_cast<double>(delta.nice) / total * 100.0));
+                    message->set_idle_percent(static_cast<float>(
+                        static_cast<double>(delta.idle) / total * 100.0));
+                    message->set_io_wait_percent(static_cast<float>(
+                        static_cast<double>(delta.io_wait) / total * 100.0));
+                    message->set_irq_percent(static_cast<float>(
+                        static_cast<double>(delta.irq) / total * 100.0));
+                    message->set_soft_irq_percent(static_cast<float>(
+                        static_cast<double>(delta.soft_irq) / total * 100.0));
                 }
             }
             cpu_stat_map_[cpu_name] = current;
@@ -86,59 +105,46 @@ void CpuStatMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
     struct cpu_stat* stats = static_cast<struct cpu_stat*>(addr);
     for (size_t i = 0; i < stat_count; ++i) {
         if (stats[i].cpu_name[0] == '\0') break;
+        cpu_stat_detail::CpuStatSnapshot current;
+        current.user = stats[i].user;
+        current.nice = stats[i].nice;
+        current.system = stats[i].system;
+        current.idle = stats[i].idle;
+        current.io_wait = stats[i].iowait;
+        current.irq = stats[i].irq;
+        current.soft_irq = stats[i].softirq;
+        current.steal = stats[i].steal;
+        current.guest = stats[i].guest;
+        current.guest_nice = stats[i].guest_nice;
         auto it = cpu_stat_map_.find(stats[i].cpu_name);
         if (it != cpu_stat_map_.end()) {
-          struct CpuStat old = it->second;
-          float new_cpu_total_time = stats[i].user + stats[i].system +
-                                     stats[i].idle + stats[i].nice +
-                                     stats[i].iowait + stats[i].irq +
-                                     stats[i].softirq + stats[i].steal;
-          float old_cpu_total_time = old.user + old.system + old.idle + old.nice +
-                                     old.io_wait + old.irq + old.soft_irq +
-                                     old.steal;
-          const float total_delta =
-              new_cpu_total_time - old_cpu_total_time;
-          if (total_delta > 0.0F) {
+          const auto delta =
+              cpu_stat_detail::ComputeCpuStatDelta(current, it->second);
+          if (delta.IsReportable()) {
             auto* cpu_stat_msg = monitor_info->add_cpu_stat();
-            const float new_cpu_busy_time = stats[i].user + stats[i].system +
-                                             stats[i].nice + stats[i].irq +
-                                             stats[i].softirq + stats[i].steal;
-            const float old_cpu_busy_time = old.user + old.system + old.nice +
-                                            old.irq + old.soft_irq + old.steal;
+            const double total = static_cast<double>(delta.total);
 
             cpu_stat_msg->set_cpu_name(stats[i].cpu_name);
-            cpu_stat_msg->set_cpu_percent(
-                (new_cpu_busy_time - old_cpu_busy_time) / total_delta *
-                100.00F);
-            cpu_stat_msg->set_usr_percent(
-                (stats[i].user - old.user) / total_delta * 100.00F);
-            cpu_stat_msg->set_system_percent(
-                (stats[i].system - old.system) / total_delta * 100.00F);
-            cpu_stat_msg->set_nice_percent(
-                (stats[i].nice - old.nice) / total_delta * 100.00F);
-            cpu_stat_msg->set_idle_percent(
-                (stats[i].idle - old.idle) / total_delta * 100.00F);
-            cpu_stat_msg->set_io_wait_percent(
-                (stats[i].iowait - old.io_wait) / total_delta * 100.00F);
-            cpu_stat_msg->set_irq_percent(
-                (stats[i].irq - old.irq) / total_delta * 100.00F);
-            cpu_stat_msg->set_soft_irq_percent(
-                (stats[i].softirq - old.soft_irq) / total_delta * 100.00F);
+            cpu_stat_msg->set_cpu_percent(static_cast<float>(
+                static_cast<double>(delta.busy) / total * 100.0));
+            cpu_stat_msg->set_usr_percent(static_cast<float>(
+                static_cast<double>(delta.user) / total * 100.0));
+            cpu_stat_msg->set_system_percent(static_cast<float>(
+                static_cast<double>(delta.system) / total * 100.0));
+            cpu_stat_msg->set_nice_percent(static_cast<float>(
+                static_cast<double>(delta.nice) / total * 100.0));
+            cpu_stat_msg->set_idle_percent(static_cast<float>(
+                static_cast<double>(delta.idle) / total * 100.0));
+            cpu_stat_msg->set_io_wait_percent(static_cast<float>(
+                static_cast<double>(delta.io_wait) / total * 100.0));
+            cpu_stat_msg->set_irq_percent(static_cast<float>(
+                static_cast<double>(delta.irq) / total * 100.0));
+            cpu_stat_msg->set_soft_irq_percent(static_cast<float>(
+                static_cast<double>(delta.soft_irq) / total * 100.0));
           }
         }
-        // 将内核结构体数据转换为内部 CpuStat 结构体
-        CpuStat& cached = cpu_stat_map_[stats[i].cpu_name];
-        cached.cpu_name = stats[i].cpu_name;
-        cached.user = stats[i].user;
-        cached.nice = stats[i].nice;
-        cached.system = stats[i].system;
-        cached.idle = stats[i].idle;
-        cached.io_wait = stats[i].iowait;
-        cached.irq = stats[i].irq;
-        cached.soft_irq = stats[i].softirq;
-        cached.steal = stats[i].steal;
-        cached.guest = stats[i].guest;
-        cached.guest_nice = stats[i].guest_nice;
+        // 缓存本轮 CPU 累计时间快照
+        cpu_stat_map_[stats[i].cpu_name] = current;
     }
 
     munmap(addr, stat_size);

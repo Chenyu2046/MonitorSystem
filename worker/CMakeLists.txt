@@ -123,6 +123,16 @@ if(BUILD_TESTING)
     target_link_libraries(diagnostics_test PRIVATE monitor_proto)
     add_test(NAME diagnostics_test COMMAND diagnostics_test)
 
+    add_executable(cpu_stat_monitor_test
+        tests/cpu_stat_monitor_test.cpp
+        src/monitor/cpu_stat_monitor.cpp
+    )
+    target_include_directories(cpu_stat_monitor_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/worker/include
+    )
+    target_link_libraries(cpu_stat_monitor_test PRIVATE monitor_proto)
+    add_test(NAME cpu_stat_monitor_test COMMAND cpu_stat_monitor_test)
+
     add_executable(observability_overhead_test
         tests/observability_overhead_test.cpp
         src/rpc/monitor_send_queue.cpp
