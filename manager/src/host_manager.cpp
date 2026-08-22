@@ -1,3 +1,13 @@
+/**
+ * @file host_manager.cpp
+ * @brief Manager 主机消息处理、评分、诊断证据和持久化任务编排实现。
+ *
+ * 处理链路：gRPC MonitorInfo -> Submit -> host shard -> ProcessOne ->
+ * CPU Overview/变化率/Score -> EvidenceBuilder -> RootCauseEngine /
+ * IncidentStore -> PersistenceTask -> MySQL worker。普通 host_scores_ 和
+ * 诊断 IncidentStore 是内存快路径，MySQL 不可用时不阻断消息处理。
+ */
+
 #include "host_manager.h"
 
 #include "mysql_timeout_config.h"
@@ -90,6 +100,12 @@ std::string HostNameForInfo(const monitor::proto::MonitorInfo& info) {
 
 }  // namespace
 
+/**
+ * @brief 计算普通主机 CPU 概览：有效核平均值 + 最忙核。
+ *
+ * NaN/Inf 样本不参与平均值和计数；平均值用于主机概览，peak core 只用于
+ * 辅助观察，异常诊断路径仍在 Worker/证据构建阶段保留逐核最大值语义。
+ */
 CpuOverview BuildCpuOverview(const monitor::proto::MonitorInfo& info) {
   CpuOverview overview;
   for (const auto& cpu : info.cpu_stat()) {
@@ -105,6 +121,7 @@ CpuOverview BuildCpuOverview(const monitor::proto::MonitorInfo& info) {
       continue;
     }
 
+    // 这里只聚合有效核；一个异常非有限值不能污染整机平均值。
     overview.cpu_percent += cpu.cpu_percent();
     overview.usr_percent += cpu.usr_percent();
     overview.system_percent += cpu.system_percent();
@@ -126,6 +143,8 @@ CpuOverview BuildCpuOverview(const monitor::proto::MonitorInfo& info) {
     return overview;
   }
 
+  // 普通主机概览使用所有有效核的平均值；例如一个 95% 热点核可能被
+  // 其他空闲核摊平，但异常检测仍需使用 max-core 逻辑。
   const float divisor = static_cast<float>(overview.cpu_count);
   overview.cpu_percent /= divisor;
   overview.usr_percent /= divisor;
@@ -194,6 +213,8 @@ HostManager::~HostManager() {
 }
 
 void HostManager::Start() {
+  // Start 只允许一次：先初始化诊断持久化能力，再启动持久化 worker、
+  // host shard workers 和 stale-host 管理线程，确保提交路径有消费者。
   bool expected = false;
   if (!running_.compare_exchange_strong(expected, true)) {
     return;
@@ -240,6 +261,8 @@ void HostManager::Start() {
 }
 
 void HostManager::Stop() {
+  // 先停止新消息进入，再按 host shard -> persistence worker 顺序 join，
+  // 让已接受的普通处理和持久化任务有明确的关闭边界。
   if (!running_.exchange(false, std::memory_order_acq_rel)) {
     return;
   }
@@ -282,6 +305,8 @@ void HostManager::Stop() {
 }
 
 void HostManager::ProcessLoop() {
+  // 该线程不处理 MonitorInfo，只周期清理超过 60 秒未更新的 host_scores_；
+  // mtx_ 同时保护 Submit/查询路径访问的主机评分表。
   while (running_) {
     std::unique_lock<std::mutex> wait_lock(mtx_);
     if (process_condition_.wait_for(wait_lock, std::chrono::seconds(60),
@@ -310,6 +335,8 @@ void HostManager::ProcessLoop() {
 
 DataReceiveResult HostManager::Submit(
     const monitor::proto::MonitorInfo& info) {
+  // gRPC handler 到这里仍在接收线程；只做主机名校验和有界入队，避免
+  // 在 RPC 线程执行 CPU 评分、规则诊断或 MySQL。
   const std::string host_name = HostNameForInfo(info);
   if (host_name.empty()) {
     std::cerr << "Received data with empty server identifier" << std::endl;
@@ -334,6 +361,8 @@ void HostManager::ProcessOne(
     std::chrono::system_clock::time_point received_at,
     std::chrono::steady_clock::time_point enqueued_at) {
 
+  // 一个 host 始终落到同一个 shard，因而 shard_perf_samples_[shard_id]
+  // 的 previous/current 顺序成立，无需为每台主机增加独立锁。
   double score = CalcScore(info);
   const auto now = received_at;
   const auto queue_delay = std::chrono::steady_clock::now() - enqueued_at;
@@ -349,14 +378,16 @@ void HostManager::ProcessOne(
              std::memory_order_relaxed)) {
   }
 
-  // 网络速率计算
+  // 网络速率计算：当前普通持久化路径沿用首个 net_info 的主机速率字段；
+  // 详细接口数据仍保留在 info 中供诊断/查询使用。
   double net_in_rate = 0, net_out_rate = 0;
   if (info.net_info_size() > 0) {
     net_in_rate = info.net_info(0).rcv_rate() / (1024.0 * 1024.0);
     net_out_rate = info.net_info(0).send_rate() / (1024.0 * 1024.0);
   }
 
-  // 当前采样
+  // 当前采样：PerfSample 只保存下一轮变化率所需的基础值，不替代原始
+  // MonitorInfo，也不改变 protobuf 的字段语义。
   PerfSample curr;
   const CpuOverview cpu = BuildCpuOverview(info);
   curr.cpu_percent = cpu.cpu_percent;
@@ -382,7 +413,8 @@ void HostManager::ProcessOne(
   curr.net_out_rate = net_out_rate;
   curr.score = score;
 
-  // 变化率计算：同一 Host 始终由同一个 shard worker 访问该状态。
+  // 变化率计算：同一 Host 始终由同一个 shard worker 访问该状态，避免
+  // 多线程同时更新同一 host 的 previous snapshot。
   auto& last = shard_perf_samples_[shard_id][host_name];
   auto rate = [](float now_val, float last_val) -> float {
     if (last_val == 0) return 0;
@@ -532,6 +564,8 @@ void HostManager::ProcessOne(
 }
 
 void HostManager::PersistTask(PersistenceTask task) {
+  // PersistenceWorker 串行调用此回调；这里执行普通历史写入和可选的
+  // incident/evidence/root-cause 持久化，接收和 shard 处理线程不被 SQL 阻塞。
   // Only the single PersistenceWorker thread calls this method. The legacy
   // WriteToMysql detail-rate history therefore has one owner and no mutex.
   persistence_task_count_.fetch_add(1, std::memory_order_relaxed);
@@ -597,6 +631,8 @@ std::vector<diagnostics::IncidentRecord> HostManager::GetActiveIncidents(
 }
 
 double HostManager::CalcScore(const monitor::proto::MonitorInfo& info) {
+  // Score 是 Manager 的主机排序指标，不等同于 Worker 的 anomaly_score；
+  // 这里按当前主机概览字段计算可调度性分数。
   // ============================================================
   // 性能评分模型 - 针对学校选课/查成绩系统高并发场景优化
   // ============================================================
@@ -674,6 +710,8 @@ void HostManager::WriteToMysql(
     float mem_used_percent_rate, float mem_total_rate, float mem_free_rate,
     float mem_avail_rate, float net_in_rate_rate, float net_out_rate_rate,
     float net_in_drop_rate_rate, float net_out_drop_rate_rate) {
+  // Legacy 普通监控写库路径保留现有表/字段语义；本任务只解释调用边界，
+  // 不重排 SQL、不改变事务和连接策略。
 #ifdef ENABLE_MYSQL
   MYSQL* conn = GetMysqlConnection();
   if (!conn) return;

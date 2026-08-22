@@ -1,3 +1,12 @@
+/**
+ * @file evidence_builder.cpp
+ * @brief 普通监控/诊断 protobuf 到规则证据的构建实现。
+ *
+ * 本文件只生成内存 Evidence：Severity 将 warning~critical 归一化到 0~1，
+ * Add() 生成带时间和序号的稳定 ID；RootCauseEngine 再基于多证据组合推断
+ * CPU saturation、磁盘/网络压力、内存压力或锁竞争。
+ */
+
 #include "diagnostics/evidence_builder.h"
 
 #include <algorithm>
@@ -10,6 +19,7 @@
 namespace monitor::diagnostics {
 namespace {
 
+/** @brief 将单个原始指标按 warning/critical 线性归一化为 0~1。 */
 double Severity(double value, double warning, double critical) {
   if (critical <= warning) {
     return 0.0;
@@ -17,6 +27,9 @@ double Severity(double value, double warning, double critical) {
   return std::clamp((value - warning) / (critical - warning), 0.0, 1.0);
 }
 
+/**
+ * @brief 追加带 source/target/unit/detail 的证据并生成可追踪 ID。
+ */
 void Add(std::vector<Evidence>* evidence, EvidenceType type,
          const std::string& source, double value, const std::string& unit,
          double severity, std::chrono::system_clock::time_point timestamp,
@@ -31,6 +44,11 @@ void Add(std::vector<Evidence>* evidence, EvidenceType type,
       type, source, resolved_target, value, unit, severity, timestamp, detail});
 }
 
+/**
+ * @brief 把 top profile 的 PID/TID、样本和前几层 stack 压缩为 detail。
+ *
+ * detail 只提供可读证据摘要，不能把 samples 数量解释为精确 CPU 百分比。
+ */
 std::string StackSummary(const monitor::proto::ProfileEntry& profile,
                          bool include_user_stack) {
   std::ostringstream detail;
@@ -65,6 +83,7 @@ std::string StackSummary(const monitor::proto::ProfileEntry& profile,
   return detail.str();
 }
 
+/** @brief 通过内核栈符号关键词识别可能的锁等待证据。 */
 bool HasLockWaitStack(const monitor::proto::ProfileEntry& profile) {
   constexpr std::array<std::string_view, 8> kLockSymbols = {
       "futex",       "pthread_mutex", "mutex_lock", "rwsem",
@@ -128,8 +147,11 @@ const char* EvidenceTypeName(EvidenceType type) {
 std::vector<Evidence> EvidenceBuilder::Build(
     const monitor::proto::MonitorInfo& info,
     std::chrono::system_clock::time_point timestamp) const {
+  // EvidenceBuilder 不保存跨轮状态；它只解释当前 MonitorInfo，并把
+  // 逐核/逐设备 max 与网络总包速率转换为本轮可组合证据。
   std::vector<Evidence> evidence;
 
+  // 异常证据采用最大核而非主机平均值，避免单核热点被稀释。
   double max_cpu = 0.0;
   double max_io_wait = 0.0;
   for (const auto& cpu : info.cpu_stat()) {
@@ -150,6 +172,7 @@ std::vector<Evidence> EvidenceBuilder::Build(
         "load", Severity(load, 1.0, 4.0), timestamp, "load average 1m");
   }
 
+  // 磁盘证据采用最忙设备/最高延迟，保持热点设备的可见性。
   double max_disk_util = 0.0;
   double max_disk_latency = 0.0;
   for (const auto& disk : info.disk_info()) {
@@ -167,6 +190,7 @@ std::vector<Evidence> EvidenceBuilder::Build(
         timestamp, "max disk latency");
   }
 
+  // 网络包速率按接口求和，描述主机整体网络栈处理压力。
   double pps = 0.0;
   for (const auto& net : info.net_info()) {
     pps += net.rcv_packets_rate() + net.send_packets_rate();
@@ -195,6 +219,8 @@ std::vector<Evidence> EvidenceBuilder::Build(
         "available memory proxy from used percent");
   }
 
+  // DiagnosticSnapshot 是另一条异常诊断路径；普通 MonitorInfo 缺少
+  // 这些进程/请求级证据时，构建器不会虚构对应 evidence。
   if (info.has_diagnostic()) {
     for (const auto& signal : info.diagnostic().signals()) {
       if (signal.metric() == "tcp_retransmissions") {

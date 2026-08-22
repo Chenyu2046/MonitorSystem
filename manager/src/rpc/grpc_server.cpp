@@ -1,3 +1,12 @@
+/**
+ * @file grpc_server.cpp
+ * @brief Manager Worker-push gRPC handler 和兼容 pull 快照实现。
+ *
+ * SetMonitorInfo 的边界是 protobuf -> DataReceiveResult：先确保有界
+ * HostManager 接收成功，再更新 host_data_；队列满返回 RESOURCE_EXHAUSTED，
+ * 停止中返回 UNAVAILABLE，避免 RPC 看见“已接受”但实际丢失的假成功。
+ */
+
 #include "rpc/grpc_server.h"
 
 #include <iostream>
@@ -8,6 +17,8 @@ namespace monitor {
     ::grpc::ServerContext* context,
     const ::monitor::proto::MonitorInfo* request,
     ::google::protobuf::Empty* response) {
+  // 这是 Worker -> Manager 的 push 边界；response 只表达接收结果，真正的
+  // 评分/诊断/持久化在 HostManager 的异步 shard 链路中完成。
   if (!request) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Empty request");
   }
@@ -21,7 +32,8 @@ namespace monitor {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Missing hostname");
   }
 
-  // 先确认 Manager 已接受数据，再更新 Pull 查询使用的最新快照。
+  // 先确认 Manager 已接受数据，再更新 Pull 查询使用的最新快照；这样
+  // 队列满/停止时不会把未入处理链的消息写入兼容快照。
   if (callback_) {
     const DataReceiveResult result = callback_(*request);
     switch (result) {
@@ -53,7 +65,7 @@ namespace monitor {
     ::grpc::ServerContext* context,
     const ::google::protobuf::Empty* request,
     ::monitor::proto::MonitorInfo* response) {
-  // 返回第一个主机的数据（或空）
+  // 保留接口只返回第一个主机的数据（或空）；新 push 主链不依赖该读取。
   std::lock_guard<std::mutex> lock(mtx_);
   if (!host_data_.empty()) {
     *response = host_data_.begin()->second.info;

@@ -1,6 +1,7 @@
 syntax = "proto3";
 package monitor.proto;
 
+// 单网卡普通网络监控样本；速率来自累计值前后采样，错误/丢弃是累计计数。
 message NetInfo {
     string name = 1;
     float send_rate = 2;           // 发送速率，单位：kB/s

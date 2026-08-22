@@ -1,3 +1,13 @@
+/**
+ * @file diagnostic_persistence.cpp
+ * @brief 诊断 incident 主表、evidence/detail 表的 MySQL 事务持久化。
+ *
+ * 内存 IncidentStore 先承载实时查询，PersistenceWorker 异步调用 Save；
+ * Save 以 incident 主记录为锚点，在同一事务中刷新 root causes/evidence，
+ * 任一步失败则 rollback。SQL 文本和 schema 是现有持久化契约，本文件仅
+ * 增加解释性注释。
+ */
+
 #include "diagnostics/diagnostic_persistence.h"
 
 #include "mysql_timeout_config.h"
@@ -18,6 +28,8 @@ bool DiagnosticPersistence::Init(const std::string& host,
                                  const std::string& user,
                                  const std::string& password,
                                  const std::string& database) {
+  // 初始化、连接、schema 检查在 mutex_ 内完成，避免多个 Start/保存路径
+  // 同时操作同一个 MYSQL*；ENABLE_MYSQL 关闭时明确返回 unavailable。
 #ifdef ENABLE_MYSQL
   std::lock_guard<std::mutex> lock(mutex_);
   if (initialized_) {
@@ -61,6 +73,8 @@ bool DiagnosticPersistence::Init(const std::string& host,
 }
 
 void DiagnosticPersistence::Close() {
+  // Close 与 Save 共用 mutex_，保证 mysql_close 不会和正在执行的 query
+  // 并发发生。
 #ifdef ENABLE_MYSQL
   std::lock_guard<std::mutex> lock(mutex_);
   if (connection_) {
@@ -77,12 +91,15 @@ bool DiagnosticPersistence::IsInitialized() const {
 }
 
 bool DiagnosticPersistence::Save(const IncidentRecord& incident) {
+  // 一个 incident snapshot 的主表、根因和 evidence 必须原子提交；只有
+  // root_causes 非空的记录才进入持久化路径。
 #ifdef ENABLE_MYSQL
   std::lock_guard<std::mutex> lock(mutex_);
   if (!initialized_ || !connection_ || incident.root_causes.empty()) {
     return false;
   }
 
+  // 事务开始后任何 Execute/查询失败都走 rollback，避免留下半条诊断链。
   if (!Execute("START TRANSACTION")) {
     return false;
   }

@@ -1,3 +1,12 @@
+/**
+ * @file root_cause_engine.cpp
+ * @brief 多证据规则型 RootCause 计算实现。
+ *
+ * 每个根因由固定证据组合和权重组成，至少命中若干条件才产生结果；
+ * confidence 被限制在 0~1，最终按置信度排序。这里没有模型训练或在线
+ * 学习，结果只能解释为规则匹配强度。
+ */
+
 #include "diagnostics/root_cause_engine.h"
 
 #include <algorithm>
@@ -6,6 +15,7 @@
 namespace monitor::diagnostics {
 namespace {
 
+/** @brief 找到指定类型且达到最低严重度的第一条证据。 */
 const Evidence* Find(const std::vector<Evidence>& evidence, EvidenceType type,
                      double minimum_severity = 0.0) {
   for (const auto& item : evidence) {
@@ -16,6 +26,7 @@ const Evidence* Find(const std::vector<Evidence>& evidence, EvidenceType type,
   return nullptr;
 }
 
+/** @brief 将命中证据的固定权重加入 confidence 并记录证据 ID。 */
 void AddMatch(const Evidence* item, double weight, double* score,
               std::vector<std::string>* ids) {
   if (!item) {
@@ -25,6 +36,7 @@ void AddMatch(const Evidence* item, double weight, double* score,
   ids->push_back(item->id);
 }
 
+/** @brief 构造并限制规则型根因结果的 confidence。 */
 RootCause MakeCause(RootCauseType type, double score,
                     std::vector<std::string> ids) {
   return RootCause{type, std::clamp(score, 0.0, 1.0), std::move(ids),
@@ -54,6 +66,8 @@ const char* RootCauseTypeName(RootCauseType type) {
 
 std::vector<RootCause> RootCauseEngine::Evaluate(
     const std::vector<Evidence>& evidence) const {
+  // 先按证据类型取候选，再按每个规则的组合条件生成根因；不同根因可以
+  // 同时命中，因为一台主机可能存在叠加压力。
   std::vector<RootCause> causes;
 
   const Evidence* cpu = Find(evidence, EvidenceType::kCpuUsage, 0.5);

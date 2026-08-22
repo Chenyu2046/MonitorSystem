@@ -1,3 +1,8 @@
+/**
+ * @file mysql_timeout_config.cpp
+ * @brief 实现 MySQL 超时环境变量解析和连接选项设置。
+ */
+
 #include "mysql_timeout_config.h"
 
 #include <charconv>
@@ -9,6 +14,7 @@
 namespace monitor {
 
 std::optional<unsigned int> ParseMysqlTimeoutSeconds(std::string_view value) {
+  // 使用 from_chars 做无 locale 的整数解析，并拒绝 0、溢出和尾随字符。
   if (value.empty()) {
     return std::nullopt;
   }
@@ -36,6 +42,7 @@ unsigned int ReadTimeout(const char* name, unsigned int default_value) {
 }  // namespace
 
 MysqlTimeoutConfig GetMysqlTimeoutConfig() {
+  // 三类超时分别读取，单个非法变量不会影响其他配置项。
   return MysqlTimeoutConfig{
       ReadTimeout("KERNSCOPE_MYSQL_CONNECT_TIMEOUT_SEC", 5),
       ReadTimeout("KERNSCOPE_MYSQL_READ_TIMEOUT_SEC", 5),
@@ -48,6 +55,7 @@ bool ApplyMysqlTimeouts(MYSQL* connection, const MysqlTimeoutConfig& config,
   if (!connection) {
     return false;
   }
+  // 在真正建立连接前逐项设置选项；任何一项失败都拒绝继续使用该连接。
   const auto apply = [&](enum mysql_option option, unsigned int value,
                          const char* option_name) {
     if (mysql_options(connection, option, &value) != 0) {

@@ -1,3 +1,12 @@
+/**
+ * @file query_service.cpp
+ * @brief QueryService RPC 参数校验、查询调用和 protobuf response 转换。
+ *
+ * 调用链为客户端 protobuf -> QueryService handler -> QueryManager/MySQL
+ * 或 HostManager 内存 fallback -> C++ record -> protobuf repeated/分页字段。
+ * 本层不直接拼接 SQL，也不修改实时 host 状态。
+ */
+
 #include "rpc/query_service.h"
 
 #include <algorithm>
@@ -11,6 +20,7 @@ QueryServiceImpl::QueryServiceImpl(QueryManager* query_manager,
 
 TimeRange QueryServiceImpl::ConvertTimeRange(
     const ::monitor::proto::TimeRange& proto_range) {
+  // API 当前按 seconds 传递时间；统一转换为 QueryManager 使用的时钟类型。
   TimeRange range;
   range.start_time = std::chrono::system_clock::from_time_t(
       proto_range.start_time().seconds());
@@ -22,6 +32,7 @@ TimeRange QueryServiceImpl::ConvertTimeRange(
 void QueryServiceImpl::SetTimestamp(
     ::google::protobuf::Timestamp* ts,
     const std::chrono::system_clock::time_point& tp) {
+  // response Timestamp 当前只写秒，保持现有接口精度语义。
   auto seconds =
       std::chrono::duration_cast<std::chrono::seconds>(tp.time_since_epoch())
           .count();
@@ -472,6 +483,8 @@ void QueryServiceImpl::SetTimestamp(
 
 void QueryServiceImpl::SetIncident(const diagnostics::IncidentRecord& incident,
                                    ::monitor::proto::Incident* output) {
+  // Incident 是 C++ root-cause/evidence 聚合到跨进程 protobuf 的边界；
+  // repeated root_causes/evidence 保留可追溯关联，不压缩成单一摘要。
   output->set_id(incident.id);
   output->set_server_name(incident.server_name);
   output->set_severity(incident.severity);
@@ -516,6 +529,8 @@ void QueryServiceImpl::SetIncident(const diagnostics::IncidentRecord& incident,
     ::grpc::ServerContext* context,
     const ::monitor::proto::GetIncidentsRequest* request,
     ::monitor::proto::GetIncidentsResponse* response) {
+  // MySQL 和内存 IncidentStore 二选一：只有持久化可用且未降级时分页由
+  // QueryManager 执行，否则先取内存全量再在本层做页切片。
   (void)context;
   if (!host_manager_) {
     return grpc::Status(grpc::StatusCode::UNAVAILABLE,

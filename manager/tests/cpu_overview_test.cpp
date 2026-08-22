@@ -1,3 +1,11 @@
+/**
+ * @file cpu_overview_test.cpp
+ * @brief 验证 Manager 逐核 CPU 概览、peak core、非有限值过滤和评分输入。
+ *
+ * 测试重点是普通概览取有效核平均值，而异常/辅助语义仍保留最忙核；
+ * 这些测试防止回归到只读取单核或把 NaN/Inf 带入整机 score。
+ */
+
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -9,6 +17,7 @@
 
 namespace {
 
+/** @brief 构造指定核数和 CPU 值的测试 MonitorInfo。 */
 monitor::proto::MonitorInfo MakeInfo(const char* name, int cpu_count,
                                      float cpu_percent, float load_avg_1 = 0) {
   monitor::proto::MonitorInfo info;
@@ -34,6 +43,7 @@ monitor::HostScore WaitForScore(monitor::HostManager* manager,
   return {};
 }
 
+/** @brief 验证所有有效 CPU 核参与普通平均值和 peak core。 */
 void TestCpuOverviewAveragesAllCores() {
   monitor::proto::MonitorInfo info;
   auto* cpu0 = info.add_cpu_stat();
@@ -68,6 +78,7 @@ void TestCpuOverviewAveragesAllCores() {
   assert(empty.cpu_percent == 0.0F);
 }
 
+/** @brief 验证 HostManager score 使用普通 CPU 概览值。 */
 void TestCalcScoreUsesAverageCpu() {
   monitor::HostManager manager;
   manager.Start();
@@ -82,6 +93,7 @@ void TestCalcScoreUsesAverageCpu() {
   assert(std::abs(score - 82.5) < 0.01);
 }
 
+/** @brief 验证 CPU 核数仍参与 load score，不被错误扣减。 */
 void TestCpuCountIsNotReducedForLoadScore() {
   monitor::HostManager manager;
   manager.Start();
@@ -95,6 +107,7 @@ void TestCpuCountIsNotReducedForLoadScore() {
   assert(std::abs(score - 87.5) < 0.01);
 }
 
+/** @brief 验证 NaN/Inf 样本不会污染平均值或核计数。 */
 void TestCpuOverviewFiltersNonFiniteSamples() {
   monitor::proto::MonitorInfo info;
   auto* cpu0 = info.add_cpu_stat();
@@ -125,6 +138,7 @@ void TestCpuOverviewFiltersNonFiniteSamples() {
   assert(empty.peak_cpu_percent == 0.0F);
 }
 
+/** @brief 验证全是无效 CPU 样本时 score 仍保持有限。 */
 void TestAllInvalidCpuScoreIsFinite() {
   monitor::HostManager manager;
   manager.Start();

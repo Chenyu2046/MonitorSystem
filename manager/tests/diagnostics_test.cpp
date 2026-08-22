@@ -1,3 +1,11 @@
+/**
+ * @file diagnostics_test.cpp
+ * @brief 验证 Evidence/RootCause/Incident、Probe 降级和持久化状态语义。
+ *
+ * 测试输入来自构造的 MonitorInfo/DiagnosticSnapshot，防止把平均 CPU、
+ * profiling 样本、lock wait 和 MySQL 降级状态解释错误。
+ */
+
 #include <cassert>
 #include <chrono>
 #include <string>
@@ -10,6 +18,7 @@
 
 namespace {
 
+/** @brief 构造带 CPU、load 和 OnCPU stack 的诊断输入。 */
 monitor::proto::MonitorInfo MakeCpuProfileInfo() {
   monitor::proto::MonitorInfo info;
   auto* cpu = info.add_cpu_stat();
@@ -31,6 +40,7 @@ monitor::proto::MonitorInfo MakeCpuProfileInfo() {
   return info;
 }
 
+/** @brief 验证 CPU evidence 取 peak core 而不是平均值。 */
 void TestCpuEvidenceUsesPeakCore() {
   monitor::proto::MonitorInfo info;
   info.add_cpu_stat()->set_cpu_percent(20.0);
@@ -47,6 +57,7 @@ void TestCpuEvidenceUsesPeakCore() {
   assert(false);
 }
 
+/** @brief 验证 CPU 根因需要多条组合证据。 */
 void TestCpuRuleRequiresMultipleSignals() {
   monitor::diagnostics::EvidenceBuilder builder;
   monitor::diagnostics::RootCauseEngine engine;
@@ -75,6 +86,7 @@ void TestCpuRuleRequiresMultipleSignals() {
   assert(engine.Evaluate(insufficient).empty());
 }
 
+/** @brief 验证磁盘组合根因和 incident active/close/history。 */
 void TestDiskRuleAndIncidentStore() {
   monitor::proto::MonitorInfo info;
   auto* cpu = info.add_cpu_stat();
@@ -122,6 +134,7 @@ void TestDiskRuleAndIncidentStore() {
   assert(!history.front().active);
 }
 
+/** @brief 验证网络栈压力需要包速率、SoftIRQ、重传等多证据。 */
 void TestNetworkEvidenceRequiresAllSignals() {
   monitor::proto::MonitorInfo info;
   auto* net = info.add_net_info();
@@ -176,6 +189,7 @@ bool HasCause(const std::vector<monitor::diagnostics::RootCause>& causes,
   return false;
 }
 
+/** @brief 验证无 stack frame 的 profiling 样本不虚构 stack evidence。 */
 void TestEmptyProfilesDoNotBecomeStackEvidence() {
   monitor::proto::MonitorInfo info;
   auto* cpu = info.add_cpu_stat();
@@ -200,6 +214,7 @@ void TestEmptyProfilesDoNotBecomeStackEvidence() {
                    monitor::diagnostics::RootCauseType::kLockContention));
 }
 
+/** @brief 验证锁竞争规则必须命中 lock-wait stack。 */
 void TestLockContentionRequiresLockWaitStack() {
   monitor::proto::MonitorInfo info;
   auto* cpu = info.add_cpu_stat();
@@ -223,6 +238,7 @@ void TestLockContentionRequiresLockWaitStack() {
                   monitor::diagnostics::RootCauseType::kLockContention));
 }
 
+/** @brief 验证普通磁盘等待不会误判为锁竞争。 */
 void TestDiskWaitDoesNotBecomeLockContention() {
   monitor::proto::MonitorInfo info;
   auto* cpu = info.add_cpu_stat();
@@ -246,6 +262,7 @@ void TestDiskWaitDoesNotBecomeLockContention() {
                    monitor::diagnostics::RootCauseType::kLockContention));
 }
 
+/** @brief 验证 requested 但 unavailable/未 attach 的 Probe 产生降级证据。 */
 void TestProbeCapabilityDegradedEvidence() {
   monitor::proto::MonitorInfo info;
   auto* status = info.mutable_diagnostic()->add_probe_status();
@@ -265,6 +282,7 @@ void TestProbeCapabilityDegradedEvidence() {
   assert(engine.Evaluate(evidence).empty());
 }
 
+/** @brief 验证单个 incident 持久化失败会保持 degraded 状态。 */
 void TestPersistenceFailureRemainsDegradedAfterOtherSuccess() {
   monitor::DiagnosticPersistenceState state;
   state.SetInitialized(true);
@@ -275,6 +293,7 @@ void TestPersistenceFailureRemainsDegradedAfterOtherSuccess() {
   assert(!state.IsDegraded());
 }
 
+/** @brief 验证未初始化 MySQL 时内存路径不累积伪 pending incident。 */
 void TestMemoryOnlyPersistenceDoesNotAccumulatePendingIncidents() {
   monitor::DiagnosticPersistenceState state;
   state.SetInitialized(false);
@@ -285,6 +304,7 @@ void TestMemoryOnlyPersistenceDoesNotAccumulatePendingIncidents() {
   assert(!state.IsDegraded());
 }
 
+/** @brief 验证 MySQL timeout 配置解析边界。 */
 void TestMysqlTimeoutParsing() {
   assert(monitor::ParseMysqlTimeoutSeconds("5").value() == 5);
   assert(monitor::ParseMysqlTimeoutSeconds("0") == std::nullopt);

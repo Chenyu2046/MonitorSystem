@@ -1,6 +1,8 @@
 syntax = "proto3";
 package monitor.proto;
 
+// Worker 自适应监控状态；状态转换由连续异常/恢复样本和 profiling/cooldown
+// 时间窗口驱动，不代表单次指标的直接分类。
 enum ObservabilityState {
   OBSERVABILITY_NORMAL = 0;
   OBSERVABILITY_SUSPECT = 1;
@@ -18,6 +20,7 @@ enum DiagnosticDomain {
   DOMAIN_SCHEDULER = 5;
 }
 
+// 一条基础指标或 Probe evidence 的原始值、单位、目标和 0~1 分数。
 message DiagnosticSignal {
   DiagnosticDomain domain = 1;
   string metric = 2;
@@ -33,6 +36,7 @@ message StackFrame {
   string module = 3;
 }
 
+// OnCPU/OffCPU top-N 栈样本；samples 是采样次数，不是精确 CPU 百分比。
 message ProfileEntry {
   int32 pid = 1;
   int32 tid = 2;
@@ -44,6 +48,7 @@ message ProfileEntry {
   int32 kernel_stack_id = 8;
 }
 
+// Probe 的策略请求与实际 available/attached 状态，便于表达降级能力。
 message ProbeRuntimeStatus {
   string probe = 1;
   bool requested = 2;
@@ -52,6 +57,7 @@ message ProbeRuntimeStatus {
   int32 last_error = 5;
 }
 
+// Worker 一轮异常信号、Probe 状态和 profiling 快照的统一载体。
 message DiagnosticSnapshot {
   ObservabilityState state = 1;
   double anomaly_score = 2;
@@ -61,6 +67,7 @@ message DiagnosticSnapshot {
   repeated ProbeRuntimeStatus probe_status = 6;
 }
 
+// Manager 规则诊断使用的可追溯证据，source/target 指向原始数据边界。
 message Evidence {
   string id = 1;
   string type = 2;
@@ -73,6 +80,7 @@ message Evidence {
   string detail = 9;
 }
 
+// Manager RootCauseEngine 规则组合结果及其 evidence_ids 关联。
 message RootCause {
   string type = 1;
   double confidence = 2;
@@ -80,6 +88,7 @@ message RootCause {
   string summary = 4;
 }
 
+// 一次主机异常 episode 的 active 状态、根因和证据快照。
 message Incident {
   uint64 id = 1;
   string server_name = 2;

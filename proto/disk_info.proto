@@ -1,6 +1,7 @@
 syntax = "proto3";
 package monitor.proto;
 
+// 主机磁盘累计计数及由前后采样计算的吞吐/IOPS/延迟/util。
 message DiskInfo {
   string name = 1;
   uint64 reads = 2;

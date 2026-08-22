@@ -1,3 +1,11 @@
+/**
+ * @file concurrency_test.cpp
+ * @brief 验证 host shard 顺序/并发、有界队列和 persistence worker 生命周期。
+ *
+ * 测试关注线程模型契约：同一 host 顺序、不同 host 并行、队列满/关闭
+ * 行为、字节预算和已接受任务 drain，防止并发改造破坏变化率前后基线。
+ */
+
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -17,6 +25,7 @@ namespace {
 
 constexpr std::size_t kLargeQueueBytes = 1024 * 1024;
 
+/** @brief 构造带 sequence 的最小队列测试消息。 */
 monitor::proto::MonitorInfo MakeInfo(int sequence) {
   monitor::proto::MonitorInfo info;
   info.set_name(std::to_string(sequence));
@@ -32,6 +41,7 @@ void UpdateMax(std::atomic<int>* maximum, int value) {
   }
 }
 
+/** @brief 验证同一 host 在单 shard 内保持 FIFO 顺序。 */
 void TestSameHostOrdering() {
   std::vector<int> processed;
   monitor::HostShardExecutor executor(
@@ -55,6 +65,7 @@ void TestSameHostOrdering() {
   }
 }
 
+/** @brief 验证不同 host 可由不同 shard 并行处理。 */
 void TestDifferentHostsRunConcurrently() {
   std::atomic<int> active{0};
   std::atomic<int> max_active{0};
@@ -101,6 +112,7 @@ void TestDifferentHostsRunConcurrently() {
   assert(max_active.load() >= 2);
 }
 
+/** @brief 验证入队时间在 callback 中保留，用于排队延迟统计。 */
 void TestQueuedTimestampPreserved() {
   std::mutex mutex;
   std::condition_variable condition;
@@ -158,6 +170,7 @@ void TestQueuedTimestampPreserved() {
   assert(processed_at.time_since_epoch().count() != 0);
 }
 
+/** @brief 验证 hash 碰撞时不同 host 仍各自保持消息顺序。 */
 void TestHashCollisionPreservesEachHostOrder() {
   auto executor = std::make_unique<monitor::HostShardExecutor>(
       4, 128, kLargeQueueBytes,
@@ -204,6 +217,7 @@ void TestHashCollisionPreservesEachHostOrder() {
   }
 }
 
+/** @brief 验证队列满返回 backpressure，关闭后已入队任务可 drain。 */
 void TestQueueFullAndShutdownDrain() {
   std::mutex mutex;
   std::condition_variable condition;
@@ -246,6 +260,7 @@ void TestQueueFullAndShutdownDrain() {
          monitor::DataReceiveResult::kStopping);
 }
 
+/** @brief 验证字节预算和单项 oversize 拒绝语义。 */
 void TestQueueByteBudgetAndOversize() {
   monitor::concurrency::BoundedQueue<int> queue(
       100, 1000, [](const int& value) { return static_cast<std::size_t>(value); });
@@ -263,6 +278,7 @@ void TestQueueByteBudgetAndOversize() {
   assert(!small_queue.Push("12345"));
 }
 
+/** @brief 验证 PersistenceWorker 停止前消费已接受任务。 */
 void TestPersistenceWorkerDrainsAcceptedTasks() {
   std::mutex mutex;
   int processed = 0;
@@ -284,6 +300,7 @@ void TestPersistenceWorkerDrainsAcceptedTasks() {
   assert(processed == accepted);
 }
 
+/** @brief 验证关闭/消费过程中被阻塞的生产者能恢复并退出。 */
 void TestPersistenceProducerUnblocksDuringDrain() {
   std::mutex mutex;
   std::condition_variable condition;
@@ -344,6 +361,7 @@ void TestPersistenceProducerUnblocksDuringDrain() {
   assert(processed == 3);
 }
 
+/** @brief 验证持久化任务超过 byte 上限时不会进入 worker。 */
 void TestPersistenceWorkerRejectsOversizeTask() {
   bool handler_called = false;
   monitor::PersistenceWorker worker(

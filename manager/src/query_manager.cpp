@@ -1,3 +1,12 @@
+/**
+ * @file query_manager.cpp
+ * @brief MySQL 历史查询、时间/分页转换和 incident detail 解析实现。
+ *
+ * 数据流为 QueryService protobuf request -> 参数校验/分页 -> MySQL 主表
+ * 或 detail 表 -> C++ record -> response protobuf。所有查询共享连接互斥，
+ * MySQL disabled 时保留空结果语义，实时 incident 则由 HostManager fallback。
+ */
+
 #include "query_manager.h"
 
 #include <algorithm>
@@ -13,6 +22,7 @@ namespace monitor {
 
 #ifdef ENABLE_MYSQL
 namespace {
+/** @brief 使用当前 MySQL 连接转义查询字符串。 */
 std::string EscapeSql(MYSQL* connection, const std::string& value) {
   std::string escaped(value.size() * 2 + 1, '\0');
   const auto length = mysql_real_escape_string(
@@ -21,6 +31,7 @@ std::string EscapeSql(MYSQL* connection, const std::string& value) {
   return escaped;
 }
 
+/** @brief 将数据库 root_cause 名称还原为内部枚举。 */
 diagnostics::RootCauseType ParseRootCauseType(const std::string& name) {
   if (name == "CPU_SATURATION")
     return diagnostics::RootCauseType::kCpuSaturation;
@@ -35,6 +46,7 @@ diagnostics::RootCauseType ParseRootCauseType(const std::string& name) {
   return diagnostics::RootCauseType::kUnknown;
 }
 
+/** @brief 将数据库 evidence_type 名称还原为内部枚举。 */
 diagnostics::EvidenceType ParseEvidenceType(const std::string& name) {
   if (name == "cpu_usage") return diagnostics::EvidenceType::kCpuUsage;
   if (name == "run_queue") return diagnostics::EvidenceType::kRunQueue;
@@ -62,6 +74,7 @@ diagnostics::EvidenceType ParseEvidenceType(const std::string& name) {
   return diagnostics::EvidenceType::kCpuUsage;
 }
 
+/** @brief 将持久化的换行分隔 evidence id 还原为 vector。 */
 std::vector<std::string> SplitEvidenceIds(const char* value) {
   std::vector<std::string> ids;
   if (!value) return ids;
@@ -82,6 +95,8 @@ QueryManager::~QueryManager() { Close(); }
 bool QueryManager::Init(const std::string& host, const std::string& user,
                         const std::string& password,
                         const std::string& database) {
+  // 连接初始化和 initialized_ 状态在同一把 mutex 下完成；查询调用者看
+  // 到 false 时应返回空结果或走内存 fallback。
 #ifdef ENABLE_MYSQL
   std::lock_guard<std::mutex> lock(mtx_);
   if (initialized_) {
@@ -135,11 +150,14 @@ bool QueryManager::IsInitialized() {
 }
 
 bool QueryManager::ValidateTimeRange(const TimeRange& range) const {
+  // 所有历史查询共用这一边界检查，避免 SQL 时间条件反转。
   return range.start_time <= range.end_time;
 }
 
 std::string QueryManager::FormatTime(
     const std::chrono::system_clock::time_point& tp) const {
+  // MySQL timestamp 保留毫秒；查询 API 的 Timestamp 当前只转换秒，
+  // 这里保持数据库既有毫秒格式兼容。
   const auto millis_count =
       std::chrono::duration_cast<std::chrono::milliseconds>(
           tp.time_since_epoch())
@@ -173,6 +191,7 @@ std::chrono::system_clock::time_point QueryManager::ParseTime(
 }
 
 int QueryManager::GetTotalCount(const std::string& count_sql) {
+  // 分页查询需要独立 COUNT；调用方持有 mtx_，因此此函数不再重复加锁。
 #ifdef ENABLE_MYSQL
   if (mysql_query(conn_, count_sql.c_str()) != 0) {
     std::cerr << "QueryManager: count query failed: " << mysql_error(conn_)
@@ -202,6 +221,9 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
     const std::string& server_name, const TimeRange& time_range, int page,
     int page_size, int* total_count) {
   std::vector<PerformanceRecord> records;
+
+  // 主表查询同时返回本轮值和变化率，并通过 total_count/page/page_size
+  // 支持 QueryService 的分页 response。
 
 #ifdef ENABLE_MYSQL
   std::lock_guard<std::mutex> lock(mtx_);
@@ -305,6 +327,8 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
     const std::string& server_name, const TimeRange& time_range,
     int interval_seconds) {
   std::vector<PerformanceRecord> records;
+
+  // interval_seconds>0 时按时间桶 AVG 聚合；0 表示返回原始时间序列。
 
 #ifdef ENABLE_MYSQL
   std::lock_guard<std::mutex> lock(mtx_);
@@ -411,6 +435,9 @@ std::vector<AnomalyRecord> QueryManager::QueryAnomaly(
     const AnomalyThresholds& thresholds, int page, int page_size,
     int* total_count) {
   std::vector<AnomalyRecord> records;
+
+  // 异常查询在数据库侧按阈值筛选；它与 Worker 实时 anomaly state 是查询
+  // 历史视图，不改变 Worker 的状态机。
 
 #ifdef ENABLE_MYSQL
   std::lock_guard<std::mutex> lock(mtx_);

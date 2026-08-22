@@ -1,5 +1,15 @@
 #pragma once
 
+/**
+ * @file host_manager.h
+ * @brief Manager 接收 Worker MonitorInfo、计算主机评分并编排诊断持久化。
+ *
+ * gRPC handler 将消息提交到 HostShardExecutor；同一 host 哈希到同一
+ * shard 后由 ProcessOne 顺序计算 CPU 概览、变化率、score、Evidence 和
+ * RootCause，再把 PersistenceTask 投递给异步 PersistenceWorker。查询
+ * 接口读取内存 IncidentStore/host_scores，不直接阻塞接收线程。
+ */
+
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -26,6 +36,12 @@
 
 namespace monitor {
 
+/**
+ * @brief 单个 Host 上一轮基础指标快照，用于计算变化率。
+ *
+ * 这些字段是 Manager 侧缓存值，不是新的 protobuf schema；rate 由当前
+ * 样本与该快照比较得到，只有同一 shard 顺序处理才能保证前后关系。
+ */
 struct PerfSample {
   float cpu_percent = 0, usr_percent = 0, system_percent = 0;
   float nice_percent = 0, idle_percent = 0, io_wait_percent = 0;
@@ -37,6 +53,12 @@ struct PerfSample {
   float score = 0;
 };
 
+/**
+ * @brief Manager 侧整机 CPU 普通监控概览。
+ *
+ * Worker 上报多个 CPU 核，普通概览对有效核取平均，同时记录 peak core。
+ * 异常检测仍使用逐核最大值，避免单核热点被平均值稀释。
+ */
 struct CpuOverview {
   float cpu_percent = 0;
   float usr_percent = 0;
@@ -51,8 +73,15 @@ struct CpuOverview {
   float peak_cpu_percent = 0;
 };
 
+/** @brief 从有效逐核 CPU 样本生成平均值和最忙核心。 */
 CpuOverview BuildCpuOverview(const monitor::proto::MonitorInfo& info);
 
+/**
+ * @brief 线程安全地暴露诊断 MySQL 初始化/待保存 incident 的降级状态。
+ *
+ * initialized_ 和 pending_incidents_ 由 mutex_ 保护，degraded_ 用 atomic
+ * 供状态查询快速读取；它描述持久化能力，不影响内存诊断路径继续运行。
+ */
 class DiagnosticPersistenceState {
  public:
   void SetInitialized(bool initialized) {
@@ -86,17 +115,23 @@ class DiagnosticPersistenceState {
   std::atomic<bool> degraded_{true};
 };
 
-// 管理多个远程主机的监控数据（推送模式）
+/**
+ * @brief Manager 的主机接收、评分、诊断和异步持久化总协调器。
+ *
+ * HostManager 自身只维护全局目录和生命周期；按 host 的顺序性由
+ * HostShardExecutor 保证，数据库写入由 PersistenceWorker 解耦。
+ */
 class HostManager {
  public:
   HostManager();
   ~HostManager();
 
-  // 启动后台处理线程
+  /** @brief 初始化持久化/分片执行器并启动后台线程。 */
   void Start();
+  /** @brief 停止接收、等待处理队列和持久化队列有序退出。 */
   void Stop();
 
-  // 校验并将工作者数据提交到对应 Host 分片。
+  /** @brief 校验主机标识并将 Worker 消息提交到对应 host 分片。 */
   DataReceiveResult Submit(const monitor::proto::MonitorInfo& info);
 
   // 获取所有主机评分

@@ -1,5 +1,14 @@
 #pragma once
 
+/**
+ * @file diagnostic_persistence.h
+ * @brief Diagnostic incident/evidence/root-cause 的 MySQL 持久化接口。
+ *
+ * Init 负责连接、超时和 schema；Save 在一个事务中写 incident 主表及
+ * detail/root-cause 子表。ENABLE_MYSQL 未启用或连接失败时返回 false，
+ * Manager 仍保留 IncidentStore 内存结果。
+ */
+
 #include <mutex>
 #include <string>
 
@@ -11,8 +20,9 @@
 
 namespace monitor::diagnostics {
 
-// Owns the diagnostic schema and writes one durable incident snapshot per
-// observation. The in-memory IncidentStore remains the fast-path fallback.
+/**
+ * @brief 拥有诊断 schema 并为每次 incident observation 写 durable snapshot。
+ */
 class DiagnosticPersistence {
  public:
   DiagnosticPersistence() = default;
@@ -21,10 +31,14 @@ class DiagnosticPersistence {
   DiagnosticPersistence(const DiagnosticPersistence&) = delete;
   DiagnosticPersistence& operator=(const DiagnosticPersistence&) = delete;
 
+  /** @brief 建立 MySQL 连接、设置超时并确保诊断表存在。 */
   bool Init(const std::string& host, const std::string& user,
             const std::string& password, const std::string& database);
+  /** @brief 关闭连接并清除 initialized 状态。 */
   void Close();
+  /** @brief 返回当前持久化能力是否已初始化。 */
   bool IsInitialized() const;
+  /** @brief 事务写入 incident 及其 evidence/root causes。 */
   bool Save(const IncidentRecord& incident);
 
  private:

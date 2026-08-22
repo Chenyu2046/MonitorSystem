@@ -1,5 +1,14 @@
 #pragma once
 
+/**
+ * @file bounded_queue.h
+ * @brief 同时按元素数量和估算字节数限制的线程安全 FIFO 队列。
+ *
+ * TryPush 用于不阻塞的 RPC/接收路径，Push 可等待容量，Pop 在数据或关闭
+ * 时唤醒。所有容量、peak 和 closed 状态由 mutex_ 保护；Close() 会同时
+ * 唤醒 not_empty_ 与 not_full_，为线程生命周期提供明确退出边界。
+ */
+
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
@@ -10,6 +19,12 @@
 
 namespace monitor::concurrency {
 
+/**
+ * @brief 为任意任务类型提供有界、可关闭的 FIFO 队列。
+ *
+ * WeightFn 允许调用方把 protobuf/string 等动态内存计入容量，避免只用
+ * sizeof(T) 低估跨线程缓存占用。
+ */
 template <typename T>
 class BoundedQueue {
  public:
@@ -38,6 +53,7 @@ class BoundedQueue {
   BoundedQueue(const BoundedQueue&) = delete;
   BoundedQueue& operator=(const BoundedQueue&) = delete;
 
+  /** @brief 不等待容量，满/关闭/单项超限时返回 false。 */
   bool TryPush(T value) {
     const std::size_t weight = weight_fn_(value);
     if (weight > max_bytes_) {
@@ -56,6 +72,7 @@ class BoundedQueue {
     return true;
   }
 
+  /** @brief 等待容量或关闭后入队；关闭时返回 false。 */
   bool Push(T value) {
     const std::size_t weight = weight_fn_(value);
     if (weight > max_bytes_) {
@@ -77,6 +94,7 @@ class BoundedQueue {
     return true;
   }
 
+  /** @brief 等待数据或关闭，并移动出队头元素。 */
   bool Pop(T* value) {
     if (!value) {
       return false;
@@ -97,6 +115,7 @@ class BoundedQueue {
     return true;
   }
 
+  /** @brief 关闭队列并唤醒所有生产者/消费者。 */
   void Close() {
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -130,6 +149,7 @@ class BoundedQueue {
   std::size_t MaxBytes() const { return max_bytes_; }
 
  private:
+  /** @brief 队列值及其动态占用估算。 */
   struct Entry {
     T value;
     std::size_t weight;
