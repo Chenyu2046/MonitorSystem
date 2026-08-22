@@ -1,6 +1,7 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <thread>
 
@@ -77,6 +78,7 @@ void TestCalcScoreUsesAverageCpu() {
   const auto score = WaitForScore(&manager, "average-host").score;
   manager.Stop();
 
+  assert(std::isfinite(score));
   assert(std::abs(score - 82.5) < 0.01);
 }
 
@@ -89,14 +91,63 @@ void TestCpuCountIsNotReducedForLoadScore() {
   const auto score = WaitForScore(&manager, "eight-core-host").score;
   manager.Stop();
 
+  assert(std::isfinite(score));
   assert(std::abs(score - 87.5) < 0.01);
+}
+
+void TestCpuOverviewFiltersNonFiniteSamples() {
+  monitor::proto::MonitorInfo info;
+  auto* cpu0 = info.add_cpu_stat();
+  cpu0->set_cpu_name("cpu0");
+  cpu0->set_cpu_percent(20.0F);
+  auto* invalid = info.add_cpu_stat();
+  invalid->set_cpu_name("cpu1");
+  invalid->set_cpu_percent(std::numeric_limits<float>::quiet_NaN());
+  auto* cpu2 = info.add_cpu_stat();
+  cpu2->set_cpu_name("cpu2");
+  cpu2->set_cpu_percent(80.0F);
+
+  const auto overview = monitor::BuildCpuOverview(info);
+  assert(overview.cpu_count == 2);
+  assert(overview.cpu_percent == 50.0F);
+  assert(overview.peak_core_name == "cpu2");
+  assert(overview.peak_cpu_percent == 80.0F);
+
+  monitor::proto::MonitorInfo all_invalid;
+  auto* nan_cpu = all_invalid.add_cpu_stat();
+  nan_cpu->set_cpu_percent(std::numeric_limits<float>::quiet_NaN());
+  auto* inf_cpu = all_invalid.add_cpu_stat();
+  inf_cpu->set_cpu_percent(std::numeric_limits<float>::infinity());
+  const auto empty = monitor::BuildCpuOverview(all_invalid);
+  assert(empty.cpu_count == 0);
+  assert(empty.cpu_percent == 0.0F);
+  assert(empty.peak_core_name.empty());
+  assert(empty.peak_cpu_percent == 0.0F);
+}
+
+void TestAllInvalidCpuScoreIsFinite() {
+  monitor::HostManager manager;
+  manager.Start();
+
+  auto info = MakeInfo("invalid-cpu-host", 2, 0.0F);
+  info.mutable_cpu_stat(0)->set_cpu_percent(
+      std::numeric_limits<float>::quiet_NaN());
+  info.mutable_cpu_stat(1)->set_cpu_percent(
+      std::numeric_limits<float>::infinity());
+  assert(manager.Submit(info) == monitor::DataReceiveResult::kAccepted);
+  const auto score = WaitForScore(&manager, "invalid-cpu-host").score;
+  manager.Stop();
+
+  assert(std::isfinite(score));
 }
 
 }  // namespace
 
 int main() {
   TestCpuOverviewAveragesAllCores();
+  TestCpuOverviewFiltersNonFiniteSamples();
   TestCalcScoreUsesAverageCpu();
   TestCpuCountIsNotReducedForLoadScore();
+  TestAllInvalidCpuScoreIsFinite();
   return 0;
 }

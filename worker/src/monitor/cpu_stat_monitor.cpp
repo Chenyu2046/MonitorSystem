@@ -89,7 +89,6 @@ void CpuStatMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
         auto it = cpu_stat_map_.find(stats[i].cpu_name);
         if (it != cpu_stat_map_.end()) {
           struct CpuStat old = it->second;
-          auto cpu_stat_msg = monitor_info->add_cpu_stat();
           float new_cpu_total_time = stats[i].user + stats[i].system +
                                      stats[i].idle + stats[i].nice +
                                      stats[i].iowait + stats[i].irq +
@@ -97,44 +96,35 @@ void CpuStatMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
           float old_cpu_total_time = old.user + old.system + old.idle + old.nice +
                                      old.io_wait + old.irq + old.soft_irq +
                                      old.steal;
-          float new_cpu_busy_time = stats[i].user + stats[i].system +
-                                  stats[i].nice + stats[i].irq +
-                                  stats[i].softirq + stats[i].steal;
-          float old_cpu_busy_time = old.user + old.system + old.nice + old.irq +
-                                  old.soft_irq + old.steal;
+          const float total_delta =
+              new_cpu_total_time - old_cpu_total_time;
+          if (total_delta > 0.0F) {
+            auto* cpu_stat_msg = monitor_info->add_cpu_stat();
+            const float new_cpu_busy_time = stats[i].user + stats[i].system +
+                                             stats[i].nice + stats[i].irq +
+                                             stats[i].softirq + stats[i].steal;
+            const float old_cpu_busy_time = old.user + old.system + old.nice +
+                                            old.irq + old.soft_irq + old.steal;
 
-          float cpu_percent = (new_cpu_busy_time - old_cpu_busy_time) /
-                              (new_cpu_total_time - old_cpu_total_time) * 100.00;
-          float cpu_user_percent = (stats[i].user - old.user) /
-                                   (new_cpu_total_time - old_cpu_total_time) *
-                                   100.00;
-          float cpu_system_percent = (stats[i].system - old.system) /
-                                     (new_cpu_total_time - old_cpu_total_time) *
-                                     100.00;
-          float cpu_nice_percent = (stats[i].nice - old.nice) /
-                                   (new_cpu_total_time - old_cpu_total_time) *
-                                   100.00;
-          float cpu_idle_percent = (stats[i].idle - old.idle) /
-                                   (new_cpu_total_time - old_cpu_total_time) *
-                                   100.00;
-          float cpu_io_wait_percent = (stats[i].iowait - old.io_wait) /
-                                      (new_cpu_total_time - old_cpu_total_time) *
-                                      100.00;
-          float cpu_irq_percent = (stats[i].irq - old.irq) /
-                                  (new_cpu_total_time - old_cpu_total_time) *
-                                  100.00;
-          float cpu_soft_irq_percent = (stats[i].softirq - old.soft_irq) /
-                                       (new_cpu_total_time - old_cpu_total_time) *
-                                       100.00;
-          cpu_stat_msg->set_cpu_name(stats[i].cpu_name);
-          cpu_stat_msg->set_cpu_percent(cpu_percent);
-          cpu_stat_msg->set_usr_percent(cpu_user_percent);
-          cpu_stat_msg->set_system_percent(cpu_system_percent);
-          cpu_stat_msg->set_nice_percent(cpu_nice_percent);
-          cpu_stat_msg->set_idle_percent(cpu_idle_percent);
-          cpu_stat_msg->set_io_wait_percent(cpu_io_wait_percent);
-          cpu_stat_msg->set_irq_percent(cpu_irq_percent);
-          cpu_stat_msg->set_soft_irq_percent(cpu_soft_irq_percent);
+            cpu_stat_msg->set_cpu_name(stats[i].cpu_name);
+            cpu_stat_msg->set_cpu_percent(
+                (new_cpu_busy_time - old_cpu_busy_time) / total_delta *
+                100.00F);
+            cpu_stat_msg->set_usr_percent(
+                (stats[i].user - old.user) / total_delta * 100.00F);
+            cpu_stat_msg->set_system_percent(
+                (stats[i].system - old.system) / total_delta * 100.00F);
+            cpu_stat_msg->set_nice_percent(
+                (stats[i].nice - old.nice) / total_delta * 100.00F);
+            cpu_stat_msg->set_idle_percent(
+                (stats[i].idle - old.idle) / total_delta * 100.00F);
+            cpu_stat_msg->set_io_wait_percent(
+                (stats[i].iowait - old.io_wait) / total_delta * 100.00F);
+            cpu_stat_msg->set_irq_percent(
+                (stats[i].irq - old.irq) / total_delta * 100.00F);
+            cpu_stat_msg->set_soft_irq_percent(
+                (stats[i].softirq - old.soft_irq) / total_delta * 100.00F);
+          }
         }
         // 将内核结构体数据转换为内部 CpuStat 结构体
         CpuStat& cached = cpu_stat_map_[stats[i].cpu_name];

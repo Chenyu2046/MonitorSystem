@@ -3,6 +3,7 @@
 #include "mysql_timeout_config.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <ctime>
 #include <iomanip>
@@ -92,6 +93,18 @@ std::string HostNameForInfo(const monitor::proto::MonitorInfo& info) {
 CpuOverview BuildCpuOverview(const monitor::proto::MonitorInfo& info) {
   CpuOverview overview;
   for (const auto& cpu : info.cpu_stat()) {
+    const bool valid = std::isfinite(cpu.cpu_percent()) &&
+                       std::isfinite(cpu.usr_percent()) &&
+                       std::isfinite(cpu.system_percent()) &&
+                       std::isfinite(cpu.nice_percent()) &&
+                       std::isfinite(cpu.idle_percent()) &&
+                       std::isfinite(cpu.io_wait_percent()) &&
+                       std::isfinite(cpu.irq_percent()) &&
+                       std::isfinite(cpu.soft_irq_percent());
+    if (!valid) {
+      continue;
+    }
+
     overview.cpu_percent += cpu.cpu_percent();
     overview.usr_percent += cpu.usr_percent();
     overview.system_percent += cpu.system_percent();
