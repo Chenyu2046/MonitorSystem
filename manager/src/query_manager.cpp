@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
+#include <cmath>
 #include <cstdlib>
 
 #include <ctime>
@@ -22,6 +24,19 @@ namespace monitor {
 
 #ifdef ENABLE_MYSQL
 namespace {
+bool ParseFiniteDouble(const char* text, double* value) {
+  if (!text || !value || *text == '\0') return false;
+  errno = 0;
+  char* end = nullptr;
+  const double parsed = std::strtod(text, &end);
+  if (errno == ERANGE || end == text || *end != '\0' ||
+      !std::isfinite(parsed)) {
+    return false;
+  }
+  *value = parsed;
+  return true;
+}
+
 /** @brief 使用当前 MySQL 连接转义查询字符串。 */
 std::string EscapeSql(MYSQL* connection, const std::string& value) {
   std::string escaped(value.size() * 2 + 1, '\0');
@@ -1013,7 +1028,7 @@ std::vector<SoftIrqDetailRecord> QueryManager::QuerySoftIrqDetail(
   int offset = (page - 1) * page_size;
   std::ostringstream sql;
   sql << "SELECT server_name, cpu_name, timestamp, hi, timer, net_tx, "
-         "net_rx, block, sched "
+         "net_rx, block, irq_poll, tasklet, sched, hrtimer, rcu "
          "FROM server_softirq_detail WHERE server_name='"
       << server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
       << end_time << "' ORDER BY timestamp DESC LIMIT " << page_size
@@ -1036,14 +1051,23 @@ std::vector<SoftIrqDetailRecord> QueryManager::QuerySoftIrqDetail(
     int i = 0;
     rec.server_name = row[i++] ? row[i - 1] : "";
     rec.cpu_name = row[i++] ? row[i - 1] : "";
-    rec.timestamp = row[i] ? ParseTime(row[i]) : std::chrono::system_clock::now();
+    if (!row[i]) continue;
+    rec.timestamp = ParseTime(row[i]);
     i++;
-    rec.hi = row[i] ? std::stoll(row[i]) : 0; i++;
-    rec.timer = row[i] ? std::stoll(row[i]) : 0; i++;
-    rec.net_tx = row[i] ? std::stoll(row[i]) : 0; i++;
-    rec.net_rx = row[i] ? std::stoll(row[i]) : 0; i++;
-    rec.block = row[i] ? std::stoll(row[i]) : 0; i++;
-    rec.sched = row[i] ? std::stoll(row[i]) : 0;
+    float* values[] = {&rec.hi,      &rec.timer,  &rec.net_tx, &rec.net_rx,
+                       &rec.block,   &rec.irq_poll, &rec.tasklet,
+                       &rec.sched,   &rec.hrtimer, &rec.rcu};
+    bool valid = true;
+    for (float* value : values) {
+      double parsed = 0;
+      if (!row[i] || !ParseFiniteDouble(row[i], &parsed)) {
+        valid = false;
+      } else {
+        *value = static_cast<float>(parsed);
+      }
+      ++i;
+    }
+    if (!valid) continue;
     records.push_back(rec);
   }
   mysql_free_result(result);

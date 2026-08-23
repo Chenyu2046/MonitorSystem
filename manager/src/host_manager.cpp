@@ -98,6 +98,77 @@ std::string HostNameForInfo(const monitor::proto::MonitorInfo& info) {
   return host_name;
 }
 
+bool IsValidMonitorInfo(const monitor::proto::MonitorInfo& info) {
+  const auto cpu = BuildCpuOverview(info);
+  if (HostNameForInfo(info).empty() || cpu.cpu_count == 0) return false;
+  for (const auto& core : info.cpu_stat()) {
+    if (!std::isfinite(core.cpu_percent()) ||
+        !std::isfinite(core.usr_percent()) ||
+        !std::isfinite(core.system_percent()) ||
+        !std::isfinite(core.nice_percent()) ||
+        !std::isfinite(core.idle_percent()) ||
+        !std::isfinite(core.io_wait_percent()) ||
+        !std::isfinite(core.irq_percent()) ||
+        !std::isfinite(core.soft_irq_percent()) || core.cpu_percent() < 0 ||
+        core.cpu_percent() > 100 || core.usr_percent() < 0 ||
+        core.usr_percent() > 100 || core.system_percent() < 0 ||
+        core.system_percent() > 100 || core.nice_percent() < 0 ||
+        core.nice_percent() > 100 || core.idle_percent() < 0 ||
+        core.idle_percent() > 100 || core.io_wait_percent() < 0 ||
+        core.io_wait_percent() > 100 || core.irq_percent() < 0 ||
+        core.irq_percent() > 100 || core.soft_irq_percent() < 0 ||
+        core.soft_irq_percent() > 100) {
+      return false;
+    }
+  }
+  for (const auto& value : {cpu.cpu_percent, cpu.usr_percent,
+                            cpu.system_percent, cpu.nice_percent,
+                            cpu.idle_percent, cpu.io_wait_percent,
+                            cpu.irq_percent, cpu.soft_irq_percent}) {
+    if (!std::isfinite(value) || value < 0 || value > 100) return false;
+  }
+  if (!info.has_cpu_load() || !std::isfinite(info.cpu_load().load_avg_1()) ||
+      !std::isfinite(info.cpu_load().load_avg_3()) ||
+      !std::isfinite(info.cpu_load().load_avg_15()) ||
+      info.cpu_load().load_avg_1() < 0 || info.cpu_load().load_avg_3() < 0 ||
+      info.cpu_load().load_avg_15() < 0 || !info.has_mem_info() ||
+      !std::isfinite(info.mem_info().used_percent()) ||
+      info.mem_info().used_percent() < 0 ||
+      info.mem_info().used_percent() > 100 ||
+      !std::isfinite(info.mem_info().total()) || info.mem_info().total() <= 0 ||
+      !std::isfinite(info.mem_info().free()) ||
+      info.mem_info().free() < 0 || !std::isfinite(info.mem_info().avail()) ||
+      info.mem_info().avail() < 0) {
+    return false;
+  }
+  const auto network = BuildNetworkOverview(info);
+  if (network.interface_count == 0 || info.disk_info_size() == 0) return false;
+  for (const auto& net : info.net_info()) {
+    if (!std::isfinite(net.rcv_rate()) || !std::isfinite(net.send_rate()) ||
+        !std::isfinite(net.rcv_packets_rate()) ||
+        !std::isfinite(net.send_packets_rate()) || net.rcv_rate() < 0 ||
+        net.send_rate() < 0 || net.rcv_packets_rate() < 0 ||
+        net.send_packets_rate() < 0) {
+      return false;
+    }
+  }
+  for (const auto& disk : info.disk_info()) {
+    if (!std::isfinite(disk.util_percent()) || disk.util_percent() < 0 ||
+        disk.util_percent() > 100 ||
+        !std::isfinite(disk.read_bytes_per_sec()) ||
+        !std::isfinite(disk.write_bytes_per_sec()) ||
+        !std::isfinite(disk.read_iops()) || !std::isfinite(disk.write_iops()) ||
+        !std::isfinite(disk.avg_read_latency_ms()) ||
+        !std::isfinite(disk.avg_write_latency_ms()) ||
+        disk.read_bytes_per_sec() < 0 || disk.write_bytes_per_sec() < 0 ||
+        disk.read_iops() < 0 || disk.write_iops() < 0 ||
+        disk.avg_read_latency_ms() < 0 || disk.avg_write_latency_ms() < 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 /**
@@ -157,6 +228,31 @@ CpuOverview BuildCpuOverview(const monitor::proto::MonitorInfo& info) {
   return overview;
 }
 
+NetworkOverview BuildNetworkOverview(const monitor::proto::MonitorInfo& info) {
+  NetworkOverview overview;
+  for (const auto& net : info.net_info()) {
+    if (!std::isfinite(net.rcv_rate()) || !std::isfinite(net.send_rate()) ||
+        !std::isfinite(net.rcv_packets_rate()) ||
+        !std::isfinite(net.send_packets_rate()) || net.rcv_rate() < 0 ||
+        net.send_rate() < 0 || net.rcv_packets_rate() < 0 ||
+        net.send_packets_rate() < 0) {
+      continue;
+    }
+    overview.reported_total_recv_kib_per_sec += net.rcv_rate();
+    overview.reported_total_send_kib_per_sec += net.send_rate();
+    overview.peak_recv_kib_per_sec =
+        std::max(overview.peak_recv_kib_per_sec,
+                 static_cast<double>(net.rcv_rate()));
+    overview.peak_send_kib_per_sec =
+        std::max(overview.peak_send_kib_per_sec,
+                 static_cast<double>(net.send_rate()));
+    overview.total_packets_per_sec += net.rcv_packets_rate();
+    overview.total_packets_per_sec += net.send_packets_rate();
+    ++overview.interface_count;
+  }
+  return overview;
+}
+
 #ifdef ENABLE_MYSQL
 namespace {
 const char* MYSQL_HOST = "127.0.0.1";
@@ -165,6 +261,28 @@ const char* MYSQL_PASS = "monitor123";
 const char* MYSQL_DB = "monitor_db";
 
 MYSQL* mysql_conn = nullptr;
+
+bool EnsureOrdinarySchema(MYSQL* connection) {
+  constexpr char kSchemaQuery[] =
+      "SELECT COUNT(DISTINCT table_name) FROM information_schema.tables "
+      "WHERE table_schema = DATABASE() AND table_name IN "
+      "('server_performance','server_net_detail','server_disk_detail',"
+      "'server_mem_detail','server_softirq_detail')";
+  if (!connection || mysql_query(connection, kSchemaQuery) != 0) {
+    if (connection) {
+      std::cerr << "ordinary MySQL schema check failed: "
+                << mysql_error(connection) << "\n";
+    }
+    return false;
+  }
+  MYSQL_RES* result = mysql_store_result(connection);
+  if (!result) return false;
+  MYSQL_ROW row = mysql_fetch_row(result);
+  const bool ready = row && row[0] && std::string(row[0]) == "5";
+  mysql_free_result(result);
+  if (!ready) std::cerr << "ordinary MySQL schema is incomplete\n";
+  return ready;
+}
 
 MYSQL* GetMysqlConnection() {
   if (mysql_conn) return mysql_conn;
@@ -212,20 +330,32 @@ HostManager::~HostManager() {
 #endif
 }
 
-void HostManager::Start() {
+bool HostManager::Start() {
   // Start 只允许一次：先初始化诊断持久化能力，再启动持久化 worker、
   // host shard workers 和 stale-host 管理线程，确保提交路径有消费者。
   bool expected = false;
   if (!running_.compare_exchange_strong(expected, true)) {
-    return;
+    return false;
   }
 #ifdef ENABLE_MYSQL
+  if (!GetMysqlConnection()) {
+    running_.store(false);
+    return false;
+  }
+  if (!EnsureOrdinarySchema(GetMysqlConnection())) {
+    running_.store(false);
+    return false;
+  }
   const bool persistence_initialized = diagnostic_persistence_.Init(
       GetEnvOrDefault("MONITOR_MYSQL_HOST", MYSQL_HOST),
       GetEnvOrDefault("MONITOR_MYSQL_USER", MYSQL_USER),
       GetEnvOrDefault("MONITOR_MYSQL_PASSWORD", MYSQL_PASS),
       GetEnvOrDefault("MONITOR_MYSQL_DATABASE", MYSQL_DB));
   diagnostic_persistence_state_.SetInitialized(persistence_initialized);
+  if (!persistence_initialized) {
+    running_.store(false);
+    return false;
+  }
 #else
   diagnostic_persistence_state_.SetInitialized(false);
 #endif
@@ -245,7 +375,13 @@ void HostManager::Start() {
 
   persistence_worker_ = std::make_unique<PersistenceWorker>(
       persistence_queue_capacity, persistence_queue_max_bytes,
-      [this](PersistenceTask&& task) { PersistTask(std::move(task)); });
+      [this](PersistenceTask&& task) {
+        const bool success = PersistTask(std::move(task));
+        if (!success) {
+          persistence_failed_count_.fetch_add(1, std::memory_order_relaxed);
+        }
+        return success;
+      });
   persistence_worker_->Start();
 
   shard_executor_ = std::make_unique<HostShardExecutor>(
@@ -258,6 +394,7 @@ void HostManager::Start() {
       });
   shard_executor_->Start();
   thread_ = std::make_unique<std::thread>(&HostManager::ProcessLoop, this);
+  return true;
 }
 
 void HostManager::Stop() {
@@ -283,6 +420,8 @@ void HostManager::Stop() {
             << " processed=" << processed_count_.load(std::memory_order_relaxed)
             << " persistence_tasks="
             << persistence_task_count_.load(std::memory_order_relaxed)
+            << " persistence_failed="
+            << persistence_failed_count_.load(std::memory_order_relaxed)
             << " persistence_rejected="
             << persistence_rejected_count_.load(std::memory_order_relaxed)
             << " queue_delay_samples="
@@ -363,7 +502,14 @@ void HostManager::ProcessOne(
 
   // 一个 host 始终落到同一个 shard，因而 shard_perf_samples_[shard_id]
   // 的 previous/current 顺序成立，无需为每台主机增加独立锁。
-  double score = CalcScore(info);
+  const ScoreResult score_result = CalcScore(info);
+  const double score = score_result.score;
+  if (!score_result.valid || !IsValidMonitorInfo(info)) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    host_scores_[host_name] =
+        HostScore{info, score, false, received_at};
+    return;
+  }
   const auto now = received_at;
   const auto queue_delay = std::chrono::steady_clock::now() - enqueued_at;
   const auto queue_delay_us = static_cast<std::uint64_t>(std::max<std::int64_t>(
@@ -378,13 +524,9 @@ void HostManager::ProcessOne(
              std::memory_order_relaxed)) {
   }
 
-  // 网络速率计算：当前普通持久化路径沿用首个 net_info 的主机速率字段；
-  // 详细接口数据仍保留在 info 中供诊断/查询使用。
-  double net_in_rate = 0, net_out_rate = 0;
-  if (info.net_info_size() > 0) {
-    net_in_rate = info.net_info(0).rcv_rate() / (1024.0 * 1024.0);
-    net_out_rate = info.net_info(0).send_rate() / (1024.0 * 1024.0);
-  }
+  const NetworkOverview network = BuildNetworkOverview(info);
+  const double net_in_rate = network.peak_recv_kib_per_sec;
+  const double net_out_rate = network.peak_send_kib_per_sec;
 
   // 当前采样：PerfSample 只保存下一轮变化率所需的基础值，不替代原始
   // MonitorInfo，也不改变 protobuf 的字段语义。
@@ -423,7 +565,7 @@ void HostManager::ProcessOne(
 
   PersistenceTask task;
   task.host_name = host_name;
-  task.host_score = HostScore{info, score, now};
+  task.host_score = HostScore{info, score, score_result.valid, now};
   task.net_in_rate = net_in_rate;
   task.net_out_rate = net_out_rate;
   task.cpu_percent_rate = rate(curr.cpu_percent, last.cpu_percent);
@@ -501,19 +643,19 @@ void HostManager::ProcessOne(
     // 内存详细信息
     std::cout << "\n--- Memory ---" << std::endl;
     std::cout << "  Used: " << curr.mem_used_percent << "%, "
-              << "Total: " << curr.mem_total << " MB" << std::endl;
-    std::cout << "  Free: " << curr.mem_free << " MB, "
-              << "Avail: " << curr.mem_avail << " MB" << std::endl;
+              << "Total: " << curr.mem_total << " GiB" << std::endl;
+    std::cout << "  Free: " << curr.mem_free << " GiB, "
+              << "Avail: " << curr.mem_avail << " GiB" << std::endl;
 
     // 网络详细信息
     std::cout << "\n--- Network ---" << std::endl;
-    std::cout << "  In: " << net_in_rate * 1024 * 1024 << " B/s, "
-              << "Out: " << net_out_rate * 1024 * 1024 << " B/s" << std::endl;
+    std::cout << "  In: " << net_in_rate << " KiB/s, "
+              << "Out: " << net_out_rate << " KiB/s" << std::endl;
     for (int i = 0; i < info.net_info_size(); ++i) {
       const auto& net = info.net_info(i);
       std::cout << "  [" << net.name() << "] Recv: " << net.rcv_rate()
-                << " B/s, "
-                << "Send: " << net.send_rate() << " B/s, "
+                << " KiB/s, "
+                << "Send: " << net.send_rate() << " KiB/s, "
                 << "Drops: " << net.drop_in() << "/" << net.drop_out()
                 << std::endl;
     }
@@ -563,14 +705,16 @@ void HostManager::ProcessOne(
   }
 }
 
-void HostManager::PersistTask(PersistenceTask task) {
+bool HostManager::PersistTask(PersistenceTask task) {
   // PersistenceWorker 串行调用此回调；这里执行普通历史写入和可选的
   // incident/evidence/root-cause 持久化，接收和 shard 处理线程不被 SQL 阻塞。
   // Only the single PersistenceWorker thread calls this method. The legacy
   // WriteToMysql detail-rate history therefore has one owner and no mutex.
   persistence_task_count_.fetch_add(1, std::memory_order_relaxed);
+  bool success = true;
   if (task.incident) {
     const bool persisted = diagnostic_persistence_.Save(*task.incident);
+    success = persisted && success;
     diagnostic_persistence_state_.RecordSave(task.incident->id, persisted);
     if (!persisted) {
       std::cerr << "ERROR: diagnostic persistence degraded; incident "
@@ -579,7 +723,7 @@ void HostManager::PersistTask(PersistenceTask task) {
     }
   }
 
-  WriteToMysql(task.host_name, task.host_score, task.net_in_rate,
+  success = WriteToMysql(task.host_name, task.host_score, task.net_in_rate,
                task.net_out_rate, task.cpu_percent_rate, task.usr_percent_rate,
                task.system_percent_rate, task.nice_percent_rate,
                task.idle_percent_rate, task.io_wait_percent_rate,
@@ -590,7 +734,8 @@ void HostManager::PersistTask(PersistenceTask task) {
                task.mem_used_percent_rate, task.mem_total_rate,
                task.mem_free_rate, task.mem_avail_rate, task.net_in_rate_rate,
                task.net_out_rate_rate, task.net_in_drop_rate_rate,
-               task.net_out_drop_rate_rate);
+               task.net_out_drop_rate_rate) && success;
+  return success;
 }
 
 std::unordered_map<std::string, HostScore> HostManager::GetAllHostScores() {
@@ -603,6 +748,7 @@ std::string HostManager::GetBestHost() {
   std::string best_host;
   double best_score = -1;
   for (const auto& [host, data] : host_scores_) {
+    if (!data.score_valid) continue;
     if (data.score > best_score) {
       best_score = data.score;
       best_host = host;
@@ -630,20 +776,9 @@ std::vector<diagnostics::IncidentRecord> HostManager::GetActiveIncidents(
   return incident_store_.Active(server_name);
 }
 
-double HostManager::CalcScore(const monitor::proto::MonitorInfo& info) {
-  // Score 是 Manager 的主机排序指标，不等同于 Worker 的 anomaly_score；
-  // 这里按当前主机概览字段计算可调度性分数。
-  // ============================================================
-  // 性能评分模型 - 针对学校选课/查成绩系统高并发场景优化
-  // ============================================================
-  // 权重配置：
-  // - CPU 使用率: 35%
-  // - 内存使用率: 30%
-  // - CPU 负载:   15%
-  // - 磁盘 IO:    15%
-  // - 网络带宽:    5% (收发各 2.5%)
-  // ============================================================
-
+ScoreResult HostManager::CalcScore(const monitor::proto::MonitorInfo& info) {
+  ScoreResult result;
+  if (!IsValidMonitorInfo(info)) return result;
   const double cpu_weight = 0.35;
   const double mem_weight = 0.30;
   const double load_weight = 0.15;
@@ -651,7 +786,7 @@ double HostManager::CalcScore(const monitor::proto::MonitorInfo& info) {
   const double net_weight = 0.05;
 
   const double load_coefficient = 1.5;       // I/O 密集型场景系数
-  const double max_bandwidth = 125000000.0;  // 1Gbps
+  const double max_bandwidth = 125000000.0 / 1024.0;
 
   double cpu_percent = 0, load_avg_1 = 0, mem_percent = 0;
   double net_recv_rate = 0, net_send_rate = 0, disk_util = 0;
@@ -669,10 +804,9 @@ double HostManager::CalcScore(const monitor::proto::MonitorInfo& info) {
   if (info.has_mem_info()) {
     mem_percent = info.mem_info().used_percent();
   }
-  if (info.net_info_size() > 0) {
-    net_recv_rate = info.net_info(0).rcv_rate();
-    net_send_rate = info.net_info(0).send_rate();
-  }
+  const auto network = BuildNetworkOverview(info);
+  net_recv_rate = network.peak_recv_kib_per_sec;
+  net_send_rate = network.peak_send_kib_per_sec;
   if (info.disk_info_size() > 0) {
     for (int i = 0; i < info.disk_info_size(); ++i) {
       double util = info.disk_info(i).util_percent();
@@ -680,26 +814,25 @@ double HostManager::CalcScore(const monitor::proto::MonitorInfo& info) {
     }
   }
 
-  // 反向归一化
-  auto clamp = [](double v) { return v < 0 ? 0 : (v > 1 ? 1 : v); };
-
-  double cpu_score = clamp(1.0 - cpu_percent / 100.0);
-  double mem_score = clamp(1.0 - mem_percent / 100.0);
-  double load_score = clamp(1.0 - load_avg_1 / (cpu_cores * load_coefficient));
-  double disk_score = clamp(1.0 - disk_util / 100.0);
-  double net_recv_score = clamp(1.0 - net_recv_rate / max_bandwidth);
-  double net_send_score = clamp(1.0 - net_send_rate / max_bandwidth);
+  const auto nonnegative = [](double value) { return std::max(0.0, value); };
+  double cpu_score = nonnegative(1.0 - cpu_percent / 100.0);
+  double mem_score = nonnegative(1.0 - mem_percent / 100.0);
+  double load_score =
+      nonnegative(1.0 - load_avg_1 / (cpu_cores * load_coefficient));
+  double disk_score = nonnegative(1.0 - disk_util / 100.0);
+  double net_recv_score = nonnegative(1.0 - net_recv_rate / max_bandwidth);
+  double net_send_score = nonnegative(1.0 - net_send_rate / max_bandwidth);
   double net_score = (net_recv_score + net_send_score) / 2.0;
 
-  double score = cpu_score * cpu_weight + mem_score * mem_weight +
+  result.score = (cpu_score * cpu_weight + mem_score * mem_weight +
                  load_score * load_weight + disk_score * disk_weight +
-                 net_score * net_weight;
-
-  score *= 100.0;
-  return score < 0 ? 0 : (score > 100 ? 100 : score);
+                 net_score * net_weight) *
+                100.0;
+  result.valid = std::isfinite(result.score);
+  return result;
 }
 
-void HostManager::WriteToMysql(
+bool HostManager::WriteToMysql(
     const std::string& host_name, const HostScore& host_score,
     double net_in_rate, double net_out_rate, float cpu_percent_rate,
     float usr_percent_rate, float system_percent_rate, float nice_percent_rate,
@@ -714,7 +847,14 @@ void HostManager::WriteToMysql(
   // 不重排 SQL、不改变事务和连接策略。
 #ifdef ENABLE_MYSQL
   MYSQL* conn = GetMysqlConnection();
-  if (!conn) return;
+  if (!conn) return false;
+  if (mysql_query(conn, "START TRANSACTION") != 0) return false;
+  PersistenceHistory next_history = persistence_history_;
+  const auto exec = [&](const std::string& sql) {
+    if (mysql_query(conn, sql.c_str()) == 0) return true;
+    mysql_query(conn, "ROLLBACK");
+    return false;
+  };
 
   // 时间戳
   std::time_t t = std::chrono::system_clock::to_time_t(host_score.timestamp);
@@ -744,10 +884,8 @@ void HostManager::WriteToMysql(
       avail = info.mem_info().avail();
       mem_used_percent = info.mem_info().used_percent();
     }
-    if (info.net_info_size() > 0) {
-      send_rate = info.net_info(0).send_rate() / 1024.0;
-      rcv_rate = info.net_info(0).rcv_rate() / 1024.0;
-    }
+    send_rate = static_cast<float>(net_out_rate);
+    rcv_rate = static_cast<float>(net_in_rate);
     const CpuOverview cpu = BuildCpuOverview(info);
     cpu_percent = cpu.cpu_percent;
     usr_percent = cpu.usr_percent;
@@ -770,13 +908,13 @@ void HostManager::WriteToMysql(
 
     // 计算磁盘利用率变化率
     float disk_util_percent_rate = 0;
-    if (persistence_history_.disk_util.count(host_name) &&
-        persistence_history_.disk_util[host_name] != 0) {
+    if (next_history.disk_util.count(host_name) &&
+        next_history.disk_util[host_name] != 0) {
       disk_util_percent_rate =
-          (disk_util_percent - persistence_history_.disk_util[host_name]) /
-          persistence_history_.disk_util[host_name];
+          (disk_util_percent - next_history.disk_util[host_name]) /
+          next_history.disk_util[host_name];
     }
-    persistence_history_.disk_util[host_name] = disk_util_percent;
+    next_history.disk_util[host_name] = disk_util_percent;
 
     std::ostringstream oss;
     oss << "INSERT INTO server_performance "
@@ -809,7 +947,7 @@ void HostManager::WriteToMysql(
         << mem_free_rate << "," << mem_avail_rate << ","
         << disk_util_percent_rate << "," << net_in_rate_rate << ","
         << net_out_rate_rate << ",'" << time_buf << "')";
-    mysql_query(conn, oss.str().c_str());
+    if (!exec(oss.str())) return false;
   }
 
   // ========== 2. 写入网络详细表 server_net_detail ==========
@@ -828,13 +966,13 @@ void HostManager::WriteToMysql(
     curr.drop_out = net.drop_out();
 
     NetDetailSample& last =
-        persistence_history_.net_samples[host_name][net_name];
+        next_history.net_samples[host_name][net_name];
 
     // 计算错误/丢弃变化率
-    auto rate_u64 = [](uint64_t now_val, uint64_t last_val) -> float {
-      if (last_val == 0) return 0;
-      return static_cast<float>(now_val - last_val) /
-             static_cast<float>(last_val);
+    auto rate_u64 = [](uint64_t now_val, uint64_t last_val) -> std::string {
+      if (last_val == 0 || now_val < last_val) return "NULL";
+      return std::to_string(static_cast<float>(now_val - last_val) /
+                            static_cast<float>(last_val));
     };
 
     std::ostringstream oss;
@@ -858,7 +996,7 @@ void HostManager::WriteToMysql(
         << rate_u64(curr.err_out, last.err_out) << ","
         << rate_u64(curr.drop_in, last.drop_in) << ","
         << rate_u64(curr.drop_out, last.drop_out) << ",'" << time_buf << "')";
-    mysql_query(conn, oss.str().c_str());
+    if (!exec(oss.str())) return false;
 
     last = curr;
   }
@@ -881,7 +1019,7 @@ void HostManager::WriteToMysql(
     curr.rcu = sirq.rcu();
 
     SoftIrqSample& last =
-        persistence_history_.softirq_samples[host_name][cpu_name];
+        next_history.softirq_samples[host_name][cpu_name];
 
     std::ostringstream oss;
     oss << "INSERT INTO server_softirq_detail "
@@ -902,7 +1040,7 @@ void HostManager::WriteToMysql(
         << rate(curr.sched, last.sched) << ","
         << rate(curr.hrtimer, last.hrtimer) << "," << rate(curr.rcu, last.rcu)
         << ",'" << time_buf << "')";
-    mysql_query(conn, oss.str().c_str());
+    if (!exec(oss.str())) return false;
 
     last = curr;
   }
@@ -932,7 +1070,7 @@ void HostManager::WriteToMysql(
     curr.sreclaimable = mem.sreclaimable();
     curr.sunreclaim = mem.sunreclaim();
 
-    MemDetailSample& last = persistence_history_.mem_samples[host_name];
+    MemDetailSample& last = next_history.mem_samples[host_name];
 
     std::ostringstream oss;
     oss << "INSERT INTO server_mem_detail "
@@ -973,7 +1111,7 @@ void HostManager::WriteToMysql(
         << rate(curr.kreclaimable, last.kreclaimable) << ","
         << rate(curr.sreclaimable, last.sreclaimable) << ","
         << rate(curr.sunreclaim, last.sunreclaim) << ",'" << time_buf << "')";
-    mysql_query(conn, oss.str().c_str());
+    if (!exec(oss.str())) return false;
 
     last = curr;
   }
@@ -993,7 +1131,7 @@ void HostManager::WriteToMysql(
     curr.util_percent = disk.util_percent();
 
     DiskDetailSample& last =
-        persistence_history_.disk_samples[host_name][disk_name];
+        next_history.disk_samples[host_name][disk_name];
 
     std::ostringstream oss;
     oss << "INSERT INTO server_disk_detail "
@@ -1024,10 +1162,16 @@ void HostManager::WriteToMysql(
         << rate(curr.avg_write_latency_ms, last.avg_write_latency_ms) << ","
         << rate(curr.util_percent, last.util_percent) << ",'" << time_buf
         << "')";
-    mysql_query(conn, oss.str().c_str());
+    if (!exec(oss.str())) return false;
 
     last = curr;
   }
+
+  if (mysql_query(conn, "COMMIT") != 0) {
+    mysql_query(conn, "ROLLBACK");
+    return false;
+  }
+  persistence_history_ = std::move(next_history);
 
 #else
   (void)host_name;
@@ -1057,6 +1201,7 @@ void HostManager::WriteToMysql(
   (void)net_in_drop_rate_rate;
   (void)net_out_drop_rate_rate;
 #endif
+  return true;
 }
 
 }  // namespace monitor

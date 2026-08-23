@@ -3,9 +3,9 @@ package monitor.proto;
 
 // 主机级 /proc/meminfo 分类快照；当前协议不表达进程级内存归因。
 message MemInfo {
-    float total = 1;
-    float free = 2;
-    float avail= 3;
+    float total = 1;               // GiB
+    float free = 2;                // GiB
+    float avail= 3;                // GiB
     float buffers = 4;
     float cached = 5;
     float swap_cached = 6;
@@ -22,5 +22,5 @@ message MemInfo {
     float kReclaimable = 17;
     float sReclaimable = 18;
     float sUnreclaim = 19;
-    float used_percent = 31;
+    float used_percent = 31;       // percent
   }

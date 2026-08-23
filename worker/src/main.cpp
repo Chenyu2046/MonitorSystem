@@ -11,6 +11,7 @@
 #include <chrono>
 #include <csignal>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -54,9 +55,16 @@ int main(int argc, char* argv[]) {
     manager_address = argv[1];
   }
   if (argc > 2) {
-    interval_seconds = std::stoi(argv[2]);
-    if (interval_seconds <= 0) {
-      interval_seconds = kDefaultPushInterval;
+    try {
+      const std::string interval_arg = argv[2];
+      std::size_t parsed_chars = 0;
+      interval_seconds = std::stoi(interval_arg, &parsed_chars);
+      if (parsed_chars != interval_arg.size()) {
+        throw std::invalid_argument("interval suffix");
+      }
+    } catch (...) {
+      std::cerr << "Invalid interval_seconds" << std::endl;
+      return 1;
     }
   }
 
@@ -67,7 +75,9 @@ int main(int argc, char* argv[]) {
   // 创建并启动推送器。构造阶段建立采集器、诊断组件和发送队列，
   // Start() 再创建采集线程与发送线程。
   monitor::MonitorPusher pusher(manager_address, interval_seconds);
-  pusher.Start();
+  if (!pusher.Start()) {
+    return 1;
+  }
 
   // 主线程不参与采集，只等待信号；这样不会与后台线程共享业务锁，
   // 收到退出请求后统一交给 Stop() 按线程生命周期顺序回收。

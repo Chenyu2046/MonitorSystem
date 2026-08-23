@@ -288,6 +288,7 @@ void TestPersistenceWorkerDrainsAcceptedTasks() {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         std::lock_guard<std::mutex> lock(mutex);
         ++processed;
+        return true;
       });
   worker.Start();
   int accepted = 0;
@@ -324,6 +325,7 @@ void TestPersistenceProducerUnblocksDuringDrain() {
         if (processed == 1) {
           condition.wait(lock, [&] { return release_first; });
         }
+        return true;
       });
   worker.Start();
   assert(worker.Enqueue(monitor::PersistenceTask{}));
@@ -367,6 +369,7 @@ void TestPersistenceWorkerRejectsOversizeTask() {
   monitor::PersistenceWorker worker(
       2, 1, [&handler_called](monitor::PersistenceTask&&) {
         handler_called = true;
+        return true;
       });
   worker.Start();
   assert(!worker.Enqueue(monitor::PersistenceTask{}));

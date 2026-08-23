@@ -466,12 +466,26 @@ void QueryServiceImpl::SetTimestamp(
     proto_rec->set_server_name(rec.server_name);
     proto_rec->set_cpu_name(rec.cpu_name);
     SetTimestamp(proto_rec->mutable_timestamp(), rec.timestamp);
-    proto_rec->set_hi(rec.hi);
-    proto_rec->set_timer(rec.timer);
-    proto_rec->set_net_tx(rec.net_tx);
-    proto_rec->set_net_rx(rec.net_rx);
-    proto_rec->set_block(rec.block);
-    proto_rec->set_sched(rec.sched);
+    proto_rec->set_hi(static_cast<std::int64_t>(rec.hi));
+    proto_rec->set_timer(static_cast<std::int64_t>(rec.timer));
+    proto_rec->set_net_tx(static_cast<std::int64_t>(rec.net_tx));
+    proto_rec->set_net_rx(static_cast<std::int64_t>(rec.net_rx));
+    proto_rec->set_block(static_cast<std::int64_t>(rec.block));
+    proto_rec->set_irq_poll(static_cast<std::int64_t>(rec.irq_poll));
+    proto_rec->set_tasklet(static_cast<std::int64_t>(rec.tasklet));
+    proto_rec->set_sched(static_cast<std::int64_t>(rec.sched));
+    proto_rec->set_hrtimer(static_cast<std::int64_t>(rec.hrtimer));
+    proto_rec->set_rcu(static_cast<std::int64_t>(rec.rcu));
+    proto_rec->set_hi_per_sec(rec.hi);
+    proto_rec->set_timer_per_sec(rec.timer);
+    proto_rec->set_net_tx_per_sec(rec.net_tx);
+    proto_rec->set_net_rx_per_sec(rec.net_rx);
+    proto_rec->set_block_per_sec(rec.block);
+    proto_rec->set_irq_poll_per_sec(rec.irq_poll);
+    proto_rec->set_tasklet_per_sec(rec.tasklet);
+    proto_rec->set_sched_per_sec(rec.sched);
+    proto_rec->set_hrtimer_per_sec(rec.hrtimer);
+    proto_rec->set_rcu_per_sec(rec.rcu);
   }
 
   response->set_total_count(total_count);

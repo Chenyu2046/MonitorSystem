@@ -207,7 +207,7 @@ std::vector<Evidence> EvidenceBuilder::Build(
   }
   if (info.soft_irq_size() > 0) {
     Add(&evidence, EvidenceType::kSoftirqNetRx, "MonitorInfo.soft_irq",
-        net_rx_softirq, "count/s", Severity(net_rx_softirq, 10000.0, 100000.0),
+        net_rx_softirq, "events/s", Severity(net_rx_softirq, 10000.0, 100000.0),
         timestamp, "max NET_RX softirq");
   }
 
@@ -215,7 +215,7 @@ std::vector<Evidence> EvidenceBuilder::Build(
     const double available = info.mem_info().avail();
     const double used_percent = info.mem_info().used_percent();
     Add(&evidence, EvidenceType::kMemoryAvailable, "MonitorInfo.mem_info",
-        available, "MB", Severity(used_percent, 80.0, 95.0), timestamp,
+        available, "GiB", Severity(used_percent, 80.0, 95.0), timestamp,
         "available memory proxy from used percent");
   }
 
@@ -247,11 +247,17 @@ std::vector<Evidence> EvidenceBuilder::Build(
     }
     for (const auto& status : info.diagnostic().probe_status()) {
       if (status.requested() &&
-          (!status.available() || !status.attached())) {
+          (!status.available() || !status.attached() ||
+           !status.snapshot_ok())) {
+        const bool read_failed = status.available() && status.attached() &&
+                                 !status.snapshot_ok();
         Add(&evidence, EvidenceType::kDiagnosticCapabilityDegraded,
             "DiagnosticSnapshot.probe_status",
             static_cast<double>(status.last_error()), "errno", 0.0, timestamp,
-            "requested probe unavailable: " + status.probe(), status.probe());
+            read_failed ? "requested probe snapshot read failed: " +
+                              status.probe()
+                        : "requested probe unavailable: " + status.probe(),
+            status.probe());
       }
     }
     if (info.diagnostic().oncpu_profiles_size() > 0) {

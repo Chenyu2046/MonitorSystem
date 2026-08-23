@@ -4,7 +4,7 @@
  * @file cpu_stat_monitor.h
  * @brief Worker 逐核 CPU 累计时间快照、delta 和百分比采集接口。
  *
- * 输入来自内核模块 mmap 或 /proc/stat fallback；输出是每个 CPU 核的
+ * 输入来自内核模块 mmap；输出是每个 CPU 核的
  * MonitorInfo.cpu_stat repeated message。CPU 时间是自系统启动以来的
  * 累计计数器，因此本模块保存前一轮快照，先以 uint64_t 计算 delta，
  * 再由实现使用 double 计算百分比。Worker 不在此处做整机平均。
@@ -89,10 +89,11 @@ class CpuStatMonitor : public MonitorInter {
  public:
   CpuStatMonitor() {}
   /**
-   * @brief 从 mmap 或 /proc/stat 读取快照并生成本轮逐核 CPU 样本。
+   * @brief 从 mmap 读取快照并生成本轮逐核 CPU 样本。
    * @sideeffect 更新每个 CPU 核缓存；reset/零 delta 时只更新缓存不追加样本。
    */
-  void UpdateOnce(monitor::proto::MonitorInfo* monitor_info) override;
+  bool Init() override;
+  CollectStatus UpdateOnce(monitor::proto::MonitorInfo* monitor_info) override;
   void Stop() override {}
 
  private:

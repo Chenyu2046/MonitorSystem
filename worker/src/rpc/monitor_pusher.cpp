@@ -24,14 +24,14 @@
 namespace {
 
 /**
- * @brief 读取一个必须为正整数的环境变量，非法值回退到默认值。
+ * @brief 读取一个必须为正整数的环境变量，非法值保留为无效配置。
  *
  * 配置解析发生在 Worker 启动阶段；不会在每轮采样读取环境变量。
  */
-void ApplyPositiveEnv(const char* name, int default_value, int* target) {
+bool ApplyPositiveEnv(const char* name, int* target) {
   const char* raw = std::getenv(name);
   if (!raw) {
-    return;
+    return true;
   }
 
   char* end = nullptr;
@@ -39,12 +39,12 @@ void ApplyPositiveEnv(const char* name, int default_value, int* target) {
   const long parsed = std::strtol(raw, &end, 10);
   if (*raw == '\0' || end == raw || *end != '\0' || errno == ERANGE ||
       parsed <= 0 || parsed > INT_MAX) {
-    std::cerr << "Warning: invalid " << name << "='" << raw
-              << "'; using default " << default_value << std::endl;
-    *target = default_value;
-    return;
+    std::cerr << "Invalid " << name << "='" << raw << std::endl;
+    *target = -1;
+    return false;
   }
   *target = static_cast<int>(parsed);
+  return true;
 }
 
 /** @brief 判断是否开启高噪声的基础指标日志。 */
@@ -68,36 +68,24 @@ bool IsDiagnosticLogEnabled() {
 monitor::diagnostics::ObservabilityConfig MakeObservabilityConfig(
     int interval_seconds) {
   monitor::diagnostics::ObservabilityConfig config;
-  const monitor::diagnostics::ObservabilityConfig defaults;
-  if (interval_seconds > 0) {
+  if (interval_seconds > 0 && interval_seconds <= INT_MAX / 1000) {
     config.normal_interval_ms = interval_seconds * 1000;
+  } else {
+    config.normal_interval_ms = -1;
   }
-  ApplyPositiveEnv("KERNSCOPE_NORMAL_INTERVAL_MS",
-                   defaults.normal_interval_ms, &config.normal_interval_ms);
-  ApplyPositiveEnv("KERNSCOPE_SUSPECT_INTERVAL_MS",
-                   defaults.suspect_interval_ms, &config.suspect_interval_ms);
+  ApplyPositiveEnv("KERNSCOPE_NORMAL_INTERVAL_MS", &config.normal_interval_ms);
+  ApplyPositiveEnv("KERNSCOPE_SUSPECT_INTERVAL_MS", &config.suspect_interval_ms);
   ApplyPositiveEnv("KERNSCOPE_DIAGNOSTIC_INTERVAL_MS",
-                   defaults.diagnostic_interval_ms,
                    &config.diagnostic_interval_ms);
   ApplyPositiveEnv("KERNSCOPE_PROFILING_DURATION_SEC",
-                   defaults.profiling_duration_sec,
                    &config.profiling_duration_sec);
-  if (config.profiling_duration_sec > config.profiling_max_duration_sec) {
-    std::cerr << "Warning: KERNSCOPE_PROFILING_DURATION_SEC exceeds "
-              << "KERNSCOPE profiling maximum; using default "
-              << defaults.profiling_duration_sec << std::endl;
-    config.profiling_duration_sec = defaults.profiling_duration_sec;
-  }
-  ApplyPositiveEnv("KERNSCOPE_COOLDOWN_SEC", defaults.cooldown_sec,
-                   &config.cooldown_sec);
-  ApplyPositiveEnv("KERNSCOPE_PROFILE_SAMPLE_HZ",
-                   defaults.profiling_sample_hz, &config.profiling_sample_hz);
+  ApplyPositiveEnv("KERNSCOPE_COOLDOWN_SEC", &config.cooldown_sec);
+  ApplyPositiveEnv("KERNSCOPE_PROFILE_SAMPLE_HZ", &config.profiling_sample_hz);
   if (const char* object_dir = std::getenv("KERNSCOPE_EBPF_OBJECT_DIR")) {
     if (*object_dir != '\0') {
       config.ebpf_object_dir = object_dir;
     } else {
-      std::cerr << "Warning: KERNSCOPE_EBPF_OBJECT_DIR is empty; using default "
-                << config.ebpf_object_dir << std::endl;
+      config.ebpf_object_dir.clear();
     }
   }
   return config;
@@ -229,6 +217,8 @@ void FillDiagnosticProto(
     proto_status->set_available(status.available);
     proto_status->set_attached(status.attached);
     proto_status->set_last_error(status.last_error);
+    proto_status->set_snapshot_ok(status.snapshot_ok);
+    proto_status->set_snapshot_error(status.snapshot_error);
   }
 
   for (const auto& sample : snapshot.tcp) {
@@ -352,13 +342,18 @@ MonitorPusher::MonitorPusher(const std::string& manager_address,
 
 MonitorPusher::~MonitorPusher() { Stop(); }
 
-void MonitorPusher::Start() {
+bool MonitorPusher::Start() {
   // lifecycle_mutex_ 串行化 Start/Stop；compare_exchange 防止重复启动
   // 两套采集/发送线程。
   std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
   bool expected = false;
   if (!running_.compare_exchange_strong(expected, true)) {
-    return;
+    return false;
+  }
+  if (!observability_config_.IsValid() || !collector_->Init()) {
+    running_.store(false);
+    std::cerr << "MonitorPusher startup validation failed" << std::endl;
+    return false;
   }
   // 先打开队列，再启动消费者，保证采集线程创建后可以立即入队。
   send_queue_.Open();
@@ -371,6 +366,7 @@ void MonitorPusher::Start() {
             << " with adaptive sampling (normal interval "
             << observability_config_.normal_interval_ms / 1000 << " seconds)"
             << std::endl;
+  return true;
 }
 
 void MonitorPusher::Stop() {
@@ -406,7 +402,9 @@ bool MonitorPusher::PushOnce() {
   // ---------- 1. 采集本轮基础监控数据 ----------
   // MetricCollector 只填充 CPU/内存/磁盘/网络/主机等普通指标。
   monitor::proto::MonitorInfo info;
-  collector_->CollectAll(&info);
+  if (collector_->CollectAll(&info) != CollectStatus::kOk) {
+    return false;
+  }
 
   // ---------- 2. 根据基础指标计算异常程度 ----------
   // AnomalyDetector 输出逐核/逐设备 max 和整体 max 分数，不改写 info。
@@ -485,25 +483,25 @@ bool MonitorPusher::PushOnce() {
     const auto& mem = info.mem_info();
     std::cout << "\n--- Memory Info ---" << std::endl;
     std::cout << "[Memory] Used: " << mem.used_percent() << "%" << std::endl;
-    std::cout << "  Total: " << mem.total() << " MB, "
-              << "Free: " << mem.free() << " MB, "
-              << "Avail: " << mem.avail() << " MB" << std::endl;
-    std::cout << "  Buffers: " << mem.buffers() << " MB, "
-              << "Cached: " << mem.cached() << " MB, "
-              << "SwapCached: " << mem.swap_cached() << " MB" << std::endl;
-    std::cout << "  Active: " << mem.active() << " MB, "
-              << "Inactive: " << mem.inactive() << " MB" << std::endl;
-    std::cout << "  ActiveAnon: " << mem.active_anon() << " MB, "
-              << "InactiveAnon: " << mem.inactive_anon() << " MB" << std::endl;
-    std::cout << "  ActiveFile: " << mem.active_file() << " MB, "
-              << "InactiveFile: " << mem.inactive_file() << " MB" << std::endl;
-    std::cout << "  Dirty: " << mem.dirty() << " MB, "
-              << "Writeback: " << mem.writeback() << " MB" << std::endl;
-    std::cout << "  AnonPages: " << mem.anon_pages() << " MB, "
-              << "Mapped: " << mem.mapped() << " MB" << std::endl;
-    std::cout << "  KReclaimable: " << mem.kreclaimable() << " MB, "
-              << "SReclaimable: " << mem.sreclaimable() << " MB, "
-              << "SUnreclaim: " << mem.sunreclaim() << " MB" << std::endl;
+    std::cout << "  Total: " << mem.total() << " GiB, "
+              << "Free: " << mem.free() << " GiB, "
+              << "Avail: " << mem.avail() << " GiB" << std::endl;
+    std::cout << "  Buffers: " << mem.buffers() << " GiB, "
+              << "Cached: " << mem.cached() << " GiB, "
+              << "SwapCached: " << mem.swap_cached() << " GiB" << std::endl;
+    std::cout << "  Active: " << mem.active() << " GiB, "
+              << "Inactive: " << mem.inactive() << " GiB" << std::endl;
+    std::cout << "  ActiveAnon: " << mem.active_anon() << " GiB, "
+              << "InactiveAnon: " << mem.inactive_anon() << " GiB" << std::endl;
+    std::cout << "  ActiveFile: " << mem.active_file() << " GiB, "
+              << "InactiveFile: " << mem.inactive_file() << " GiB" << std::endl;
+    std::cout << "  Dirty: " << mem.dirty() << " GiB, "
+              << "Writeback: " << mem.writeback() << " GiB" << std::endl;
+    std::cout << "  AnonPages: " << mem.anon_pages() << " GiB, "
+              << "Mapped: " << mem.mapped() << " GiB" << std::endl;
+    std::cout << "  KReclaimable: " << mem.kreclaimable() << " GiB, "
+              << "SReclaimable: " << mem.sreclaimable() << " GiB, "
+              << "SUnreclaim: " << mem.sunreclaim() << " GiB" << std::endl;
   }
 
   // 网络信息 - 所有网卡所有字段
@@ -512,9 +510,9 @@ bool MonitorPusher::PushOnce() {
     for (int i = 0; i < info.net_info_size(); ++i) {
       const auto& net = info.net_info(i);
       std::cout << "[" << net.name() << "]" << std::endl;
-      std::cout << "  Recv: " << net.rcv_rate() << " B/s ("
+      std::cout << "  Recv: " << net.rcv_rate() << " KiB/s ("
                 << net.rcv_packets_rate() << " pkt/s)" << std::endl;
-      std::cout << "  Send: " << net.send_rate() << " B/s ("
+      std::cout << "  Send: " << net.send_rate() << " KiB/s ("
                 << net.send_packets_rate() << " pkt/s)" << std::endl;
       std::cout << "  Errors(in/out): " << net.err_in() << "/" << net.err_out()
                 << ", Drops(in/out): " << net.drop_in() << "/" << net.drop_out()

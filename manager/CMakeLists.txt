@@ -54,7 +54,7 @@ if(ENABLE_MYSQL)
         target_include_directories(manager PUBLIC ${MYSQL_INCLUDE_DIRS})
         list(APPEND MANAGER_LIBS ${MYSQL_LIBRARIES})
     else()
-        message(WARNING "MySQL not found, disabling MySQL support")
+        message(FATAL_ERROR "ENABLE_MYSQL=ON requires mysqlclient via pkg-config")
     endif()
 endif()
 

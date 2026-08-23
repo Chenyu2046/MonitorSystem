@@ -31,18 +31,17 @@ class MetricCollector {
   MetricCollector();
   ~MetricCollector();
 
-  /**
-   * @brief 采集本轮所有基础指标并填充 MonitorInfo。
-   *
-   * @param monitor_info 输出 Protobuf；为空时直接返回。
-   * @sideeffect 设置主机名并依次调用各监控器的 UpdateOnce()。
-   */
-  void CollectAll(monitor::proto::MonitorInfo* monitor_info);
+  /** @brief 验证 hostname 和所有 required data source。 */
+  bool Init();
+
+  /** @brief 采集完整样本；任一 required collector 非 OK 时停止发布。 */
+  CollectStatus CollectAll(monitor::proto::MonitorInfo* monitor_info);
 
  private:
   // monitors 里面要放指向Monitorinter的子类对象的 unique_ptr, make_unique 返回的是 unique_ptr 的实例
   std::vector<std::unique_ptr<MonitorInter>> monitors_; 
   std::string hostname_;
+  bool initialized_ = false;
 };
 
 }  // namespace monitor

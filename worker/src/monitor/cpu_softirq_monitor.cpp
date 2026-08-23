@@ -1,12 +1,3 @@
-/**
- * @file cpu_softirq_monitor.cpp
- * @brief 通过字符设备 mmap 采集逐核 SoftIRQ 速率。
- *
- * 内核模块按 CPU 保存 SoftIRQ 累计次数并周期更新共享区域；Worker
- * 保存上一轮快照和时间点，用差值除以秒数得到速率，再写入逐核
- * MonitorInfo。这里不把 SoftIRQ 与 CPU busy 百分比混为同一指标。
- */
-
 #include "monitor/cpu_softirq_monitor.h"
 
 #include <fcntl.h>
@@ -15,138 +6,139 @@
 
 #include <chrono>
 #include <cstring>
-#include <iostream>
+#include <utility>
+#include <vector>
 
 #include "monitor/monitor_structs.h"
 
 namespace monitor {
 
-// 设备路径
-static const char* DEVICE_PATH = "/dev/cpu_softirq_monitor";
+namespace {
+constexpr const char* kDevicePath = "/dev/cpu_softirq_monitor";
+constexpr std::size_t kMaxCpus = 256;
+}
 
-// 最大 CPU 数量（与内核模块一致）
-static const size_t MAX_CPUS = 256;
+bool CpuSoftIrqMonitor::Init() {
+  const int fd = open(kDevicePath, O_RDONLY);
+  if (fd < 0) return false;
+  const std::size_t size = sizeof(softirq_stat) * kMaxCpus;
+  void* address = mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
+  const bool valid = address != MAP_FAILED;
+  if (valid) munmap(address, size);
+  close(fd);
+  return valid;
+}
 
-void CpuSoftIrqMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
-  // 设备不存在通常表示内核模块未加载；基础采集器选择本轮跳过，
-  // 不改变 MonitorInfo 中其他监控项，也不伪造 SoftIRQ 速率。
-  // 打开设备文件
-  int fd = open(DEVICE_PATH, O_RDONLY);
-  if (fd < 0) {
-    // 设备不存在，可能内核模块未加载
-    // 静默失败，不输出错误信息
-    return;
-  }
-
-  // 计算映射大小
-  size_t map_size = sizeof(struct softirq_stat) * MAX_CPUS;
-
-  // 映射内核内存到用户空间
-  void* addr = mmap(nullptr, map_size, PROT_READ, MAP_SHARED, fd, 0);
-  if (addr == MAP_FAILED) {
+CollectStatus CpuSoftIrqMonitor::UpdateOnce(
+    monitor::proto::MonitorInfo* monitor_info) {
+  if (!monitor_info) return CollectStatus::kError;
+  const int fd = open(kDevicePath, O_RDONLY);
+  if (fd < 0) return CollectStatus::kError;
+  const std::size_t size = sizeof(softirq_stat) * kMaxCpus;
+  void* address = mmap(nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
+  if (address == MAP_FAILED) {
     close(fd);
-    return;
+    return CollectStatus::kError;
   }
 
-  struct softirq_stat* stats = static_cast<struct softirq_stat*>(addr);
-  auto now = std::chrono::steady_clock::now();
+  const auto* mapped = static_cast<const softirq_stat*>(address);
+  struct Raw {
+    std::string name;
+    std::uint64_t values[10]{};
+  };
+  std::vector<Raw> current;
+  for (std::size_t i = 0; i < kMaxCpus && mapped[i].cpu_name[0] != '\0'; ++i) {
+    Raw raw;
+    raw.name = mapped[i].cpu_name;
+    raw.values[0] = mapped[i].hi;
+    raw.values[1] = mapped[i].timer;
+    raw.values[2] = mapped[i].net_tx;
+    raw.values[3] = mapped[i].net_rx;
+    raw.values[4] = mapped[i].block;
+    raw.values[5] = mapped[i].irq_poll;
+    raw.values[6] = mapped[i].tasklet;
+    raw.values[7] = mapped[i].sched;
+    raw.values[8] = mapped[i].hrtimer;
+    raw.values[9] = mapped[i].rcu;
+    current.push_back(std::move(raw));
+  }
+  munmap(address, size);
+  close(fd);
+  if (current.empty()) return CollectStatus::kError;
 
-  // 遍历所有 CPU 的软中断统计数据；cpu_name 为空表示共享数组结束。
-  for (size_t i = 0; i < MAX_CPUS; ++i) {
-    // 检查是否到达数据末尾
-    if (stats[i].cpu_name[0] == '\0') {
-      break;
+  const auto now = std::chrono::steady_clock::now();
+  bool not_ready = false;
+  struct Report {
+    Raw current;
+    SoftIrq previous;
+  };
+  std::vector<Report> report;
+  report.reserve(current.size());
+  for (const auto& raw : current) {
+    const auto it = cpu_softirqs_.find(raw.name);
+    if (it == cpu_softirqs_.end()) {
+      not_ready = true;
+      continue;
     }
-
-    std::string cpu_name(stats[i].cpu_name);
-
-    // 查找之前的采样数据。只有存在前一轮基线，累计计数才能转换为
-    // 本轮速率；首次采集保留现有协议语义，填入原始累计值。
-    auto it = cpu_softirqs_.find(cpu_name);
-
-    // 创建 protobuf 消息
-    auto* softirq_msg = monitor_info->add_soft_irq();
-    softirq_msg->set_cpu(cpu_name);
-
-    if (it != cpu_softirqs_.end()) {
-      // 计算时间差（秒）。steady_clock 避免 NTP/手工调时影响速率分母。
-      auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-                          now - it->second.timepoint)
-                          .count();
-      double seconds = duration / 1000.0;
-
-      if (seconds > 0) {
-        // 计算每秒的软中断频率。NET_RX/NET_TX 分别代表收发网络栈
-        // SoftIRQ，可与 NetInfo 的包速率交叉观察网络压力。
-        softirq_msg->set_hi(
-            static_cast<int64_t>((stats[i].hi - it->second.hi) / seconds));
-        softirq_msg->set_timer(
-            static_cast<int64_t>((stats[i].timer - it->second.timer) / seconds));
-        softirq_msg->set_net_tx(
-            static_cast<int64_t>((stats[i].net_tx - it->second.net_tx) / seconds));
-        softirq_msg->set_net_rx(
-            static_cast<int64_t>((stats[i].net_rx - it->second.net_rx) / seconds));
-        softirq_msg->set_block(
-            static_cast<int64_t>((stats[i].block - it->second.block) / seconds));
-        softirq_msg->set_irq_poll(
-            static_cast<int64_t>((stats[i].irq_poll - it->second.irq_poll) / seconds));
-        softirq_msg->set_tasklet(
-            static_cast<int64_t>((stats[i].tasklet - it->second.tasklet) / seconds));
-        softirq_msg->set_sched(
-            static_cast<int64_t>((stats[i].sched - it->second.sched) / seconds));
-        softirq_msg->set_hrtimer(
-            static_cast<int64_t>((stats[i].hrtimer - it->second.hrtimer) / seconds));
-        softirq_msg->set_rcu(
-            static_cast<int64_t>((stats[i].rcu - it->second.rcu) / seconds));
-      } else {
-        // 时间差为 0 时无法构造可靠速率，保持当前实现的原始值行为，
-        // 同时仍然更新缓存时间点，避免下一轮继续使用过期基线。
-        softirq_msg->set_hi(stats[i].hi);
-        softirq_msg->set_timer(stats[i].timer);
-        softirq_msg->set_net_tx(stats[i].net_tx);
-        softirq_msg->set_net_rx(stats[i].net_rx);
-        softirq_msg->set_block(stats[i].block);
-        softirq_msg->set_irq_poll(stats[i].irq_poll);
-        softirq_msg->set_tasklet(stats[i].tasklet);
-        softirq_msg->set_sched(stats[i].sched);
-        softirq_msg->set_hrtimer(stats[i].hrtimer);
-        softirq_msg->set_rcu(stats[i].rcu);
-      }
-    } else {
-      // 首次采集没有 delta 基线，使用原始累计值；下一轮开始才具备
-      // 速率语义。
-      softirq_msg->set_hi(stats[i].hi);
-      softirq_msg->set_timer(stats[i].timer);
-      softirq_msg->set_net_tx(stats[i].net_tx);
-      softirq_msg->set_net_rx(stats[i].net_rx);
-      softirq_msg->set_block(stats[i].block);
-      softirq_msg->set_irq_poll(stats[i].irq_poll);
-      softirq_msg->set_tasklet(stats[i].tasklet);
-      softirq_msg->set_sched(stats[i].sched);
-      softirq_msg->set_hrtimer(stats[i].hrtimer);
-      softirq_msg->set_rcu(stats[i].rcu);
+    const std::uint64_t previous[10] = {
+        it->second.hi,     it->second.timer,  it->second.net_tx,
+        it->second.net_rx, it->second.block,  it->second.irq_poll,
+        it->second.tasklet, it->second.sched, it->second.hrtimer,
+        it->second.rcu};
+    bool changed = false;
+    for (std::size_t i = 0; i < 10; ++i) {
+      if (raw.values[i] < previous[i]) not_ready = true;
+      if (raw.values[i] > previous[i]) changed = true;
     }
+    if (!changed) not_ready = true;
+    if (std::chrono::duration<double>(now - it->second.timepoint).count() <=
+        0) {
+      not_ready = true;
+    }
+    report.push_back({raw, it->second});
+  }
 
-    // 保存当前采样数据用于下次计算。缓存属于 Worker 单线程采集路径，
-    // 不与发送线程共享这组状态。
-    SoftIrq& cached = cpu_softirqs_[cpu_name];
-    cached.cpu_name = cpu_name;
-    cached.hi = stats[i].hi;
-    cached.timer = stats[i].timer;
-    cached.net_tx = stats[i].net_tx;
-    cached.net_rx = stats[i].net_rx;
-    cached.block = stats[i].block;
-    cached.irq_poll = stats[i].irq_poll;
-    cached.tasklet = stats[i].tasklet;
-    cached.sched = stats[i].sched;
-    cached.hrtimer = stats[i].hrtimer;
-    cached.rcu = stats[i].rcu;
+  for (const auto& raw : current) {
+    SoftIrq& cached = cpu_softirqs_[raw.name];
+    cached.cpu_name = raw.name;
+    cached.hi = raw.values[0];
+    cached.timer = raw.values[1];
+    cached.net_tx = raw.values[2];
+    cached.net_rx = raw.values[3];
+    cached.block = raw.values[4];
+    cached.irq_poll = raw.values[5];
+    cached.tasklet = raw.values[6];
+    cached.sched = raw.values[7];
+    cached.hrtimer = raw.values[8];
+    cached.rcu = raw.values[9];
     cached.timepoint = now;
   }
+  if (not_ready) return CollectStatus::kNotReady;
 
-  // 解除映射并关闭文件
-  munmap(addr, map_size);
-  close(fd);
+  for (const auto& item : report) {
+    const double seconds = std::chrono::duration<double>(
+                               now - item.previous.timepoint)
+                               .count();
+    if (seconds <= 0) return CollectStatus::kError;
+    auto* message = monitor_info->add_soft_irq();
+    message->set_cpu(item.current.name);
+    const auto rate = [&item, seconds](std::size_t index,
+                                       std::uint64_t previous) {
+      return static_cast<double>(item.current.values[index] - previous) /
+             seconds;
+    };
+    message->set_hi(rate(0, item.previous.hi));
+    message->set_timer(rate(1, item.previous.timer));
+    message->set_net_tx(rate(2, item.previous.net_tx));
+    message->set_net_rx(rate(3, item.previous.net_rx));
+    message->set_block(rate(4, item.previous.block));
+    message->set_irq_poll(rate(5, item.previous.irq_poll));
+    message->set_tasklet(rate(6, item.previous.tasklet));
+    message->set_sched(rate(7, item.previous.sched));
+    message->set_hrtimer(rate(8, item.previous.hrtimer));
+    message->set_rcu(rate(9, item.previous.rcu));
+  }
+  return CollectStatus::kOk;
 }
 
 }  // namespace monitor

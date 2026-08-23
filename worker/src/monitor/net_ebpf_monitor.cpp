@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include <cstring>
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -27,6 +28,7 @@
 #include <linux/rtnetlink.h>
 
 #include "monitor_info.pb.h"
+#include "monitor/net_monitor.h"
 
 // 包含生成的 skeleton 头文件
 #include "monitor/net_stats.skel.h"
@@ -42,6 +44,7 @@ static std::vector<uint32_t> GetAllIfIndexes() {
   struct dirent* entry;
   while ((entry = readdir(dir)) != nullptr) {
     if (entry->d_name[0] == '.') continue;
+    if (strcmp(entry->d_name, "lo") == 0) continue;
 
     unsigned int ifindex = if_nametoindex(entry->d_name);
     if (ifindex > 0) {
@@ -71,7 +74,10 @@ static int tc_qdisc_create_clsact(int ifindex) {
     return -1;
   }
 
-  snprintf(cmd, sizeof(cmd), "tc qdisc add dev %s clsact 2>/dev/null", ifname);
+  snprintf(cmd, sizeof(cmd),
+           "tc qdisc add dev %s clsact 2>/dev/null || "
+           "tc qdisc show dev %s clsact >/dev/null 2>&1",
+           ifname, ifname);
   return system(cmd);
 }
 
@@ -88,12 +94,6 @@ static int tc_qdisc_delete_clsact(int ifindex) {
 
 NetEbpfMonitor::NetEbpfMonitor() {
   last_update_ = std::chrono::steady_clock::now();
-  fallback_monitor_ = std::make_unique<NetMonitor>();
-  loaded_ = InitEbpf();
-  if (!loaded_) {
-    std::cerr << "NetEbpfMonitor: Failed to load eBPF program, "
-              << "falling back to /proc/net/dev" << std::endl;
-  }
 }
 
 NetEbpfMonitor::~NetEbpfMonitor() { CleanupEbpf(); }
@@ -102,7 +102,7 @@ bool NetEbpfMonitor::InitEbpf() {
   struct net_stats_bpf* skel = nullptr;
   int err;
 
-  // 先打开 skeleton，再加载程序和 map；任一步失败都回退到 proc 路径。
+  // 先打开 skeleton，再加载程序和 map；任一步失败都使该 source 不可用。
   skel = net_stats_bpf__open();
   if (!skel) {
     std::cerr << "Failed to open BPF skeleton" << std::endl;
@@ -133,20 +133,42 @@ bool NetEbpfMonitor::InitEbpf() {
   }
   per_cpu_stats_.resize(static_cast<size_t>(possible_cpus));
 
+  if (bpf_map__max_entries(skel->maps.net_stats_map) < 1 ||
+      bpf_map__max_entries(skel->maps.net_stats_map) < 64) {
+    net_stats_bpf__destroy(skel);
+    map_fd_ = -1;
+    return false;
+  }
+
   // 为每个非 loopback 网卡创建 clsact，并分别挂载 ingress/egress 程序。
   auto ifindexes = GetAllIfIndexes();
+  if (ifindexes.size() > 64 || ifindexes.empty()) {
+    net_stats_bpf__destroy(skel);
+    map_fd_ = -1;
+    return false;
+  }
   int ingress_fd = bpf_program__fd(skel->progs.tc_ingress);
   int egress_fd = bpf_program__fd(skel->progs.tc_egress);
 
   for (uint32_t ifindex : ifindexes) {
     char ifname[IF_NAMESIZE];
-    if (if_indextoname(ifindex, ifname) == nullptr) continue;
+    if (if_indextoname(ifindex, ifname) == nullptr) {
+      net_stats_bpf__destroy(skel);
+      map_fd_ = -1;
+      CleanupEbpf();
+      return false;
+    }
 
     // 跳过 loopback
     if (strcmp(ifname, "lo") == 0) continue;
 
-    // 创建 clsact qdisc
-    tc_qdisc_create_clsact(ifindex);
+    // 创建 clsact qdisc；任一接口失败都不能留下部分 coverage。
+    if (tc_qdisc_create_clsact(ifindex) != 0) {
+      net_stats_bpf__destroy(skel);
+      map_fd_ = -1;
+      CleanupEbpf();
+      return false;
+    }
 
     // 使用 libbpf 的 TC attach API
     LIBBPF_OPTS(bpf_tc_hook, hook, .ifindex = static_cast<int>(ifindex),
@@ -157,7 +179,10 @@ bool NetEbpfMonitor::InitEbpf() {
     if (err && err != -EEXIST) {
       std::cerr << "Failed to create TC hook for " << ifname << ": "
                 << strerror(-err) << std::endl;
-      continue;
+      net_stats_bpf__destroy(skel);
+      map_fd_ = -1;
+      CleanupEbpf();
+      return false;
     }
 
     // 附加 ingress 程序
@@ -166,10 +191,14 @@ bool NetEbpfMonitor::InitEbpf() {
     if (err) {
       std::cerr << "Failed to attach TC ingress for " << ifname << ": "
                 << strerror(-err) << std::endl;
-    } else {
-      attached_ifindexes_.push_back(ifindex);
-      std::cout << "Attached TC ingress to " << ifname << std::endl;
+      net_stats_bpf__destroy(skel);
+      map_fd_ = -1;
+      CleanupEbpf();
+      return false;
     }
+    // 从 ingress 成功开始就登记当前接口，确保后续 egress 失败时清理
+    // 不会遗留半挂载的 ingress hook。
+    attached_ifindexes_.push_back(ifindex);
 
     // 附加 egress 程序
     hook.attach_point = BPF_TC_EGRESS;
@@ -178,15 +207,18 @@ bool NetEbpfMonitor::InitEbpf() {
     if (err) {
       std::cerr << "Failed to attach TC egress for " << ifname << ": "
                 << strerror(-err) << std::endl;
-    } else {
-      std::cout << "Attached TC egress to " << ifname << std::endl;
+      net_stats_bpf__destroy(skel);
+      map_fd_ = -1;
+      CleanupEbpf();
+      return false;
     }
+    interface_set_.push_back(ifindex);
   }
 
   // 将 skeleton 交给成员管理，CleanupEbpf 负责统一销毁。
   bpf_obj_ = reinterpret_cast<struct bpf_object*>(skel);
 
-  if (attached_ifindexes_.empty()) {
+  if (attached_ifindexes_.size() != ifindexes.size()) {
     std::cerr << "No interfaces attached" << std::endl;
     net_stats_bpf__destroy(skel);
     bpf_obj_ = nullptr;
@@ -195,6 +227,11 @@ bool NetEbpfMonitor::InitEbpf() {
 
   std::cout << "NetEbpfMonitor: eBPF TC hook loaded successfully" << std::endl;
   return true;
+}
+
+bool NetEbpfMonitor::Init() {
+  loaded_ = InitEbpf();
+  return loaded_;
 }
 
 void NetEbpfMonitor::CleanupEbpf() {
@@ -213,6 +250,7 @@ void NetEbpfMonitor::CleanupEbpf() {
     // tc_qdisc_delete_clsact(ifindex);
   }
   attached_ifindexes_.clear();
+  interface_set_.clear();
 
   if (bpf_obj_) {
     net_stats_bpf__destroy(reinterpret_cast<struct net_stats_bpf*>(bpf_obj_));
@@ -227,33 +265,20 @@ static bool ReadErrorCounters(const std::string& ifname, uint64_t* err_in,
                               uint64_t* err_out, uint64_t* drop_in,
                               uint64_t* drop_out) {
   std::ifstream file("/proc/net/dev");
+  if (!file.is_open()) return false;
   std::string line;
-  std::getline(file, line);
-  std::getline(file, line);
+  if (!std::getline(file, line) || !std::getline(file, line)) return false;
 
   while (std::getline(file, line)) {
-    const size_t colon = line.find(':');
-    if (colon == std::string::npos) {
-      continue;
-    }
-
-    std::istringstream name_stream(line.substr(0, colon));
-    std::string candidate;
-    name_stream >> candidate;
-    if (candidate != ifname) {
-      continue;
-    }
-
-    std::istringstream values(line.substr(colon + 1));
-    uint64_t ignored = 0;
-    uint64_t rcv_bytes = 0;
-    uint64_t rcv_packets = 0;
-    uint64_t snd_bytes = 0;
-    uint64_t snd_packets = 0;
-    values >> rcv_bytes >> rcv_packets >> *err_in >> *drop_in;
-    values >> ignored >> ignored >> ignored >> ignored;
-    values >> snd_bytes >> snd_packets >> *err_out >> *drop_out;
-    return !values.fail();
+    if (line.find_first_not_of(" \t\r\n") == std::string::npos) continue;
+    NetRawSample sample;
+    if (!ParseNetDevLine(line, &sample)) return false;
+    if (sample.name != ifname) continue;
+    *err_in = sample.err_in;
+    *err_out = sample.err_out;
+    *drop_in = sample.drop_in;
+    *drop_out = sample.drop_out;
+    return true;
   }
   return false;
 }
@@ -277,8 +302,14 @@ std::string NetEbpfMonitor::GetIfName(uint32_t ifindex) {
 }
 
 bool NetEbpfMonitor::ReadAggregatedStats(uint32_t ifindex, NetStats* stats) {
-  if (!stats || per_cpu_stats_.empty() ||
-      bpf_map_lookup_elem(map_fd_, &ifindex, per_cpu_stats_.data()) != 0) {
+  if (!stats || per_cpu_stats_.empty()) {
+    return false;
+  }
+  if (bpf_map_lookup_elem(map_fd_, &ifindex, per_cpu_stats_.data()) != 0) {
+    if (errno == ENOENT) {
+      *stats = {};
+      return true;
+    }
     return false;
   }
 
@@ -293,136 +324,86 @@ bool NetEbpfMonitor::ReadAggregatedStats(uint32_t ifindex, NetStats* stats) {
   return true;
 }
 
-void NetEbpfMonitor::UpdateFallback(monitor::proto::MonitorInfo* monitor_info) {
-  if (fallback_monitor_) {
-    fallback_monitor_->UpdateOnce(monitor_info);
-  }
-}
+CollectStatus NetEbpfMonitor::UpdateOnce(
+    monitor::proto::MonitorInfo* monitor_info) {
+  if (!monitor_info || !loaded_ || map_fd_ < 0) return CollectStatus::kError;
+  auto current_interfaces = GetAllIfIndexes();
+  std::sort(current_interfaces.begin(), current_interfaces.end());
+  auto expected_interfaces = interface_set_;
+  std::sort(expected_interfaces.begin(), expected_interfaces.end());
+  if (current_interfaces != expected_interfaces) return CollectStatus::kError;
 
-void NetEbpfMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
-  if (!monitor_info) {
-    return;
-  }
-
-  // 加载失败时保持既有 /proc/net/dev 采集行为，避免影响普通监控链路。
-  if (!loaded_ || map_fd_ < 0) {
-    UpdateFallback(monitor_info);
-    return;
-  }
-
-  auto now = std::chrono::steady_clock::now();
-  auto duration =
-      std::chrono::duration_cast<std::chrono::milliseconds>(now - last_update_)
-          .count();
-
-  // 时间间隔极短时仍使用 1 ms，避免速率计算除零。
-  if (duration == 0) {
-    duration = 1;
-  }
-
+  const auto now = std::chrono::steady_clock::now();
   struct InterfaceStats {
     uint32_t ifindex;
     NetStats stats;
-  };
-  std::vector<InterfaceStats> interfaces;
-  uint32_t current_key = 0;
-  uint32_t next_key = 0;
-  const void* key = nullptr;
-  int result = 0;
-
-  // 逐个遍历 map key；任意一次读取失败都放弃本轮 eBPF 快照。
-  while ((result = bpf_map_get_next_key(map_fd_, key, &next_key)) == 0) {
-    NetStats stats;
-    if (!ReadAggregatedStats(next_key, &stats)) {
-      result = -EIO;
-      break;
-    }
-    interfaces.push_back({next_key, stats});
-    current_key = next_key;
-    key = &current_key;
-  }
-
-  if (result != -ENOENT) {
-    ++consecutive_read_failures_;
-    std::cerr << "NetEbpfMonitor: failed to read eBPF map (failure "
-              << consecutive_read_failures_ << ")" << std::endl;
-    if (consecutive_read_failures_ >= 3) {
-      std::cerr << "NetEbpfMonitor: switching to /proc/net/dev after repeated "
-                   "map read failures"
-                << std::endl;
-      CleanupEbpf();
-    }
-    UpdateFallback(monitor_info);
-    return;
-  }
-  consecutive_read_failures_ = 0;
-
-  for (const auto& interface_stats : interfaces) {
-    std::string ifname = GetIfName(interface_stats.ifindex);
-    if (ifname.empty() || ifname == "lo") {
-      continue;
-    }
-
-    const auto& stats = interface_stats.stats;
-    auto* net_info = monitor_info->add_net_info();
-    net_info->set_name(ifname);
+    NetStatCache previous{};
+    bool has_previous = false;
     uint64_t err_in = 0;
     uint64_t err_out = 0;
     uint64_t drop_in = 0;
     uint64_t drop_out = 0;
-    if (ReadErrorCounters(ifname, &err_in, &err_out, &drop_in, &drop_out)) {
-      net_info->set_err_in(err_in);
-      net_info->set_err_out(err_out);
-      net_info->set_drop_in(drop_in);
-      net_info->set_drop_out(drop_out);
-    } else {
-      std::cerr << "NetEbpfMonitor: failed to read error counters for "
-                << ifname << std::endl;
+  };
+  std::vector<InterfaceStats> current;
+  bool not_ready = false;
+  for (const uint32_t ifindex : interface_set_) {
+    InterfaceStats value;
+    value.ifindex = ifindex;
+    if (!ReadAggregatedStats(ifindex, &value.stats)) return CollectStatus::kError;
+    const std::string ifname = GetIfName(ifindex);
+    if (ifname.empty() || !ReadErrorCounters(ifname, &value.err_in,
+                                              &value.err_out, &value.drop_in,
+                                              &value.drop_out)) {
+      return CollectStatus::kError;
     }
-
-    // 根据 ifindex 找到上一次累计值；首次采集没有可计算的时间差。
-    auto cache_it = cache_.find(interface_stats.ifindex);
-    if (cache_it != cache_.end()) {
-      const auto& old = cache_it->second;
-      auto old_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              now - old.timestamp)
-                              .count();
-
-      if (old_duration > 0) {
-        // 累计值做差后除以秒数；协议字段要求字节速率使用 kB/s。
-        const uint64_t rcv_diff = stats.rcv_bytes >= old.rcv_bytes
-                                      ? stats.rcv_bytes - old.rcv_bytes
-                                      : stats.rcv_bytes;
-        const uint64_t snd_diff = stats.snd_bytes >= old.snd_bytes
-                                      ? stats.snd_bytes - old.snd_bytes
-                                      : stats.snd_bytes;
-        const uint64_t rcv_pkt_diff = stats.rcv_packets >= old.rcv_packets
-                                          ? stats.rcv_packets - old.rcv_packets
-                                          : stats.rcv_packets;
-        const uint64_t snd_pkt_diff = stats.snd_packets >= old.snd_packets
-                                          ? stats.snd_packets - old.snd_packets
-                                          : stats.snd_packets;
-
-        const double seconds = old_duration / 1000.0;
-        net_info->set_rcv_rate(rcv_diff / 1024.0 / seconds);
-        net_info->set_send_rate(snd_diff / 1024.0 / seconds);
-        net_info->set_rcv_packets_rate(rcv_pkt_diff / seconds);
-        net_info->set_send_packets_rate(snd_pkt_diff / seconds);
+    const auto it = cache_.find(ifindex);
+    if (it == cache_.end()) {
+      not_ready = true;
+    } else {
+      const auto& previous = it->second;
+      value.previous = previous;
+      value.has_previous = true;
+      if (value.stats.rcv_bytes < previous.rcv_bytes ||
+          value.stats.rcv_packets < previous.rcv_packets ||
+          value.stats.snd_bytes < previous.snd_bytes ||
+          value.stats.snd_packets < previous.snd_packets ||
+          std::chrono::duration<double>(now - previous.timestamp).count() <=
+              0) {
+        not_ready = true;
       }
-    } else {
-      // 首次采集，速率为 0
-      net_info->set_rcv_rate(0);
-      net_info->set_send_rate(0);
-      net_info->set_rcv_packets_rate(0);
-      net_info->set_send_packets_rate(0);
     }
-
-    // 缓存本次累计值，供下一轮计算差分速率。
-    cache_[interface_stats.ifindex] = {stats.rcv_bytes, stats.rcv_packets,
-                                       stats.snd_bytes, stats.snd_packets, now};
+    current.push_back(value);
   }
 
-  last_update_ = now;
+  for (const auto& value : current) {
+    cache_[value.ifindex] = {value.stats.rcv_bytes, value.stats.rcv_packets,
+                             value.stats.snd_bytes, value.stats.snd_packets,
+                             now};
+  }
+  if (not_ready) return CollectStatus::kNotReady;
+
+  for (const auto& value : current) {
+    if (!value.has_previous) return CollectStatus::kNotReady;
+    const auto& previous = value.previous;
+    const double seconds = std::chrono::duration<double>(
+                               now - previous.timestamp)
+                               .count();
+    auto* net = monitor_info->add_net_info();
+    net->set_name(GetIfName(value.ifindex));
+    net->set_rcv_rate((value.stats.rcv_bytes - previous.rcv_bytes) /
+                      1024.0 / seconds);
+    net->set_send_rate((value.stats.snd_bytes - previous.snd_bytes) /
+                       1024.0 / seconds);
+    net->set_rcv_packets_rate(
+        (value.stats.rcv_packets - previous.rcv_packets) / seconds);
+    net->set_send_packets_rate(
+        (value.stats.snd_packets - previous.snd_packets) / seconds);
+    net->set_err_in(value.err_in);
+    net->set_err_out(value.err_out);
+    net->set_drop_in(value.drop_in);
+    net->set_drop_out(value.drop_out);
+  }
+  return CollectStatus::kOk;
 }
 
 void NetEbpfMonitor::Stop() { CleanupEbpf(); }

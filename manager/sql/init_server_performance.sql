@@ -19,18 +19,18 @@ CREATE TABLE IF NOT EXISTS server_performance (
     soft_irq_percent FLOAT DEFAULT 0,         -- 软中断时间百分比，单位：%
     -- 负载指标
     load_avg_1 FLOAT DEFAULT 0,               -- 1分钟负载
-    load_avg_3 FLOAT DEFAULT 0,               -- 3分钟负载
+    load_avg_3 FLOAT DEFAULT 0,               -- 5分钟负载（历史字段名）
     load_avg_15 FLOAT DEFAULT 0,              -- 15分钟负载
     -- 内存指标
     mem_used_percent FLOAT DEFAULT 0,         -- 内存使用率，单位：%
-    total FLOAT DEFAULT 0,                    -- 总内存，单位：GB
-    free FLOAT DEFAULT 0,                     -- 空闲内存，单位：GB
-    avail FLOAT DEFAULT 0,                    -- 可用内存，单位：GB
+    total FLOAT DEFAULT 0,                    -- 总内存，单位：GiB
+    free FLOAT DEFAULT 0,                     -- 空闲内存，单位：GiB
+    avail FLOAT DEFAULT 0,                    -- 可用内存，单位：GiB
     -- 磁盘指标
     disk_util_percent FLOAT DEFAULT 0,        -- 磁盘利用率（最大值），单位：%
     -- 网络指标
-    send_rate FLOAT DEFAULT 0,                -- 发送速率，单位：kB/s
-    rcv_rate FLOAT DEFAULT 0,                 -- 接收速率，单位：kB/s
+    send_rate FLOAT DEFAULT 0,                -- 发送速率，单位：KiB/s
+    rcv_rate FLOAT DEFAULT 0,                 -- 接收速率，单位：KiB/s
     -- 性能评分
     score FLOAT DEFAULT 0,                    -- 综合评分，范围：0-100，分数越高性能越好
     -- CPU 变化率
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS server_performance (
     soft_irq_percent_rate FLOAT DEFAULT 0,    -- 软中断变化率
     -- 负载变化率
     load_avg_1_rate FLOAT DEFAULT 0,          -- 1分钟负载变化率
-    load_avg_3_rate FLOAT DEFAULT 0,          -- 3分钟负载变化率
+    load_avg_3_rate FLOAT DEFAULT 0,          -- 5分钟负载变化率
     load_avg_15_rate FLOAT DEFAULT 0,         -- 15分钟负载变化率
     -- 内存变化率
     mem_used_percent_rate FLOAT DEFAULT 0,    -- 内存使用率变化率
@@ -73,9 +73,9 @@ CREATE TABLE IF NOT EXISTS server_net_detail (
     drop_in BIGINT DEFAULT 0,                   -- 接收丢弃数
     drop_out BIGINT DEFAULT 0,                  -- 发送丢弃数
     -- 速率指标
-    rcv_bytes_rate FLOAT DEFAULT 0,             -- 接收速率，单位：kB/s
+    rcv_bytes_rate FLOAT DEFAULT 0,             -- 接收速率，单位：KiB/s
     rcv_packets_rate FLOAT DEFAULT 0,           -- 接收包数速率，单位：个/s
-    snd_bytes_rate FLOAT DEFAULT 0,             -- 发送速率，单位：kB/s
+    snd_bytes_rate FLOAT DEFAULT 0,             -- 发送速率，单位：KiB/s
     snd_packets_rate FLOAT DEFAULT 0,           -- 发送包数速率，单位：个/s
     -- 速率变化率
     rcv_bytes_rate_rate FLOAT DEFAULT 0,        -- 接收速率变化率
@@ -98,16 +98,16 @@ CREATE TABLE IF NOT EXISTS server_softirq_detail (
     server_name VARCHAR(255) NOT NULL,
     cpu_name VARCHAR(64) NOT NULL,
     -- 软中断计数
-    hi BIGINT DEFAULT 0,
-    timer BIGINT DEFAULT 0,
-    net_tx BIGINT DEFAULT 0,
-    net_rx BIGINT DEFAULT 0,
-    block BIGINT DEFAULT 0,
-    irq_poll BIGINT DEFAULT 0,
-    tasklet BIGINT DEFAULT 0,
-    sched BIGINT DEFAULT 0,
-    hrtimer BIGINT DEFAULT 0,
-    rcu BIGINT DEFAULT 0,
+    hi FLOAT DEFAULT 0,                       -- events/s
+    timer FLOAT DEFAULT 0,                    -- events/s
+    net_tx FLOAT DEFAULT 0,                   -- events/s
+    net_rx FLOAT DEFAULT 0,                   -- events/s
+    block FLOAT DEFAULT 0,                    -- events/s
+    irq_poll FLOAT DEFAULT 0,                 -- events/s
+    tasklet FLOAT DEFAULT 0,                  -- events/s
+    sched FLOAT DEFAULT 0,                    -- events/s
+    hrtimer FLOAT DEFAULT 0,                  -- events/s
+    rcu FLOAT DEFAULT 0,                      -- events/s
     -- 变化率
     hi_rate FLOAT DEFAULT 0,
     timer_rate FLOAT DEFAULT 0,

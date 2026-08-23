@@ -280,7 +280,7 @@ message DiskDetailRecord {
 message MemDetailRecord {
     string server_name = 1;
     google.protobuf.Timestamp timestamp = 2;
-    // 内存指标 (单位: GB)
+    // 内存指标 (单位: GiB)
     float total = 10;
     float free = 11;
     float avail = 12;
@@ -310,17 +310,17 @@ message SoftIrqDetailRecord {
     string server_name = 1;
     string cpu_name = 2;
     google.protobuf.Timestamp timestamp = 3;
-    // 软中断计数
-    int64 hi = 10;
-    int64 timer = 11;
-    int64 net_tx = 12;
-    int64 net_rx = 13;
-    int64 block = 14;
-    int64 irq_poll = 15;
-    int64 tasklet = 16;
-    int64 sched = 17;
-    int64 hrtimer = 18;
-    int64 rcu = 19;
+    // 兼容旧客户端的累计计数字段；新采集链路的速率见 *_per_sec。
+    int64 hi = 10 [deprecated = true];
+    int64 timer = 11 [deprecated = true];
+    int64 net_tx = 12 [deprecated = true];
+    int64 net_rx = 13 [deprecated = true];
+    int64 block = 14 [deprecated = true];
+    int64 irq_poll = 15 [deprecated = true];
+    int64 tasklet = 16 [deprecated = true];
+    int64 sched = 17 [deprecated = true];
+    int64 hrtimer = 18 [deprecated = true];
+    int64 rcu = 19 [deprecated = true];
     // 变化率
     float hi_rate = 20;
     float timer_rate = 21;
@@ -328,6 +328,17 @@ message SoftIrqDetailRecord {
     float net_rx_rate = 23;
     float block_rate = 24;
     float sched_rate = 25;
+    // 当前 worker 输出的 SoftIRQ 事件速率，单位 events/s。
+    float hi_per_sec = 30;
+    float timer_per_sec = 31;
+    float net_tx_per_sec = 32;
+    float net_rx_per_sec = 33;
+    float block_per_sec = 34;
+    float irq_poll_per_sec = 35;
+    float tasklet_per_sec = 36;
+    float sched_per_sec = 37;
+    float hrtimer_per_sec = 38;
+    float rcu_per_sec = 39;
 }
 
 // ========== 详细数据查询响应 ==========

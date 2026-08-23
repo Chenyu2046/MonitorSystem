@@ -51,7 +51,7 @@ class MonitorPusher {
   ~MonitorPusher();
 
   /** @brief 打开发送队列并启动采集线程、发送线程。 */
-  void Start();
+  bool Start();
 
   /** @brief 停止采集、关闭队列并等待发送线程退出。 */
   void Stop();

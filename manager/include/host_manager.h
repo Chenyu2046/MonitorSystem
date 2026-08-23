@@ -73,8 +73,23 @@ struct CpuOverview {
   float peak_cpu_percent = 0;
 };
 
+struct NetworkOverview {
+  double reported_total_recv_kib_per_sec = 0;
+  double reported_total_send_kib_per_sec = 0;
+  double peak_recv_kib_per_sec = 0;
+  double peak_send_kib_per_sec = 0;
+  double total_packets_per_sec = 0;
+  std::size_t interface_count = 0;
+};
+
 /** @brief 从有效逐核 CPU 样本生成平均值和最忙核心。 */
 CpuOverview BuildCpuOverview(const monitor::proto::MonitorInfo& info);
+NetworkOverview BuildNetworkOverview(const monitor::proto::MonitorInfo& info);
+
+struct ScoreResult {
+  double score = 0;
+  bool valid = false;
+};
 
 /**
  * @brief 线程安全地暴露诊断 MySQL 初始化/待保存 incident 的降级状态。
@@ -127,7 +142,7 @@ class HostManager {
   ~HostManager();
 
   /** @brief 初始化持久化/分片执行器并启动后台线程。 */
-  void Start();
+  bool Start();
   /** @brief 停止接收、等待处理队列和持久化队列有序退出。 */
   void Stop();
 
@@ -162,9 +177,9 @@ class HostManager {
                   const monitor::proto::MonitorInfo& info,
                   std::chrono::system_clock::time_point received_at,
                   std::chrono::steady_clock::time_point enqueued_at);
-  void PersistTask(PersistenceTask task);
-  double CalcScore(const monitor::proto::MonitorInfo& info);
-  void WriteToMysql(const std::string& host_name, const HostScore& host_score,
+  bool PersistTask(PersistenceTask task);
+  ScoreResult CalcScore(const monitor::proto::MonitorInfo& info);
+  bool WriteToMysql(const std::string& host_name, const HostScore& host_score,
                     double net_in_rate, double net_out_rate,
                     float cpu_percent_rate, float usr_percent_rate,
                     float system_percent_rate, float nice_percent_rate,
@@ -190,6 +205,7 @@ class HostManager {
   std::atomic<std::uint64_t> queue_full_count_{0};
   std::atomic<std::uint64_t> processed_count_{0};
   std::atomic<std::uint64_t> persistence_task_count_{0};
+  std::atomic<std::uint64_t> persistence_failed_count_{0};
   std::atomic<std::uint64_t> persistence_rejected_count_{0};
   std::atomic<std::uint64_t> queue_delay_samples_{0};
   std::atomic<std::uint64_t> queue_delay_total_us_{0};

@@ -10,6 +10,7 @@
  */
 
 #include <chrono>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 
@@ -26,16 +27,16 @@ namespace monitor {
 class CpuSoftIrqMonitor : public MonitorInter {
   struct SoftIrq {
     std::string cpu_name;
-    int64_t hi;
-    int64_t timer;
-    int64_t net_tx;
-    int64_t net_rx;
-    int64_t block;
-    int64_t irq_poll;
-    int64_t tasklet;
-    int64_t sched;
-    int64_t hrtimer;
-    int64_t rcu;
+    std::uint64_t hi;
+    std::uint64_t timer;
+    std::uint64_t net_tx;
+    std::uint64_t net_rx;
+    std::uint64_t block;
+    std::uint64_t irq_poll;
+    std::uint64_t tasklet;
+    std::uint64_t sched;
+    std::uint64_t hrtimer;
+    std::uint64_t rcu;
     std::chrono::steady_clock::time_point timepoint;
   };
 
@@ -43,9 +44,10 @@ class CpuSoftIrqMonitor : public MonitorInter {
   CpuSoftIrqMonitor() {}
   /**
    * @brief 读取每核 SoftIRQ 累计计数并填充本轮速率。
-   * @sideeffect 更新 cpu_softirqs_；设备不可用时本轮静默跳过。
+   * @sideeffect 更新 cpu_softirqs_；设备不可用时返回 kError。
    */
-  void UpdateOnce(monitor::proto::MonitorInfo* monitor_info) override;
+  bool Init() override;
+  CollectStatus UpdateOnce(monitor::proto::MonitorInfo* monitor_info) override;
   void Stop() override {}
 
  private:

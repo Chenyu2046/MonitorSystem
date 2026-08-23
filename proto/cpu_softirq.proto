@@ -1,7 +1,8 @@
 syntax = "proto3";
 package monitor.proto;
 
-// Worker 按 CPU 核上报的 SoftIRQ 速率/计数视图；cpu 标识保留逐核维度。
+// Worker 按 CPU 核上报的 SoftIRQ 速率视图；所有字段单位为 events/s，
+// cpu 标识保留逐核维度。
 message SoftIrq {
     string cpu = 1;
     float hi = 2;

@@ -23,6 +23,16 @@ monitor::proto::MonitorInfo MakeInfo(const char* name, int cpu_count,
   monitor::proto::MonitorInfo info;
   info.set_name(name);
   info.mutable_cpu_load()->set_load_avg_1(load_avg_1);
+  info.mutable_cpu_load()->set_load_avg_3(0.0F);
+  info.mutable_cpu_load()->set_load_avg_15(0.0F);
+  info.mutable_mem_info()->set_total(16.0F);
+  info.mutable_mem_info()->set_free(16.0F);
+  info.mutable_mem_info()->set_avail(16.0F);
+  info.mutable_mem_info()->set_used_percent(0.0F);
+  auto* net = info.add_net_info();
+  net->set_name("eth0");
+  auto* disk = info.add_disk_info();
+  disk->set_name("sda");
   for (int index = 0; index < cpu_count; ++index) {
     auto* cpu = info.add_cpu_stat();
     cpu->set_cpu_name("cpu" + std::to_string(index));
@@ -150,9 +160,40 @@ void TestAllInvalidCpuScoreIsFinite() {
       std::numeric_limits<float>::infinity());
   assert(manager.Submit(info) == monitor::DataReceiveResult::kAccepted);
   const auto score = WaitForScore(&manager, "invalid-cpu-host").score;
+  assert(manager.GetBestHost().empty());
   manager.Stop();
 
   assert(std::isfinite(score));
+}
+
+void TestNegativeMemoryIsNotSchedulable() {
+  monitor::HostManager manager;
+  assert(manager.Start());
+  auto info = MakeInfo("negative-memory-host", 1, 0.0F);
+  info.mutable_mem_info()->set_free(-1.0F);
+  assert(manager.Submit(info) == monitor::DataReceiveResult::kAccepted);
+  const auto score = WaitForScore(&manager, "negative-memory-host");
+  assert(!score.score_valid);
+  assert(manager.GetBestHost().empty());
+  manager.Stop();
+}
+
+void TestNetworkOverviewUsesAllInterfaces() {
+  monitor::proto::MonitorInfo info;
+  auto* first = info.add_net_info();
+  first->set_name("eth0");
+  first->set_rcv_rate(1.0F);
+  first->set_send_rate(2.0F);
+  auto* second = info.add_net_info();
+  second->set_name("eth1");
+  second->set_rcv_rate(100.0F);
+  second->set_send_rate(200.0F);
+  const auto overview = monitor::BuildNetworkOverview(info);
+  assert(overview.interface_count == 2);
+  assert(overview.reported_total_recv_kib_per_sec == 101.0);
+  assert(overview.reported_total_send_kib_per_sec == 202.0);
+  assert(overview.peak_recv_kib_per_sec == 100.0);
+  assert(overview.peak_send_kib_per_sec == 200.0);
 }
 
 }  // namespace
@@ -163,5 +204,7 @@ int main() {
   TestCalcScoreUsesAverageCpu();
   TestCpuCountIsNotReducedForLoadScore();
   TestAllInvalidCpuScoreIsFinite();
+  TestNegativeMemoryIsNotSchedulable();
+  TestNetworkOverviewUsesAllInterfaces();
   return 0;
 }

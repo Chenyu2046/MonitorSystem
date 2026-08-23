@@ -27,7 +27,7 @@ class HostInfoMonitor : public MonitorInter {
   ~HostInfoMonitor() override = default;
 
   /** @brief 填充缓存的 hostname 和主网卡 IPv4 地址。 */
-  void UpdateOnce(monitor::proto::MonitorInfo* monitor_info) override;
+  CollectStatus UpdateOnce(monitor::proto::MonitorInfo* monitor_info) override;
   void Stop() override {}
 
  private:

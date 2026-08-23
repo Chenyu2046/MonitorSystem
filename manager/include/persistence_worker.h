@@ -22,7 +22,7 @@ namespace monitor {
 /** @brief 以有界字节队列和单 worker 线程执行持久化任务。 */
 class PersistenceWorker {
  public:
-  using TaskHandler = std::function<void(PersistenceTask&&)>;
+  using TaskHandler = std::function<bool(PersistenceTask&&)>;
 
   PersistenceWorker(std::size_t queue_capacity, std::size_t queue_max_bytes,
                     TaskHandler handler);

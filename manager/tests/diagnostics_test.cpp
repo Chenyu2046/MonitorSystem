@@ -282,6 +282,26 @@ void TestProbeCapabilityDegradedEvidence() {
   assert(engine.Evaluate(evidence).empty());
 }
 
+/** @brief 已 attach 但本轮 map 读取失败时不能伪装成无证据。 */
+void TestProbeSnapshotReadFailureIsDegradedEvidence() {
+  monitor::proto::MonitorInfo info;
+  auto* status = info.mutable_diagnostic()->add_probe_status();
+  status->set_probe("TCP");
+  status->set_requested(true);
+  status->set_available(true);
+  status->set_attached(true);
+  status->set_last_error(0);
+  status->set_snapshot_ok(false);
+  status->set_snapshot_error(-5);
+
+  monitor::diagnostics::EvidenceBuilder builder;
+  const auto evidence =
+      builder.Build(info, std::chrono::system_clock::now());
+  assert(evidence.size() == 1);
+  assert(evidence.front().type ==
+         monitor::diagnostics::EvidenceType::kDiagnosticCapabilityDegraded);
+}
+
 /** @brief 验证单个 incident 持久化失败会保持 degraded 状态。 */
 void TestPersistenceFailureRemainsDegradedAfterOtherSuccess() {
   monitor::DiagnosticPersistenceState state;
@@ -324,6 +344,7 @@ int main() {
   TestLockContentionRequiresLockWaitStack();
   TestDiskWaitDoesNotBecomeLockContention();
   TestProbeCapabilityDegradedEvidence();
+  TestProbeSnapshotReadFailureIsDegradedEvidence();
   TestPersistenceFailureRemainsDegradedAfterOtherSuccess();
   TestMemoryOnlyPersistenceDoesNotAccumulatePendingIncidents();
   TestMysqlTimeoutParsing();

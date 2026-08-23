@@ -65,7 +65,10 @@ int main(int argc, char* argv[]) {
       });
 
   // 先启动 HostManager，确保 gRPC 开始接收前已有消费者和持久化能力状态。
-  mgr.Start();
+  if (!mgr.Start()) {
+    std::cerr << "Failed to initialize Manager data path" << std::endl;
+    return 1;
+  }
 
   // QueryManager 是历史查询的 MySQL 路径；未启用/初始化失败时，诊断
   // QueryService 仍可按接口逻辑回退到 HostManager 内存 incident。
@@ -78,8 +81,9 @@ int main(int argc, char* argv[]) {
           GetEnvOrDefault("MONITOR_MYSQL_DATABASE", kDefaultMysqlDb))) {
     std::cout << "QueryManager initialized successfully" << std::endl;
   } else {
-    std::cerr << "Warning: QueryManager initialization failed, "
-              << "query service will not be available" << std::endl;
+    std::cerr << "QueryManager initialization failed" << std::endl;
+    mgr.Stop();
+    return 1;
   }
 #endif
 

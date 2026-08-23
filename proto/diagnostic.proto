@@ -55,6 +55,8 @@ message ProbeRuntimeStatus {
   bool available = 3;
   bool attached = 4;
   int32 last_error = 5;
+  bool snapshot_ok = 6;
+  int32 snapshot_error = 7;
 }
 
 // Worker 一轮异常信号、Probe 状态和 profiling 快照的统一载体。

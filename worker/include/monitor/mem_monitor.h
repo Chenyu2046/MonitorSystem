@@ -10,6 +10,7 @@
  */
 
 #include <string>
+#include <cstdint>
 #include <unordered_map>
 
 #include "monitor/monitor_inter.h"
@@ -20,7 +21,7 @@ namespace monitor {
 /**
  * @brief 采集 /proc/meminfo 中需要上报的内存字段。
  *
- * 结构中的值保持 /proc/meminfo 的原始 KB 语义，UpdateOnce() 再转换为
+ * 结构中的值保持 /proc/meminfo 的原始 KiB 语义，UpdateOnce() 再转换为
  * protobuf 使用的单位；available 用于 used_percent 的分母计算。
  */
 class MemMonitor : public MonitorInter {
@@ -48,11 +49,12 @@ class MemMonitor : public MonitorInter {
 
  public:
   MemMonitor() {}
+  bool Init() override;
   /**
    * @brief 读取主机内存概览并写入 MonitorInfo。
    * @sideeffect 设置本轮主机级 memory message；不维护跨轮 delta。
    */
-  void UpdateOnce(monitor::proto::MonitorInfo* monitor_info) override;
+  CollectStatus UpdateOnce(monitor::proto::MonitorInfo* monitor_info) override;
   void Stop() override {}
 };
 

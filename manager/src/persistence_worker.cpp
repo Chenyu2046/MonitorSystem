@@ -65,7 +65,7 @@ void PersistenceWorker::Run() {
   // 上一条 protobuf/detail 数据在下一轮复用时造成额外保留。
   PersistenceTask task;
   while (queue_.Pop(&task)) {
-    handler_(std::move(task));
+    (void)handler_(std::move(task));
     task = PersistenceTask{};
   }
 }

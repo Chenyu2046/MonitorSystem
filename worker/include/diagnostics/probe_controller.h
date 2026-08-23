@@ -59,7 +59,7 @@ class ProbeController {
    * @return snapshot 非空且读取路径成功时返回 true；未启用 eBPF 时不
    * 产生数据但保持接口可调用。
    */
-  bool CollectSnapshot(DiagnosticSnapshot* snapshot) const;
+  bool CollectSnapshot(DiagnosticSnapshot* snapshot);
 
   const std::set<ProbeKind>& DesiredProbes() const { return desired_probes_; }
   std::size_t ApplyCount() const { return apply_count_; }
@@ -75,12 +75,15 @@ class ProbeController {
     bool available = false;
     bool attached = false;
     int last_error = 0;
+    bool snapshot_ok = false;
+    int snapshot_error = 0;
     std::chrono::steady_clock::time_point next_retry_at =
         std::chrono::steady_clock::time_point::min();
     std::uint32_t retry_count = 0;
   };
 
   const ProbeStatus& Status(ProbeKind kind) const;
+  ProbeStatus& Status(ProbeKind kind);
 
  private:
   struct Runtime;

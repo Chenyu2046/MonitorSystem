@@ -606,7 +606,7 @@ bool ProbeController::Apply(ObservabilityState state, ProfileType profile_type,
   return all_available;
 }
 
-bool ProbeController::CollectSnapshot(DiagnosticSnapshot* snapshot) const {
+bool ProbeController::CollectSnapshot(DiagnosticSnapshot* snapshot) {
   // 先清空输出，避免把上一轮诊断样本误带入当前 protobuf；每种 Probe
   // 只在 attached 时读取对应 map，读取失败通过返回值暴露给调用方。
   if (!snapshot) {
@@ -624,38 +624,66 @@ bool ProbeController::CollectSnapshot(DiagnosticSnapshot* snapshot) const {
       Status(ProbeKind::kOffCpuProfile).attached;
 
   bool success = true;
+  for (auto& status : statuses_) {
+    status.snapshot_ok = status.attached || !status.requested;
+    status.snapshot_error = status.snapshot_ok ? 0 : status.last_error;
+  }
+  const auto read = [&](ProbeKind kind, auto&& reader) {
+    ProbeStatus& status = Status(kind);
+    if (!status.attached) {
+      const bool ok = !status.requested;
+      success = success && ok;
+      return ok;
+    }
+    status.snapshot_ok = reader();
+    status.snapshot_error = status.snapshot_ok ? 0 : -EIO;
+    success = status.snapshot_ok && success;
+    return status.snapshot_ok;
+  };
   if (snapshot->tcp_available) {
-    success = ReadTcpMap(runtime_->probes[Index(ProbeKind::kTcp)], snapshot) &&
-              success;
+    read(ProbeKind::kTcp, [&] {
+      return ReadTcpMap(runtime_->probes[Index(ProbeKind::kTcp)], snapshot);
+    });
   }
   if (snapshot->block_io_available) {
-    success =
-        ReadBlockMap(runtime_->probes[Index(ProbeKind::kBlockIo)], snapshot) &&
-        success;
+    read(ProbeKind::kBlockIo, [&] {
+      return ReadBlockMap(runtime_->probes[Index(ProbeKind::kBlockIo)], snapshot);
+    });
   }
   if (snapshot->scheduler_available) {
-    success = ReadSchedulerMap(runtime_->probes[Index(ProbeKind::kScheduler)],
-                               snapshot) &&
-              success;
+    read(ProbeKind::kScheduler, [&] {
+      return ReadSchedulerMap(runtime_->probes[Index(ProbeKind::kScheduler)],
+                              snapshot);
+    });
   }
   if (snapshot->profiling.on_cpu_available) {
-    success = ReadOnCpuMap(runtime_->probes[Index(ProbeKind::kOnCpuProfile)],
-                           snapshot) &&
-              success;
+    read(ProbeKind::kOnCpuProfile, [&] {
+      return ReadOnCpuMap(runtime_->probes[Index(ProbeKind::kOnCpuProfile)],
+                          snapshot);
+    });
   }
   if (snapshot->profiling.off_cpu_available) {
-    success = ReadOffCpuMap(runtime_->probes[Index(ProbeKind::kOffCpuProfile)],
-                            snapshot) &&
-              success;
+    read(ProbeKind::kOffCpuProfile, [&] {
+      return ReadOffCpuMap(runtime_->probes[Index(ProbeKind::kOffCpuProfile)],
+                           snapshot);
+    });
   }
   return success;
 #else
+  for (auto& status : statuses_) {
+    status.snapshot_ok = false;
+    status.snapshot_error = -ENOTSUP;
+  }
   return true;
 #endif
 }
 
 const ProbeController::ProbeStatus& ProbeController::Status(
     ProbeKind kind) const {
+  return statuses_[Index(kind)];
+}
+
+ProbeController::ProbeStatus& ProbeController::Status(ProbeKind kind) {
   return statuses_[Index(kind)];
 }
 

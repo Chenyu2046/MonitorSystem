@@ -29,12 +29,11 @@
 namespace monitor {
 
 std::string HostInfoMonitor::GetHostname() {
-  // 主机名获取失败时返回稳定的占位值，保证上层仍能构造完整消息。
-  char hostname[256];
-  if (gethostname(hostname, sizeof(hostname)) == 0) {
+  char hostname[256] = {};
+  if (gethostname(hostname, sizeof(hostname) - 1) == 0 && hostname[0] != '\0') {
     return std::string(hostname);
   }
-  return "unknown";
+  return {};
 }
 
 std::string HostInfoMonitor::GetPrimaryIpAddress() {
@@ -86,9 +85,10 @@ std::string HostInfoMonitor::GetPrimaryIpAddress() {
   return result;
 }
 
-void HostInfoMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
+CollectStatus HostInfoMonitor::UpdateOnce(
+    monitor::proto::MonitorInfo* monitor_info) {
   if (!monitor_info) {
-    return;
+    return CollectStatus::kError;
   }
 
   // 主机信息通常不变，只需获取一次并缓存；缓存只在采集线程访问，
@@ -98,11 +98,13 @@ void HostInfoMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
     cached_ip_ = GetPrimaryIpAddress();
     info_cached_ = true;
   }
+  if (cached_hostname_.empty()) return CollectStatus::kError;
 
   // 填充 HostInfo 消息
   auto* host_info = monitor_info->mutable_host_info();
   host_info->set_hostname(cached_hostname_);
   host_info->set_ip_address(cached_ip_);
+  return CollectStatus::kOk;
 }
 
 }  // namespace monitor

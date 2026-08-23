@@ -1,125 +1,134 @@
-/**
- * @file net_monitor.cpp
- * @brief 基于 /proc/net/dev 的普通网络监控和速率 fallback。
- *
- * /proc/net/dev 提供接口级累计字节、包、错误和丢弃计数；本文件用
- * steady_clock 的前后快照计算 KB/s 和 packets/s。TCP 重传、任务级网络
- * 证据和 TC per-CPU 聚合属于独立的 eBPF 诊断/增强路径。
- */
-
 #include "monitor/net_monitor.h"
+
+#include <charconv>
 #include <chrono>
-#include <string>
-#include <vector>
-#include <cstdint>
 #include <fstream>
 #include <sstream>
-#include "monitor_info.grpc.pb.h"
-#include "monitor_info.pb.h"
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace monitor {
 
-struct NetStat {
-    // Linux 接口统计中的累计值；速率只能由相邻采样差值获得。
-    std::string name;
-    uint64_t rcv_bytes;
-    uint64_t rcv_packets;
-    uint64_t snd_bytes;
-    uint64_t snd_packets;
-    uint64_t err_in;
-    uint64_t err_out;
-    uint64_t drop_in;
-    uint64_t drop_out;
-};
+namespace {
+bool ParseUnsigned(std::string_view token, std::uint64_t* value) {
+  if (!value || token.empty()) return false;
+  const auto result = std::from_chars(token.data(), token.data() + token.size(),
+                                      *value);
+  return result.ec == std::errc() && result.ptr == token.data() + token.size();
+}
+}  // namespace
 
-/**
- * @brief 解析 /proc/net/dev 中的接口累计统计。
- *
- * @return 非 loopback 接口的当前累计快照；文件不可读时返回空数组。
- */
-static std::vector<NetStat> get_net_stats_from_proc() {
-    std::vector<NetStat> stats;
-    std::ifstream file("/proc/net/dev");
-    if (!file.is_open()) return stats;
-
-    std::string line;
-    // 跳过前两行标题
-    std::getline(file, line);
-    std::getline(file, line);
-
-    while (std::getline(file, line)) {
-        std::istringstream iss(line);
-        NetStat stat;
-        
-        // 解析接口名
-        std::string iface;
-        iss >> iface;
-        if (iface.empty()) continue;
-        
-        // 移除末尾的冒号
-        if (iface.back() == ':') {
-            iface.pop_back();
-        }
-        
-        // 跳过 lo 接口
-        if (iface == "lo") continue;
-        
-        stat.name = iface;
-        
-        // 解析接收统计: bytes packets errs drop fifo frame compressed multicast
-        iss >> stat.rcv_bytes >> stat.rcv_packets >> stat.err_in >> stat.drop_in;
-        uint64_t dummy;
-        iss >> dummy >> dummy >> dummy >> dummy;  // fifo frame compressed multicast
-        
-        // 解析发送统计: bytes packets errs drop fifo colls carrier compressed
-        iss >> stat.snd_bytes >> stat.snd_packets >> stat.err_out >> stat.drop_out;
-        
-        stats.push_back(stat);
-    }
-    
-    return stats;
+bool NetMonitor::Init() {
+  std::ifstream file("/proc/net/dev");
+  return file.good();
 }
 
-void NetMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
-    // 这是普通主机/接口级监控路径；这里只计算吞吐和包速率，不生成
-    // TCP 异常证据，也不访问 eBPF map。
-    auto now = std::chrono::steady_clock::now();
-    auto stats = get_net_stats_from_proc();
+bool ParseNetDevLine(const std::string& line, NetRawSample* out) {
+  if (!out) return false;
+  const auto colon = line.find(':');
+  if (colon == std::string::npos) return false;
+  NetRawSample sample;
+  std::istringstream name_stream(line.substr(0, colon));
+  if (!(name_stream >> sample.name)) return false;
+  std::string extra_name;
+  if (name_stream >> extra_name) return false;
 
-    for (const auto& stat : stats) {
-        auto it = last_net_info_.find(stat.name);
-        double rcv_rate = 0, rcv_packets_rate = 0, send_rate = 0, send_packets_rate = 0;
+  std::istringstream values(line.substr(colon + 1));
+  std::vector<std::uint64_t> fields;
+  std::string token;
+  while (values >> token) {
+    std::uint64_t value = 0;
+    if (!ParseUnsigned(token, &value)) return false;
+    fields.push_back(value);
+  }
+  if (fields.size() != 16) return false;
+  sample.rcv_bytes = fields[0];
+  sample.rcv_packets = fields[1];
+  sample.err_in = fields[2];
+  sample.drop_in = fields[3];
+  sample.snd_bytes = fields[8];
+  sample.snd_packets = fields[9];
+  sample.err_out = fields[10];
+  sample.drop_out = fields[11];
+  *out = std::move(sample);
+  return true;
+}
 
-        if (it != last_net_info_.end()) {
-            const NetInfo& last = it->second;
-            double dt = std::chrono::duration<double>(now - last.timepoint).count();
-            if (dt > 0) {
-                rcv_rate = (stat.rcv_bytes - last.rcv_bytes) / 1024.0 / dt; // KB/s
-                rcv_packets_rate = (stat.rcv_packets - last.rcv_packets) / dt;
-                send_rate = (stat.snd_bytes - last.snd_bytes) / 1024.0 / dt; // KB/s
-                send_packets_rate = (stat.snd_packets - last.snd_packets) / dt;
-            }
-        }
+CollectStatus NetMonitor::UpdateOnce(
+    monitor::proto::MonitorInfo* monitor_info) {
+  if (!monitor_info) return CollectStatus::kError;
+  std::ifstream file("/proc/net/dev");
+  if (!file.is_open()) return CollectStatus::kError;
+  std::string line;
+  if (!std::getline(file, line) || !std::getline(file, line)) {
+    return CollectStatus::kError;
+  }
 
-        // 将本轮速率和累计错误/丢弃计数写入 protobuf；错误字段不是速率。
-        auto net_info = monitor_info->add_net_info();
-        net_info->set_name(stat.name);
-        net_info->set_rcv_rate(rcv_rate);
-        net_info->set_rcv_packets_rate(rcv_packets_rate);
-        net_info->set_send_rate(send_rate);
-        net_info->set_send_packets_rate(send_packets_rate);
-        // 错误和丢弃统计
-        net_info->set_err_in(stat.err_in);
-        net_info->set_err_out(stat.err_out);
-        net_info->set_drop_in(stat.drop_in);
-        net_info->set_drop_out(stat.drop_out);
+  const auto now = std::chrono::steady_clock::now();
+  std::vector<NetRawSample> current;
+  while (std::getline(file, line)) {
+    if (line.find_first_not_of(" \t\r\n") == std::string::npos) continue;
+    NetRawSample sample;
+    if (!ParseNetDevLine(line, &sample)) return CollectStatus::kError;
+    if (sample.name == "lo") continue;
+    current.push_back(std::move(sample));
+  }
+  if (file.bad() || current.empty()) return CollectStatus::kError;
 
-        // 更新当前接口基线，下一轮按相同接口名称计算变化率。
-        last_net_info_[stat.name] = NetInfo{
-            stat.name, stat.rcv_bytes, stat.rcv_packets, stat.snd_bytes, stat.snd_packets,
-            stat.err_in, stat.err_out, stat.drop_in, stat.drop_out, now
-        };
+  bool not_ready = false;
+  struct Report {
+    NetRawSample current;
+    NetInfo previous;
+  };
+  std::vector<Report> report;
+  report.reserve(current.size());
+  for (const auto& sample : current) {
+    auto it = last_net_info_.find(sample.name);
+    if (it == last_net_info_.end()) {
+      not_ready = true;
+      continue;
     }
+    const auto& previous = it->second.sample;
+    if (sample.rcv_bytes < previous.rcv_bytes ||
+        sample.rcv_packets < previous.rcv_packets ||
+        sample.snd_bytes < previous.snd_bytes ||
+        sample.snd_packets < previous.snd_packets) {
+      not_ready = true;
+    }
+    if (std::chrono::duration<double>(now - it->second.timepoint).count() <=
+        0) {
+      not_ready = true;
+    }
+    report.push_back({sample, it->second});
+  }
+  for (const auto& sample : current) {
+    last_net_info_[sample.name] = {sample, now};
+  }
+  if (not_ready) return CollectStatus::kNotReady;
+
+  for (const auto& item : report) {
+    const double dt = std::chrono::duration<double>(
+                          now - item.previous.timepoint)
+                          .count();
+    const auto& current_sample = item.current;
+    const auto& previous = item.previous.sample;
+    auto* net = monitor_info->add_net_info();
+    net->set_name(current_sample.name);
+    net->set_rcv_rate((current_sample.rcv_bytes - previous.rcv_bytes) /
+                      1024.0 / dt);
+    net->set_rcv_packets_rate(
+        (current_sample.rcv_packets - previous.rcv_packets) / dt);
+    net->set_send_rate((current_sample.snd_bytes - previous.snd_bytes) /
+                       1024.0 / dt);
+    net->set_send_packets_rate(
+        (current_sample.snd_packets - previous.snd_packets) / dt);
+    net->set_err_in(current_sample.err_in);
+    net->set_err_out(current_sample.err_out);
+    net->set_drop_in(current_sample.drop_in);
+    net->set_drop_out(current_sample.drop_out);
+  }
+  return CollectStatus::kOk;
 }
 
 }  // namespace monitor

@@ -41,8 +41,7 @@ if(ENABLE_EBPF)
         set(EBPF_FOUND TRUE)
         message(STATUS "eBPF support enabled")
     else()
-        set(EBPF_FOUND FALSE)
-        message(WARNING "eBPF dependencies not found, disabling eBPF support")
+        message(FATAL_ERROR "ENABLE_EBPF=ON requires libbpf, libelf, libz and headers")
     endif()
 endif()
 
@@ -145,6 +144,19 @@ if(BUILD_TESTING)
     )
     target_link_libraries(observability_overhead_test PRIVATE monitor_proto)
     add_test(NAME observability_overhead_test COMMAND observability_overhead_test)
+
+    add_executable(collector_contract_test
+        tests/collector_contract_test.cpp
+        src/monitor/cpu_stat_monitor.cpp
+        src/monitor/disk_monitor.cpp
+        src/monitor/net_monitor.cpp
+        src/diagnostics/observability_config.cpp
+    )
+    target_include_directories(collector_contract_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/worker/include
+    )
+    target_link_libraries(collector_contract_test PRIVATE monitor_proto)
+    add_test(NAME collector_contract_test COMMAND collector_contract_test)
 endif()
 
 # 内核模块构建（可选）

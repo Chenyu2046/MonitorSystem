@@ -1,93 +1,103 @@
-/**
- * @file mem_monitor.cpp
- * @brief 读取 /proc/meminfo 并生成主机级内存概览。
- *
- * 读取阶段按字段名解析 Linux 内核提供的 KB 值，输出阶段计算
- * used_percent=(total-available)/total，并把各分类转换为 protobuf 使用
- * 的 GB 近似值。这里没有进程级 RSS/泄漏追踪能力。
- */
-
 #include "monitor/mem_monitor.h"
-#include "utils/read_file.h"
+
+#include <charconv>
+#include <cmath>
+#include <fstream>
+#include <limits>
+#include <map>
+#include <sstream>
+#include <string_view>
 
 namespace monitor {
-static constexpr float KBToGB = 1000 * 1000;
 
-void MemMonitor::UpdateOnce(monitor::proto::MonitorInfo* monitor_info) {
-  // /proc/meminfo 是本轮快照而非累计计数器，因此不需要前后轮缓存；
-  // 每个字段按名称解析，未知字段被忽略以兼容不同内核版本。
-  ReadFile mem_file("/proc/meminfo");
-  struct MenInfo mem_info;
-  std::vector<std::string> mem_datas;
-  while (mem_file.ReadLine(&mem_datas)) {
-    if (mem_datas[0] == "MemTotal:") {
-      mem_info.total = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "MemFree:") {
-      mem_info.free = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "MemAvailable:") {
-      mem_info.avail = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "Buffers:") {
-      mem_info.buffers = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "Cached:") {
-      mem_info.cached = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "SwapCached:") {
-      mem_info.swap_cached = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "Active:") {
-      mem_info.active = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "Inactive:") {
-      mem_info.in_active = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "Active(anon):") {
-      mem_info.active_anon = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "Inactive(anon):") {
-      mem_info.inactive_anon = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "Active(file):") {
-      mem_info.active_file = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "Inactive(file):") {
-      mem_info.inactive_file = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "Dirty:") {
-      mem_info.dirty = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "Writeback:") {
-      mem_info.writeback = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "AnonPages:") {
-      mem_info.anon_pages = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "Mapped:") {
-      mem_info.mapped = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "KReclaimable:") {
-      mem_info.kReclaimable = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "SReclaimable:") {
-      mem_info.sReclaimable = std::stoll(mem_datas[1]);
-    } else if (mem_datas[0] == "SUnreclaim:") {
-      mem_info.sUnreclaim = std::stoll(mem_datas[1]);
+namespace {
+bool ParseNonnegative(std::string_view token, std::int64_t* value) {
+  if (!value || token.empty()) return false;
+  std::uint64_t parsed = 0;
+  const auto result = std::from_chars(token.data(), token.data() + token.size(),
+                                      parsed);
+  if (result.ec != std::errc() ||
+      result.ptr != token.data() + token.size() ||
+      parsed > static_cast<std::uint64_t>(
+                   std::numeric_limits<std::int64_t>::max())) {
+    return false;
+  }
+  *value = static_cast<std::int64_t>(parsed);
+  return true;
+}
+}  // namespace
+
+bool MemMonitor::Init() {
+  std::ifstream file("/proc/meminfo");
+  return file.good();
+}
+
+CollectStatus MemMonitor::UpdateOnce(
+    monitor::proto::MonitorInfo* monitor_info) {
+  if (!monitor_info) return CollectStatus::kError;
+  std::ifstream file("/proc/meminfo");
+  if (!file.is_open()) return CollectStatus::kError;
+
+  std::map<std::string, std::int64_t> values;
+  std::string line;
+  while (std::getline(file, line)) {
+    std::istringstream iss(line);
+    std::string name;
+    std::string value_token;
+    std::string unit;
+    std::int64_t value = 0;
+    if (!(iss >> name >> value_token) ||
+        name.empty() || name.back() != ':' ||
+        !ParseNonnegative(value_token, &value)) {
+      return CollectStatus::kError;
     }
-    mem_datas.clear();
+    if (iss >> unit && unit != "kB") return CollectStatus::kError;
+    std::string extra;
+    if (iss >> extra) return CollectStatus::kError;
+    if (!name.empty() && name.back() == ':') name.pop_back();
+    values[name] = value;
+  }
+  if (file.bad() || !values.count("MemTotal") ||
+      !values.count("MemAvailable") || values["MemTotal"] == 0) {
+    return CollectStatus::kError;
   }
 
-  // MemAvailable 更接近内核对“可立即分配内存”的估计，项目用它而非
-  // MemFree 计算 used_percent；buffer/cache 等分类仍单独上报供解释。
-  auto mem_detail = monitor_info->mutable_mem_info();
+  const double total_kib = static_cast<double>(values["MemTotal"]);
+  const double available_kib = static_cast<double>(values["MemAvailable"]);
+  const double used_percent =
+      (total_kib - available_kib) / total_kib * 100.0;
+  if (!std::isfinite(used_percent) || used_percent < 0.0 ||
+      used_percent > 100.0) {
+    return CollectStatus::kError;
+  }
+  const auto value = [&values](const char* name) {
+    const auto it = values.find(name);
+    return it == values.end() ? 0.0 : static_cast<double>(it->second) /
+                                          (1024.0 * 1024.0);
+  };
 
-  mem_detail->set_used_percent((mem_info.total - mem_info.avail) * 1.0 /
-                               mem_info.total * 100.0);
-  mem_detail->set_total(mem_info.total / KBToGB);
-  mem_detail->set_free(mem_info.free / KBToGB);
-  mem_detail->set_avail(mem_info.avail / KBToGB);
-  mem_detail->set_buffers(mem_info.buffers / KBToGB);
-  mem_detail->set_cached(mem_info.cached / KBToGB);
-  mem_detail->set_swap_cached(mem_info.swap_cached / KBToGB);
-  mem_detail->set_active(mem_info.active / KBToGB);
-  mem_detail->set_inactive(mem_info.in_active / KBToGB);
-  mem_detail->set_active_anon(mem_info.active_anon / KBToGB);
-  mem_detail->set_inactive_anon(mem_info.inactive_anon / KBToGB);
-  mem_detail->set_active_file(mem_info.active_file / KBToGB);
-  mem_detail->set_inactive_file(mem_info.inactive_file / KBToGB);
-  mem_detail->set_dirty(mem_info.dirty / KBToGB);
-  mem_detail->set_writeback(mem_info.writeback / KBToGB);
-  mem_detail->set_anon_pages(mem_info.anon_pages / KBToGB);
-  mem_detail->set_mapped(mem_info.mapped / KBToGB);
-  mem_detail->set_kreclaimable(mem_info.kReclaimable / KBToGB);
-  mem_detail->set_sreclaimable(mem_info.sReclaimable / KBToGB);
-  mem_detail->set_sunreclaim(mem_info.sUnreclaim / KBToGB);
-
-  return;
+  auto* memory = monitor_info->mutable_mem_info();
+  memory->set_used_percent(used_percent);
+  memory->set_total(value("MemTotal"));
+  memory->set_free(value("MemFree"));
+  memory->set_avail(value("MemAvailable"));
+  memory->set_buffers(value("Buffers"));
+  memory->set_cached(value("Cached"));
+  memory->set_swap_cached(value("SwapCached"));
+  memory->set_active(value("Active"));
+  memory->set_inactive(value("Inactive"));
+  memory->set_active_anon(value("Active(anon)"));
+  memory->set_inactive_anon(value("Inactive(anon)"));
+  memory->set_active_file(value("Active(file)"));
+  memory->set_inactive_file(value("Inactive(file)"));
+  memory->set_dirty(value("Dirty"));
+  memory->set_writeback(value("Writeback"));
+  memory->set_anon_pages(value("AnonPages"));
+  memory->set_mapped(value("Mapped"));
+  memory->set_kreclaimable(value("KReclaimable"));
+  memory->set_sreclaimable(value("SReclaimable"));
+  memory->set_sunreclaim(value("SUnreclaim"));
+  return CollectStatus::kOk;
 }
+
 }  // namespace monitor

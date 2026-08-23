@@ -24,6 +24,7 @@ namespace monitor {
 struct HostScore {
   monitor::proto::MonitorInfo info;
   double score;
+  bool score_valid = false;
   std::chrono::system_clock::time_point timestamp;
 };
 

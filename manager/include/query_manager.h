@@ -171,12 +171,16 @@ struct SoftIrqDetailRecord {
   std::string server_name;
   std::string cpu_name;
   std::chrono::system_clock::time_point timestamp;
-  int64_t hi = 0;
-  int64_t timer = 0;
-  int64_t net_tx = 0;
-  int64_t net_rx = 0;
-  int64_t block = 0;
-  int64_t sched = 0;
+  float hi = 0;
+  float timer = 0;
+  float net_tx = 0;
+  float net_rx = 0;
+  float block = 0;
+  float irq_poll = 0;
+  float tasklet = 0;
+  float sched = 0;
+  float hrtimer = 0;
+  float rcu = 0;
 };
 
 /**

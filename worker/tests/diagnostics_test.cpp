@@ -256,10 +256,14 @@ void TestProbeRuntimeStatusProto() {
   status->set_available(false);
   status->set_attached(false);
   status->set_last_error(-95);
+  status->set_snapshot_ok(false);
+  status->set_snapshot_error(-95);
   assert(diagnostic.probe_status_size() == 1);
   assert(diagnostic.probe_status(0).requested());
   assert(!diagnostic.probe_status(0).available());
   assert(diagnostic.probe_status(0).last_error() == -95);
+  assert(!diagnostic.probe_status(0).snapshot_ok());
+  assert(diagnostic.probe_status(0).snapshot_error() == -95);
 }
 
 /** @brief 验证诊断消息优先于普通基础指标保留。 */

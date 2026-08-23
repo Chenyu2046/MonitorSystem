@@ -29,13 +29,9 @@
 namespace monitor {
 
 MetricCollector::MetricCollector() {
-  // 获取主机名。gethostname() 失败时保留可识别的 unknown，避免采集
-  // 流程因主机标识缺失而中断；Manager 后续仍可收到这轮指标。
-  char hostname[256];
-  if (gethostname(hostname, sizeof(hostname)) == 0) {
+  char hostname[256] = {};
+  if (gethostname(hostname, sizeof(hostname) - 1) == 0 && hostname[0] != '\0') {
     hostname_ = hostname;
-  } else {
-    hostname_ = "unknown";
   }
 
   // 初始化所有监控器。各实例按固定顺序写入同一个 MonitorInfo，
@@ -53,6 +49,19 @@ MetricCollector::MetricCollector() {
   monitors_.push_back(std::make_unique<HostInfoMonitor>());
 }
 
+bool MetricCollector::Init() {
+  if (hostname_.empty()) {
+    return false;
+  }
+  for (auto& monitor : monitors_) {
+    if (!monitor->Init()) {
+      return false;
+    }
+  }
+  initialized_ = true;
+  return true;
+}
+
 MetricCollector::~MetricCollector() {
   // 先通知每个监控器停止其外部资源，例如 eBPF attach 或 mmap 关联的
   // 设备访问，再由 unique_ptr 自动释放对象。
@@ -61,9 +70,10 @@ MetricCollector::~MetricCollector() {
   }
 }
 
-void MetricCollector::CollectAll(monitor::proto::MonitorInfo* monitor_info) {
-  if (!monitor_info) {
-    return;
+CollectStatus MetricCollector::CollectAll(
+    monitor::proto::MonitorInfo* monitor_info) {
+  if (!monitor_info || !initialized_) {
+    return CollectStatus::kError;
   }
 
   // 设置主机名，作为 Manager 侧按主机分片和持久化的主键语义之一。
@@ -72,8 +82,13 @@ void MetricCollector::CollectAll(monitor::proto::MonitorInfo* monitor_info) {
   // 每个监控器只负责自己的 Protobuf 字段。采集器不在这里做异常判断，
   // 因此普通监控路径和诊断路径仍由 MonitorPusher 分阶段处理。
   for (auto& monitor : monitors_) {
-    monitor->UpdateOnce(monitor_info);
+    const CollectStatus status = monitor->UpdateOnce(monitor_info);
+    if (status != CollectStatus::kOk) {
+      monitor_info->Clear();
+      return status;
+    }
   }
+  return CollectStatus::kOk;
 }
 
 }  // namespace monitor
