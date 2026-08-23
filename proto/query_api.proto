@@ -310,7 +310,7 @@ message SoftIrqDetailRecord {
     string server_name = 1;
     string cpu_name = 2;
     google.protobuf.Timestamp timestamp = 3;
-    // 兼容旧客户端的累计计数字段；新采集链路的速率见 *_per_sec。
+    // 仅保留 tag 以维持 wire compatibility；服务端不再填充这些累计字段。
     int64 hi = 10 [deprecated = true];
     int64 timer = 11 [deprecated = true];
     int64 net_tx = 12 [deprecated = true];

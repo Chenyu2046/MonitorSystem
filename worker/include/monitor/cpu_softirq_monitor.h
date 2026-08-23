@@ -9,6 +9,7 @@
  * 处理次数，NET_RX/NET_TX 可与网络包速率结合判断网络栈压力。
  */
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -18,6 +19,18 @@
 #include "monitor_info.pb.h"
 
 namespace monitor {
+
+namespace cpu_softirq_detail {
+
+using Counters = std::array<std::uint64_t, 10>;
+using Rates = std::array<double, 10>;
+
+/** @brief 将两次累计计数转换为 events/s；reset/无效时间窗返回 false。 */
+bool ComputeRates(const Counters& current, const Counters& previous,
+                  double seconds, Rates* rates);
+
+}  // namespace cpu_softirq_detail
+
 /**
  * @brief 保存每个 CPU 核上一轮 SoftIRQ 计数和采样时间。
  *

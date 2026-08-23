@@ -1,0 +1,8 @@
+diagnostics_test 15 0.00107195
+cpu_stat_monitor_test 15 0.000587244
+observability_overhead_test 15 0.0180791
+manager_diagnostics_test 15 0.000912472
+manager_concurrency_test 15 0.025665
+manager_cpu_overview_test 14 0.00467298
+collector_contract_test 14 0.000821581
+---

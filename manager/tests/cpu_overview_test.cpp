@@ -7,13 +7,18 @@
  */
 
 #include <cassert>
+#include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include "host_manager.h"
+#include "rpc/softirq_detail_mapper.h"
 
 namespace {
 
@@ -196,6 +201,88 @@ void TestNetworkOverviewUsesAllInterfaces() {
   assert(overview.peak_send_kib_per_sec == 200.0);
 }
 
+void TestManagerSizeConfigIsFailFast() {
+  assert(monitor::ParsePositiveSizeConfig(nullptr, 8).value() == 8);
+  assert(monitor::ParsePositiveSizeConfig("1", 8).value() == 1);
+  assert(!monitor::ParsePositiveSizeConfig("", 8));
+  assert(!monitor::ParsePositiveSizeConfig("0", 8));
+  assert(!monitor::ParsePositiveSizeConfig("abc", 8));
+  assert(!monitor::ParsePositiveSizeConfig("12tail", 8));
+  assert(!monitor::ParsePositiveSizeConfig("184467440737095516160", 8));
+}
+
+class ScopedSizeConfigEnvironment {
+ public:
+  ScopedSizeConfigEnvironment() {
+    for (const char* name : kNames) {
+      const char* value = std::getenv(name);
+      values_.emplace_back(name, value ? value : "");
+      was_set_.push_back(value != nullptr);
+      assert(setenv(name, "1", 1) == 0);
+    }
+  }
+
+  ~ScopedSizeConfigEnvironment() {
+    for (std::size_t index = 0; index < kNames.size(); ++index) {
+      if (was_set_[index]) {
+        setenv(kNames[index], values_[index].second.c_str(), 1);
+      } else {
+        unsetenv(kNames[index]);
+      }
+    }
+  }
+
+  static constexpr std::array<const char*, 5> kNames = {
+      "KERNSCOPE_MANAGER_SHARDS", "KERNSCOPE_SHARD_QUEUE_CAPACITY",
+      "KERNSCOPE_SHARD_QUEUE_MAX_BYTES", "KERNSCOPE_PERSIST_QUEUE_CAPACITY",
+      "KERNSCOPE_PERSIST_QUEUE_MAX_BYTES"};
+
+ private:
+  std::vector<std::pair<std::string, std::string>> values_;
+  std::vector<bool> was_set_;
+};
+
+void TestManagerStartRejectsEveryInvalidSizeEnvironment() {
+  ScopedSizeConfigEnvironment environment;
+  for (const char* name : ScopedSizeConfigEnvironment::kNames) {
+    assert(setenv(name, "invalid", 1) == 0);
+    monitor::HostManager manager;
+    const bool started = manager.Start();
+    if (started) manager.Stop();
+    assert(!started);
+    assert(setenv(name, "1", 1) == 0);
+  }
+}
+
+void TestSoftIrqQueryUsesOnlyPerSecondFields() {
+  monitor::SoftIrqDetailRecord input;
+  input.hi = 1.0F;
+  input.timer = 2.0F;
+  input.net_tx = 3.0F;
+  input.net_rx = 4.0F;
+  input.block = 5.0F;
+  input.irq_poll = 6.0F;
+  input.tasklet = 7.0F;
+  input.sched = 8.0F;
+  input.hrtimer = 9.0F;
+  input.rcu = 10.0F;
+
+  monitor::proto::SoftIrqDetailRecord output;
+  monitor::PopulateSoftIrqRateFields(input, &output);
+
+  const auto* descriptor = output.GetDescriptor();
+  const auto* reflection = output.GetReflection();
+  for (int tag = 10; tag <= 19; ++tag) {
+    assert(!reflection->HasField(output, descriptor->FindFieldByNumber(tag)));
+  }
+  assert(output.hi_per_sec() == 1.0F && output.timer_per_sec() == 2.0F);
+  assert(output.net_tx_per_sec() == 3.0F && output.net_rx_per_sec() == 4.0F);
+  assert(output.block_per_sec() == 5.0F &&
+         output.irq_poll_per_sec() == 6.0F);
+  assert(output.tasklet_per_sec() == 7.0F && output.sched_per_sec() == 8.0F);
+  assert(output.hrtimer_per_sec() == 9.0F && output.rcu_per_sec() == 10.0F);
+}
+
 }  // namespace
 
 int main() {
@@ -206,5 +293,8 @@ int main() {
   TestAllInvalidCpuScoreIsFinite();
   TestNegativeMemoryIsNotSchedulable();
   TestNetworkOverviewUsesAllInterfaces();
+  TestManagerSizeConfigIsFailFast();
+  TestManagerStartRejectsEveryInvalidSizeEnvironment();
+  TestSoftIrqQueryUsesOnlyPerSecondFields();
   return 0;
 }

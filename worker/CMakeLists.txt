@@ -147,6 +147,7 @@ if(BUILD_TESTING)
 
     add_executable(collector_contract_test
         tests/collector_contract_test.cpp
+        src/monitor/cpu_softirq_monitor.cpp
         src/monitor/cpu_stat_monitor.cpp
         src/monitor/disk_monitor.cpp
         src/monitor/net_monitor.cpp

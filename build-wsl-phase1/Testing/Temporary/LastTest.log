@@ -1,0 +1,118 @@
+Start testing: Aug 24 01:30 CST
+----------------------------------------------------------
+1/7 Testing: diagnostics_test
+1/7 Test: diagnostics_test
+Command: "/mnt/f/chenyu_project/monitor_system/build-wsl-phase1/worker/diagnostics_test"
+Directory: /mnt/f/chenyu_project/monitor_system/build-wsl-phase1/worker
+"diagnostics_test" start time: Aug 24 01:30 CST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"diagnostics_test" end time: Aug 24 01:30 CST
+"diagnostics_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/7 Testing: cpu_stat_monitor_test
+2/7 Test: cpu_stat_monitor_test
+Command: "/mnt/f/chenyu_project/monitor_system/build-wsl-phase1/worker/cpu_stat_monitor_test"
+Directory: /mnt/f/chenyu_project/monitor_system/build-wsl-phase1/worker
+"cpu_stat_monitor_test" start time: Aug 24 01:30 CST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"cpu_stat_monitor_test" end time: Aug 24 01:30 CST
+"cpu_stat_monitor_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/7 Testing: observability_overhead_test
+3/7 Test: observability_overhead_test
+Command: "/mnt/f/chenyu_project/monitor_system/build-wsl-phase1/worker/observability_overhead_test"
+Directory: /mnt/f/chenyu_project/monitor_system/build-wsl-phase1/worker
+"observability_overhead_test" start time: Aug 24 01:30 CST
+Output:
+----------------------------------------------------------
+control_loop_microbenchmark iterations=10000 normal_us=83205 diagnostic_us=88995 profiling_us=87035
+<end of output>
+Test time =   0.27 sec
+----------------------------------------------------------
+Test Passed.
+"observability_overhead_test" end time: Aug 24 01:30 CST
+"observability_overhead_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/7 Testing: collector_contract_test
+4/7 Test: collector_contract_test
+Command: "/mnt/f/chenyu_project/monitor_system/build-wsl-phase1/worker/collector_contract_test"
+Directory: /mnt/f/chenyu_project/monitor_system/build-wsl-phase1/worker
+"collector_contract_test" start time: Aug 24 01:30 CST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"collector_contract_test" end time: Aug 24 01:30 CST
+"collector_contract_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/7 Testing: manager_diagnostics_test
+5/7 Test: manager_diagnostics_test
+Command: "/mnt/f/chenyu_project/monitor_system/build-wsl-phase1/manager/manager_diagnostics_test"
+Directory: /mnt/f/chenyu_project/monitor_system/build-wsl-phase1/manager
+"manager_diagnostics_test" start time: Aug 24 01:30 CST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"manager_diagnostics_test" end time: Aug 24 01:30 CST
+"manager_diagnostics_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+6/7 Testing: manager_concurrency_test
+6/7 Test: manager_concurrency_test
+Command: "/mnt/f/chenyu_project/monitor_system/build-wsl-phase1/manager/manager_concurrency_test"
+Directory: /mnt/f/chenyu_project/monitor_system/build-wsl-phase1/manager
+"manager_concurrency_test" start time: Aug 24 01:30 CST
+Output:
+----------------------------------------------------------
+<end of output>
+Test time =   0.38 sec
+----------------------------------------------------------
+Test Passed.
+"manager_concurrency_test" end time: Aug 24 01:30 CST
+"manager_concurrency_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+7/7 Testing: manager_cpu_overview_test
+7/7 Test: manager_cpu_overview_test
+Command: "/mnt/f/chenyu_project/monitor_system/build-wsl-phase1/manager/manager_cpu_overview_test"
+Directory: /mnt/f/chenyu_project/monitor_system/build-wsl-phase1/manager
+"manager_cpu_overview_test" start time: Aug 24 01:30 CST
+Output:
+----------------------------------------------------------
+[KernScopeManager] processing_stats accepted=1 queue_full=0 processed=1 persistence_tasks=1 persistence_failed=0 persistence_rejected=0 queue_delay_samples=1 queue_delay_total_us=91 max_queue_delay_us=91 max_shard_queue_depth=1 max_shard_queue_bytes=294 max_persistence_queue_depth=1 max_persistence_queue_bytes=590
+[KernScopeManager] processing_stats accepted=1 queue_full=0 processed=1 persistence_tasks=1 persistence_failed=0 persistence_rejected=0 queue_delay_samples=1 queue_delay_total_us=84 max_queue_delay_us=84 max_shard_queue_depth=1 max_shard_queue_bytes=343 max_persistence_queue_depth=1 max_persistence_queue_bytes=639
+[KernScopeManager] processing_stats accepted=1 queue_full=0 processed=0 persistence_tasks=0 persistence_failed=0 persistence_rejected=0 queue_delay_samples=0 queue_delay_total_us=0 max_queue_delay_us=0 max_shard_queue_depth=1 max_shard_queue_bytes=302 max_persistence_queue_depth=0 max_persistence_queue_bytes=0
+[KernScopeManager] processing_stats accepted=1 queue_full=0 processed=0 persistence_tasks=0 persistence_failed=0 persistence_rejected=0 queue_delay_samples=0 queue_delay_total_us=0 max_queue_delay_us=0 max_shard_queue_depth=1 max_shard_queue_bytes=292 max_persistence_queue_depth=0 max_persistence_queue_bytes=0
+invalid Manager config: KERNSCOPE_MANAGER_SHARDS
+invalid Manager config: KERNSCOPE_SHARD_QUEUE_CAPACITY
+invalid Manager config: KERNSCOPE_SHARD_QUEUE_MAX_BYTES
+invalid Manager config: KERNSCOPE_PERSIST_QUEUE_CAPACITY
+invalid Manager config: KERNSCOPE_PERSIST_QUEUE_MAX_BYTES
+<end of output>
+Test time =   0.07 sec
+----------------------------------------------------------
+Test Passed.
+"manager_cpu_overview_test" end time: Aug 24 01:30 CST
+"manager_cpu_overview_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Aug 24 01:30 CST

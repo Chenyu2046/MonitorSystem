@@ -13,6 +13,20 @@
 
 namespace monitor {
 
+namespace cpu_softirq_detail {
+
+bool ComputeRates(const Counters& current, const Counters& previous,
+                  double seconds, Rates* rates) {
+  if (!rates || seconds <= 0) return false;
+  for (std::size_t i = 0; i < current.size(); ++i) {
+    if (current[i] < previous[i]) return false;
+    (*rates)[i] = static_cast<double>(current[i] - previous[i]) / seconds;
+  }
+  return true;
+}
+
+}  // namespace cpu_softirq_detail
+
 namespace {
 constexpr const char* kDevicePath = "/dev/cpu_softirq_monitor";
 constexpr std::size_t kMaxCpus = 256;
@@ -44,7 +58,7 @@ CollectStatus CpuSoftIrqMonitor::UpdateOnce(
   const auto* mapped = static_cast<const softirq_stat*>(address);
   struct Raw {
     std::string name;
-    std::uint64_t values[10]{};
+    cpu_softirq_detail::Counters values{};
   };
   std::vector<Raw> current;
   for (std::size_t i = 0; i < kMaxCpus && mapped[i].cpu_name[0] != '\0'; ++i) {
@@ -70,7 +84,7 @@ CollectStatus CpuSoftIrqMonitor::UpdateOnce(
   bool not_ready = false;
   struct Report {
     Raw current;
-    SoftIrq previous;
+    cpu_softirq_detail::Rates rates;
   };
   std::vector<Report> report;
   report.reserve(current.size());
@@ -80,22 +94,19 @@ CollectStatus CpuSoftIrqMonitor::UpdateOnce(
       not_ready = true;
       continue;
     }
-    const std::uint64_t previous[10] = {
+    const cpu_softirq_detail::Counters previous = {
         it->second.hi,     it->second.timer,  it->second.net_tx,
         it->second.net_rx, it->second.block,  it->second.irq_poll,
         it->second.tasklet, it->second.sched, it->second.hrtimer,
         it->second.rcu};
-    bool changed = false;
-    for (std::size_t i = 0; i < 10; ++i) {
-      if (raw.values[i] < previous[i]) not_ready = true;
-      if (raw.values[i] > previous[i]) changed = true;
-    }
-    if (!changed) not_ready = true;
-    if (std::chrono::duration<double>(now - it->second.timepoint).count() <=
-        0) {
+    cpu_softirq_detail::Rates rates{};
+    const double seconds =
+        std::chrono::duration<double>(now - it->second.timepoint).count();
+    if (!cpu_softirq_detail::ComputeRates(raw.values, previous, seconds,
+                                          &rates)) {
       not_ready = true;
     }
-    report.push_back({raw, it->second});
+    report.push_back({raw, rates});
   }
 
   for (const auto& raw : current) {
@@ -116,27 +127,18 @@ CollectStatus CpuSoftIrqMonitor::UpdateOnce(
   if (not_ready) return CollectStatus::kNotReady;
 
   for (const auto& item : report) {
-    const double seconds = std::chrono::duration<double>(
-                               now - item.previous.timepoint)
-                               .count();
-    if (seconds <= 0) return CollectStatus::kError;
     auto* message = monitor_info->add_soft_irq();
     message->set_cpu(item.current.name);
-    const auto rate = [&item, seconds](std::size_t index,
-                                       std::uint64_t previous) {
-      return static_cast<double>(item.current.values[index] - previous) /
-             seconds;
-    };
-    message->set_hi(rate(0, item.previous.hi));
-    message->set_timer(rate(1, item.previous.timer));
-    message->set_net_tx(rate(2, item.previous.net_tx));
-    message->set_net_rx(rate(3, item.previous.net_rx));
-    message->set_block(rate(4, item.previous.block));
-    message->set_irq_poll(rate(5, item.previous.irq_poll));
-    message->set_tasklet(rate(6, item.previous.tasklet));
-    message->set_sched(rate(7, item.previous.sched));
-    message->set_hrtimer(rate(8, item.previous.hrtimer));
-    message->set_rcu(rate(9, item.previous.rcu));
+    message->set_hi(item.rates[0]);
+    message->set_timer(item.rates[1]);
+    message->set_net_tx(item.rates[2]);
+    message->set_net_rx(item.rates[3]);
+    message->set_block(item.rates[4]);
+    message->set_irq_poll(item.rates[5]);
+    message->set_tasklet(item.rates[6]);
+    message->set_sched(item.rates[7]);
+    message->set_hrtimer(item.rates[8]);
+    message->set_rcu(item.rates[9]);
   }
   return CollectStatus::kOk;
 }

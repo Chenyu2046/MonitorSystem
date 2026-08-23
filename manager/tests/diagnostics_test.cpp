@@ -300,6 +300,7 @@ void TestProbeSnapshotReadFailureIsDegradedEvidence() {
   assert(evidence.size() == 1);
   assert(evidence.front().type ==
          monitor::diagnostics::EvidenceType::kDiagnosticCapabilityDegraded);
+  assert(evidence.front().value == -5.0);
 }
 
 /** @brief 验证单个 incident 持久化失败会保持 degraded 状态。 */

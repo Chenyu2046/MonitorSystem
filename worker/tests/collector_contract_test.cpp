@@ -2,6 +2,7 @@
 #include <cmath>
 
 #include "diagnostics/observability_config.h"
+#include "monitor/cpu_softirq_monitor.h"
 #include "monitor/cpu_stat_monitor.h"
 #include "monitor/disk_monitor.h"
 #include "monitor/net_monitor.h"
@@ -61,6 +62,25 @@ void TestCpuGuestReset() {
              .counter_reset);
 }
 
+void TestSoftIrqZeroDeltaIsReportable() {
+  monitor::cpu_softirq_detail::Counters counters = {
+      1ULL << 54, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  monitor::cpu_softirq_detail::Rates rates{};
+  assert(monitor::cpu_softirq_detail::ComputeRates(counters, counters, 1.0,
+                                                    &rates));
+  for (double rate : rates) assert(rate == 0.0);
+
+  auto current = counters;
+  current[0] += 1;
+  assert(monitor::cpu_softirq_detail::ComputeRates(current, counters, 2.0,
+                                                    &rates));
+  assert(rates[0] == 0.5);
+
+  current[0] = counters[0] - 1;
+  assert(!monitor::cpu_softirq_detail::ComputeRates(current, counters, 1.0,
+                                                     &rates));
+}
+
 void TestConfigRejectsFastSampling() {
   monitor::diagnostics::ObservabilityConfig config;
   config.normal_interval_ms = 999;
@@ -77,6 +97,7 @@ int main() {
   TestDiskFieldMapping();
   TestNetworkParser();
   TestCpuGuestReset();
+  TestSoftIrqZeroDeltaIsReportable();
   TestConfigRejectsFastSampling();
   return 0;
 }

@@ -13,12 +13,14 @@
 #include "mysql_timeout_config.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -27,6 +29,20 @@
 #endif
 
 namespace monitor {
+
+std::optional<std::size_t> ParsePositiveSizeConfig(
+    const char* value, std::size_t default_value) {
+  if (!value) return default_value;
+  const std::string_view text(value);
+  std::size_t parsed = 0;
+  const auto result =
+      std::from_chars(text.data(), text.data() + text.size(), parsed);
+  if (result.ec != std::errc() || result.ptr != text.data() + text.size() ||
+      parsed == 0) {
+    return std::nullopt;
+  }
+  return parsed;
+}
 
 namespace {
 
@@ -59,17 +75,6 @@ bool IsDiagnosticLogEnabled() {
 const char* GetEnvOrDefault(const char* name, const char* default_value) {
   const char* value = std::getenv(name);
   return value && value[0] != '\0' ? value : default_value;
-}
-
-std::size_t GetEnvSize(const char* name, std::size_t default_value) {
-  const char* value = std::getenv(name);
-  if (!value || value[0] == '\0') return default_value;
-  try {
-    const auto parsed = std::stoull(value);
-    return parsed == 0 ? default_value : static_cast<std::size_t>(parsed);
-  } catch (...) {
-    return default_value;
-  }
 }
 
 std::size_t DefaultShardCount() {
@@ -262,26 +267,45 @@ const char* MYSQL_DB = "monitor_db";
 
 MYSQL* mysql_conn = nullptr;
 
-bool EnsureOrdinarySchema(MYSQL* connection) {
-  constexpr char kSchemaQuery[] =
-      "SELECT COUNT(DISTINCT table_name) FROM information_schema.tables "
-      "WHERE table_schema = DATABASE() AND table_name IN "
-      "('server_performance','server_net_detail','server_disk_detail',"
-      "'server_mem_detail','server_softirq_detail')";
-  if (!connection || mysql_query(connection, kSchemaQuery) != 0) {
+bool QueryCountEquals(MYSQL* connection, const char* query,
+                      const char* expected, const char* description) {
+  if (!connection || mysql_query(connection, query) != 0) {
     if (connection) {
-      std::cerr << "ordinary MySQL schema check failed: "
-                << mysql_error(connection) << "\n";
+      std::cerr << description << " check failed: " << mysql_error(connection)
+                << "\n";
     }
     return false;
   }
   MYSQL_RES* result = mysql_store_result(connection);
-  if (!result) return false;
+  if (!result) {
+    std::cerr << description << " result unavailable: "
+              << mysql_error(connection) << "\n";
+    return false;
+  }
   MYSQL_ROW row = mysql_fetch_row(result);
-  const bool ready = row && row[0] && std::string(row[0]) == "5";
+  const bool ready = row && row[0] && std::string(row[0]) == expected;
   mysql_free_result(result);
-  if (!ready) std::cerr << "ordinary MySQL schema is incomplete\n";
+  if (!ready) std::cerr << description << " is incompatible\n";
   return ready;
+}
+
+bool EnsureOrdinarySchema(MYSQL* connection) {
+  constexpr char kTableQuery[] =
+      "SELECT COUNT(DISTINCT table_name) FROM information_schema.tables "
+      "WHERE table_schema = DATABASE() AND table_name IN "
+      "('server_performance','server_net_detail','server_disk_detail',"
+      "'server_mem_detail','server_softirq_detail')";
+  constexpr char kSoftIrqTypeQuery[] =
+      "SELECT COUNT(DISTINCT column_name) FROM information_schema.columns "
+      "WHERE table_schema = DATABASE() "
+      "AND table_name = 'server_softirq_detail' "
+      "AND column_name IN "
+      "('hi','timer','net_tx','net_rx','block','irq_poll','tasklet','sched',"
+      "'hrtimer','rcu') AND data_type IN ('float','double')";
+  return QueryCountEquals(connection, kTableQuery, "5",
+                          "ordinary MySQL table schema") &&
+         QueryCountEquals(connection, kSoftIrqTypeQuery, "10",
+                          "SoftIRQ rate column schema");
 }
 
 MYSQL* GetMysqlConnection() {
@@ -337,6 +361,28 @@ bool HostManager::Start() {
   if (!running_.compare_exchange_strong(expected, true)) {
     return false;
   }
+
+  const auto resolve_size = [](const char* name, std::size_t default_value) {
+    const auto parsed =
+        ParsePositiveSizeConfig(std::getenv(name), default_value);
+    if (!parsed) std::cerr << "invalid Manager config: " << name << "\n";
+    return parsed;
+  };
+  const auto shard_count =
+      resolve_size("KERNSCOPE_MANAGER_SHARDS", DefaultShardCount());
+  const auto shard_queue_capacity =
+      resolve_size("KERNSCOPE_SHARD_QUEUE_CAPACITY", 256);
+  const auto shard_queue_max_bytes = resolve_size(
+      "KERNSCOPE_SHARD_QUEUE_MAX_BYTES", 64ull * 1024ull * 1024ull);
+  const auto persistence_queue_capacity =
+      resolve_size("KERNSCOPE_PERSIST_QUEUE_CAPACITY", 1024);
+  const auto persistence_queue_max_bytes = resolve_size(
+      "KERNSCOPE_PERSIST_QUEUE_MAX_BYTES", 128ull * 1024ull * 1024ull);
+  if (!shard_count || !shard_queue_capacity || !shard_queue_max_bytes ||
+      !persistence_queue_capacity || !persistence_queue_max_bytes) {
+    running_.store(false);
+    return false;
+  }
 #ifdef ENABLE_MYSQL
   if (!GetMysqlConnection()) {
     running_.store(false);
@@ -360,21 +406,11 @@ bool HostManager::Start() {
   diagnostic_persistence_state_.SetInitialized(false);
 #endif
 
-  const std::size_t shard_count = GetEnvSize(
-      "KERNSCOPE_MANAGER_SHARDS", DefaultShardCount());
-  const std::size_t shard_queue_capacity =
-      GetEnvSize("KERNSCOPE_SHARD_QUEUE_CAPACITY", 256);
-  const std::size_t shard_queue_max_bytes = GetEnvSize(
-      "KERNSCOPE_SHARD_QUEUE_MAX_BYTES", 64ull * 1024ull * 1024ull);
-  const std::size_t persistence_queue_capacity =
-      GetEnvSize("KERNSCOPE_PERSIST_QUEUE_CAPACITY", 1024);
-  const std::size_t persistence_queue_max_bytes = GetEnvSize(
-      "KERNSCOPE_PERSIST_QUEUE_MAX_BYTES", 128ull * 1024ull * 1024ull);
   shard_perf_samples_.clear();
-  shard_perf_samples_.resize(shard_count);
+  shard_perf_samples_.resize(*shard_count);
 
   persistence_worker_ = std::make_unique<PersistenceWorker>(
-      persistence_queue_capacity, persistence_queue_max_bytes,
+      *persistence_queue_capacity, *persistence_queue_max_bytes,
       [this](PersistenceTask&& task) {
         const bool success = PersistTask(std::move(task));
         if (!success) {
@@ -385,7 +421,7 @@ bool HostManager::Start() {
   persistence_worker_->Start();
 
   shard_executor_ = std::make_unique<HostShardExecutor>(
-      shard_count, shard_queue_capacity, shard_queue_max_bytes,
+      *shard_count, *shard_queue_capacity, *shard_queue_max_bytes,
       [this](std::size_t shard_id, const std::string& host_name,
              const monitor::proto::MonitorInfo& info,
              std::chrono::system_clock::time_point received_at,
@@ -945,8 +981,8 @@ bool HostManager::WriteToMysql(
         << load_avg_3_rate << "," << load_avg_15_rate << ","
         << mem_used_percent_rate << "," << mem_total_rate << ","
         << mem_free_rate << "," << mem_avail_rate << ","
-        << disk_util_percent_rate << "," << net_in_rate_rate << ","
-        << net_out_rate_rate << ",'" << time_buf << "')";
+        << disk_util_percent_rate << "," << net_out_rate_rate << ","
+        << net_in_rate_rate << ",'" << time_buf << "')";
     if (!exec(oss.str())) return false;
   }
 

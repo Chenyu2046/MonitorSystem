@@ -86,6 +86,10 @@ struct NetworkOverview {
 CpuOverview BuildCpuOverview(const monitor::proto::MonitorInfo& info);
 NetworkOverview BuildNetworkOverview(const monitor::proto::MonitorInfo& info);
 
+/** @brief 未配置时返回默认值；显式空值、零值或非法值返回 nullopt。 */
+std::optional<std::size_t> ParsePositiveSizeConfig(
+    const char* value, std::size_t default_value);
+
 struct ScoreResult {
   double score = 0;
   bool valid = false;

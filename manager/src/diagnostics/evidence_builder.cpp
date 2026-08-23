@@ -251,9 +251,11 @@ std::vector<Evidence> EvidenceBuilder::Build(
            !status.snapshot_ok())) {
         const bool read_failed = status.available() && status.attached() &&
                                  !status.snapshot_ok();
+        const int error =
+            read_failed ? status.snapshot_error() : status.last_error();
         Add(&evidence, EvidenceType::kDiagnosticCapabilityDegraded,
             "DiagnosticSnapshot.probe_status",
-            static_cast<double>(status.last_error()), "errno", 0.0, timestamp,
+            static_cast<double>(error), "errno", 0.0, timestamp,
             read_failed ? "requested probe snapshot read failed: " +
                               status.probe()
                         : "requested probe unavailable: " + status.probe(),
