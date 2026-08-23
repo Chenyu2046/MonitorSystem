@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -23,6 +24,7 @@
 #include "diagnostics/observability_config.h"
 #include "diagnostics/observability_state.h"
 #include "diagnostics/probe_controller.h"
+#include "diagnostics/remote_health_feedback.h"
 #include "diagnostics/symbolizer.h"
 #include "monitor/metric_collector.h"
 #include "rpc/monitor_send_queue.h"
@@ -82,6 +84,7 @@ class MonitorPusher {
   std::unique_ptr<MetricCollector> collector_;
   std::unique_ptr<monitor::proto::GrpcManager::Stub> stub_;
   diagnostics::ObservabilityConfig observability_config_;
+  diagnostics::RemoteHealthFeedback remote_health_feedback_;
   diagnostics::AnomalyDetector anomaly_detector_;
   diagnostics::ObservabilityStateMachine state_machine_;
   diagnostics::ProbeController probe_controller_;
@@ -91,6 +94,7 @@ class MonitorPusher {
   std::mutex lifecycle_mutex_;
   std::mutex stop_mutex_;
   std::condition_variable stop_condition_;
+  std::uint64_t next_sample_sequence_ = 1;
 };
 
 }  // namespace monitor

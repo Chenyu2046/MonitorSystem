@@ -19,8 +19,13 @@ namespace monitor {
 HostShardExecutor::HostShardExecutor(std::size_t shard_count,
                                      std::size_t queue_capacity,
                                      std::size_t queue_max_bytes,
-                                     ProcessCallback callback)
-    : callback_(std::move(callback)) {
+                                     ProcessCallback callback,
+                                     MaintenanceCallback maintenance_callback,
+                                     std::chrono::milliseconds
+                                         maintenance_interval)
+    : callback_(std::move(callback)),
+      maintenance_callback_(std::move(maintenance_callback)),
+      maintenance_interval_(maintenance_interval) {
   // 至少保留一个 shard，避免合法配置为 0 时出现取模/无消费者。
   if (shard_count == 0) {
     shard_count = 1;
@@ -67,10 +72,24 @@ void HostShardExecutor::Stop() {
 
 DataReceiveResult HostShardExecutor::Submit(
     const std::string& host_name, monitor::proto::MonitorInfo info) {
+  return SubmitImpl(host_name, std::move(info), nullptr);
+}
+
+DataReceiveResult HostShardExecutor::SubmitTracked(
+    const std::string& host_name, monitor::proto::MonitorInfo info,
+    std::shared_ptr<std::promise<HostFeedbackResult>> completion) {
+  return SubmitImpl(host_name, std::move(info), std::move(completion));
+}
+
+DataReceiveResult HostShardExecutor::SubmitImpl(
+    const std::string& host_name, monitor::proto::MonitorInfo info,
+    std::shared_ptr<std::promise<HostFeedbackResult>> completion) {
   if (host_name.empty()) {
+    if (completion) completion->set_value({});
     return DataReceiveResult::kInvalidHost;
   }
   if (!accepting_.load(std::memory_order_acquire)) {
+    if (completion) completion->set_value({});
     return DataReceiveResult::kStopping;
   }
 
@@ -80,9 +99,11 @@ DataReceiveResult HostShardExecutor::Submit(
   const auto received_at = std::chrono::system_clock::now();
   const auto enqueued_at = std::chrono::steady_clock::now();
   if (shards_[shard_id]->queue.TryPush(WorkItem{
-          host_name, std::move(info), received_at, enqueued_at})) {
+          host_name, std::move(info), received_at, enqueued_at,
+          completion})) {
     return DataReceiveResult::kAccepted;
   }
+  if (completion) completion->set_value({});
   return accepting_.load(std::memory_order_acquire)
              ? DataReceiveResult::kQueueFull
              : DataReceiveResult::kStopping;
@@ -113,9 +134,36 @@ void HostShardExecutor::RunShard(std::size_t shard_id) {
   // 一个 shard 只有一个消费者，因此 callback 看到同一 host 的消息是
   // FIFO 顺序；不同 shard 之间允许并行执行。
   WorkItem item;
-  while (shards_[shard_id]->queue.Pop(&item)) {
-    callback_(shard_id, item.host_name, item.info, item.received_at,
-              item.enqueued_at);
+  auto next_maintenance =
+      std::chrono::steady_clock::now() + maintenance_interval_;
+  while (true) {
+    if (!maintenance_callback_) {
+      if (!shards_[shard_id]->queue.Pop(&item)) return;
+    } else {
+      const auto now = std::chrono::steady_clock::now();
+      const auto wait_for = now < next_maintenance
+                                ? next_maintenance - now
+                                : std::chrono::steady_clock::duration::zero();
+      const auto result = shards_[shard_id]->queue.PopFor(&item, wait_for);
+      if (result == decltype(shards_[shard_id]->queue)::PopResult::kTimeout) {
+        const auto maintenance_now = std::chrono::steady_clock::now();
+        maintenance_callback_(shard_id, maintenance_now);
+        next_maintenance = maintenance_now + maintenance_interval_;
+        continue;
+      }
+      if (result == decltype(shards_[shard_id]->queue)::PopResult::kClosed) {
+        return;
+      }
+    }
+    const HostFeedbackResult result =
+        callback_(shard_id, item.host_name, item.info, item.received_at,
+                  item.enqueued_at);
+    if (item.completion) item.completion->set_value(result);
+    const auto now = std::chrono::steady_clock::now();
+    if (maintenance_callback_ && now >= next_maintenance) {
+      maintenance_callback_(shard_id, now);
+      next_maintenance = now + maintenance_interval_;
+    }
   }
 }
 

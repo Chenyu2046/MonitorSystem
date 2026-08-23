@@ -51,6 +51,7 @@ void TestSameHostOrdering() {
                    std::chrono::system_clock::time_point,
                    std::chrono::steady_clock::time_point) {
         processed.push_back(std::stoi(info.name()));
+        return monitor::HostFeedbackResult{};
       });
   executor.Start();
   for (int sequence = 0; sequence < 10000; ++sequence) {
@@ -83,6 +84,7 @@ void TestDifferentHostsRunConcurrently() {
         std::unique_lock<std::mutex> lock(mutex);
         condition.wait(lock, [&] { return release; });
         active.fetch_sub(1);
+        return monitor::HostFeedbackResult{};
       });
 
   std::vector<std::string> hosts;
@@ -135,7 +137,7 @@ void TestQueuedTimestampPreserved() {
           condition.notify_all();
           std::unique_lock<std::mutex> lock(mutex);
           condition.wait(lock, [&] { return release_first; });
-          return;
+          return monitor::HostFeedbackResult{};
         }
         {
           std::lock_guard<std::mutex> lock(mutex);
@@ -143,6 +145,7 @@ void TestQueuedTimestampPreserved() {
           processed_at = std::chrono::steady_clock::now();
         }
         condition.notify_all();
+        return monitor::HostFeedbackResult{};
       });
 
   executor.Start();
@@ -176,7 +179,9 @@ void TestHashCollisionPreservesEachHostOrder() {
       4, 128, kLargeQueueBytes,
       [](std::size_t, const std::string&, const monitor::proto::MonitorInfo&,
          std::chrono::system_clock::time_point,
-         std::chrono::steady_clock::time_point) {});
+         std::chrono::steady_clock::time_point) {
+        return monitor::HostFeedbackResult{};
+      });
   std::string first;
   std::string second;
   for (int index = 0; index < 10000 && second.empty(); ++index) {
@@ -199,6 +204,7 @@ void TestHashCollisionPreservesEachHostOrder() {
                    std::chrono::system_clock::time_point,
                    std::chrono::steady_clock::time_point) {
         processed[host].push_back(std::stoi(info.name()));
+        return monitor::HostFeedbackResult{};
       });
   executor->Start();
   for (int sequence = 0; sequence < 50; ++sequence) {
@@ -237,6 +243,7 @@ void TestQueueFullAndShutdownDrain() {
         condition.notify_all();
         std::unique_lock<std::mutex> lock(mutex);
         condition.wait(lock, [&] { return release_first; });
+        return monitor::HostFeedbackResult{};
       });
   executor.Start();
   assert(executor.Submit("host", MakeInfo(1)) ==
@@ -258,6 +265,153 @@ void TestQueueFullAndShutdownDrain() {
   assert(processed == 2);
   assert(executor.Submit("host", MakeInfo(4)) ==
          monitor::DataReceiveResult::kStopping);
+}
+
+/** @brief 验证无消息时维护仍在 shard worker 执行，Stop 后不再回调。 */
+void TestTimedMaintenanceUsesShardOwnerAndStops() {
+  std::mutex mutex;
+  std::condition_variable condition;
+  std::thread::id process_thread;
+  std::thread::id maintenance_thread;
+  int maintenance_calls = 0;
+  monitor::HostShardExecutor executor(
+      1, 4, kLargeQueueBytes,
+      [&](std::size_t, const std::string&,
+          const monitor::proto::MonitorInfo&,
+          std::chrono::system_clock::time_point,
+          std::chrono::steady_clock::time_point) {
+        std::lock_guard<std::mutex> lock(mutex);
+        process_thread = std::this_thread::get_id();
+        condition.notify_all();
+        return monitor::HostFeedbackResult{};
+      },
+      [&](std::size_t, std::chrono::steady_clock::time_point) {
+        std::lock_guard<std::mutex> lock(mutex);
+        maintenance_thread = std::this_thread::get_id();
+        ++maintenance_calls;
+        condition.notify_all();
+      },
+      std::chrono::milliseconds(10));
+  executor.Start();
+  assert(executor.Submit("host", MakeInfo(1)) ==
+         monitor::DataReceiveResult::kAccepted);
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    assert(condition.wait_for(lock, std::chrono::seconds(2), [&] {
+      return process_thread != std::thread::id{} && maintenance_calls > 0;
+    }));
+    assert(process_thread == maintenance_thread);
+  }
+  executor.Stop();
+  int calls_after_stop = 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    calls_after_stop = maintenance_calls;
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    assert(maintenance_calls == calls_after_stop);
+  }
+}
+
+/** @brief 验证队列持续非空时维护仍按绝对 deadline 插入执行。 */
+void TestMaintenanceRunsWhileQueueRemainsNonEmpty() {
+  std::atomic<int> processed{0};
+  std::atomic<int> maintenance_calls{0};
+  std::atomic<int> processed_at_first_maintenance{-1};
+  monitor::HostShardExecutor executor(
+      1, 256, kLargeQueueBytes,
+      [&](std::size_t, const std::string&,
+          const monitor::proto::MonitorInfo&,
+          std::chrono::system_clock::time_point,
+          std::chrono::steady_clock::time_point) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        processed.fetch_add(1, std::memory_order_relaxed);
+        return monitor::HostFeedbackResult{};
+      },
+      [&](std::size_t, std::chrono::steady_clock::time_point) {
+        int expected = -1;
+        processed_at_first_maintenance.compare_exchange_strong(
+            expected, processed.load(std::memory_order_relaxed));
+        maintenance_calls.fetch_add(1, std::memory_order_relaxed);
+      },
+      std::chrono::milliseconds(10));
+  executor.Start();
+  constexpr int kItems = 100;
+  for (int index = 0; index < kItems; ++index) {
+    assert(executor.Submit("busy-host", MakeInfo(index)) ==
+           monitor::DataReceiveResult::kAccepted);
+  }
+  executor.Stop();
+  assert(processed.load() == kItems);
+  assert(maintenance_calls.load() > 0);
+  assert(processed_at_first_maintenance.load() > 0);
+  assert(processed_at_first_maintenance.load() < kItems);
+}
+
+/** @brief 验证 tracked waiter 与 Stop 并发时 drain 且仅完成一次。 */
+void TestTrackedWaiterCompletesDuringStopDrain() {
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool started = false;
+  bool release = false;
+  std::atomic<int> callbacks{0};
+  monitor::HostShardExecutor executor(
+      1, 4, kLargeQueueBytes,
+      [&](std::size_t, const std::string& host,
+          const monitor::proto::MonitorInfo&,
+          std::chrono::system_clock::time_point,
+          std::chrono::steady_clock::time_point) {
+        callbacks.fetch_add(1, std::memory_order_relaxed);
+        {
+          std::lock_guard<std::mutex> lock(mutex);
+          started = true;
+        }
+        condition.notify_all();
+        std::unique_lock<std::mutex> lock(mutex);
+        condition.wait(lock, [&] { return release; });
+        monitor::HostFeedbackResult result;
+        result.host_name = host;
+        result.health_valid = true;
+        result.result_version = 1;
+        return result;
+      });
+  executor.Start();
+  auto completion =
+      std::make_shared<std::promise<monitor::HostFeedbackResult>>();
+  auto completed = completion->get_future();
+  assert(executor.SubmitTracked("tracked-host", MakeInfo(1), completion) ==
+         monitor::DataReceiveResult::kAccepted);
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    assert(condition.wait_for(lock, std::chrono::seconds(2),
+                              [&] { return started; }));
+  }
+  std::thread stopper([&] { executor.Stop(); });
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    release = true;
+  }
+  condition.notify_all();
+  assert(completed.wait_for(std::chrono::seconds(2)) ==
+         std::future_status::ready);
+  const auto result = completed.get();
+  assert(result.health_valid);
+  assert(result.host_name == "tracked-host");
+  stopper.join();
+  assert(callbacks.load() == 1);
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  assert(callbacks.load() == 1);
+
+  auto rejected =
+      std::make_shared<std::promise<monitor::HostFeedbackResult>>();
+  auto rejected_future = rejected->get_future();
+  assert(executor.SubmitTracked("tracked-host", MakeInfo(2), rejected) ==
+         monitor::DataReceiveResult::kStopping);
+  assert(rejected_future.wait_for(std::chrono::milliseconds(10)) ==
+         std::future_status::ready);
+  assert(!rejected_future.get().health_valid);
 }
 
 /** @brief 验证字节预算和单项 oversize 拒绝语义。 */
@@ -385,6 +539,9 @@ int main() {
   TestQueuedTimestampPreserved();
   TestHashCollisionPreservesEachHostOrder();
   TestQueueFullAndShutdownDrain();
+  TestTimedMaintenanceUsesShardOwnerAndStops();
+  TestMaintenanceRunsWhileQueueRemainsNonEmpty();
+  TestTrackedWaiterCompletesDuringStopDrain();
   TestQueueByteBudgetAndOversize();
   TestPersistenceWorkerDrainsAcceptedTasks();
   TestPersistenceProducerUnblocksDuringDrain();

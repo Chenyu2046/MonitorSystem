@@ -16,7 +16,7 @@ namespace monitor {
 ::grpc::Status GrpcServerImpl::SetMonitorInfo(
     ::grpc::ServerContext* context,
     const ::monitor::proto::MonitorInfo* request,
-    ::google::protobuf::Empty* response) {
+    ::monitor::proto::MonitorFeedback* response) {
   // 这是 Worker -> Manager 的 push 边界；response 只表达接收结果，真正的
   // 评分/诊断/持久化在 HostManager 的异步 shard 链路中完成。
   if (!request) {
@@ -34,7 +34,8 @@ namespace monitor {
 
   // 先确认 Manager 已接受数据；队列满或停止时不报告假成功。
   if (callback_) {
-    const DataReceiveResult result = callback_(*request);
+    const DataReceiveResult result =
+        callback_(*request, context->deadline(), response);
     switch (result) {
       case DataReceiveResult::kAccepted:
         break;

@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -27,6 +28,7 @@
 #include "data_receive_result.h"
 #include "diagnostics/diagnostic_persistence.h"
 #include "diagnostics/incident_store.h"
+#include "health/health_score_engine.h"
 #include "host_shard_executor.h"
 #include "persistence_history.h"
 #include "persistence_task.h"
@@ -142,7 +144,10 @@ class DiagnosticPersistenceState {
  */
 class HostManager {
  public:
-  HostManager();
+  explicit HostManager(
+      std::chrono::milliseconds health_maintenance_interval =
+          std::chrono::minutes(1),
+      std::chrono::milliseconds health_max_idle = std::chrono::minutes(5));
   ~HostManager();
 
   /** @brief 初始化持久化/分片执行器并启动后台线程。 */
@@ -152,12 +157,23 @@ class HostManager {
 
   /** @brief 校验主机标识并将 Worker 消息提交到对应 host 分片。 */
   DataReceiveResult Submit(const monitor::proto::MonitorInfo& info);
+  DataReceiveResult SubmitWithFeedback(
+      const monitor::proto::MonitorInfo& info,
+      std::chrono::system_clock::time_point deadline,
+      monitor::proto::MonitorFeedback* feedback);
+  std::uint64_t HealthStateEvictedCount() const {
+    return health_state_evicted_count_.load(std::memory_order_relaxed);
+  }
+  std::uint64_t ProcessedCount() const {
+    return processed_count_.load(std::memory_order_relaxed);
+  }
 
   // 获取所有主机评分
   std::unordered_map<std::string, HostScore> GetAllHostScores();
 
   // 获取最优主机
   std::string GetBestHost();
+  std::string GetHealthiestHost();
 
   std::vector<diagnostics::IncidentRecord> GetIncidents(
       const std::string& server_name = {},
@@ -177,12 +193,15 @@ class HostManager {
 
  private:
   void ProcessLoop();
-  void ProcessOne(std::size_t shard_id, const std::string& host_name,
-                  const monitor::proto::MonitorInfo& info,
-                  std::chrono::system_clock::time_point received_at,
-                  std::chrono::steady_clock::time_point enqueued_at);
+  HostFeedbackResult ProcessOne(
+      std::size_t shard_id, const std::string& host_name,
+      const monitor::proto::MonitorInfo& info,
+      std::chrono::system_clock::time_point received_at,
+      std::chrono::steady_clock::time_point enqueued_at);
+  void MaintainShard(std::size_t shard_id,
+                     std::chrono::steady_clock::time_point now);
   bool PersistTask(PersistenceTask task);
-  ScoreResult CalcScore(const monitor::proto::MonitorInfo& info);
+  ScoreResult CalcResourceScore(const monitor::proto::MonitorInfo& info);
   bool WriteToMysql(const std::string& host_name, const HostScore& host_score,
                     double net_in_rate, double net_out_rate,
                     float cpu_percent_rate, float usr_percent_rate,
@@ -205,6 +224,24 @@ class HostManager {
   std::unique_ptr<HostShardExecutor> shard_executor_;
   std::unique_ptr<PersistenceWorker> persistence_worker_;
   std::vector<std::unordered_map<std::string, PerfSample>> shard_perf_samples_;
+  std::vector<std::unordered_map<std::string, health::HealthScoreEngine>>
+      shard_health_engines_;
+  struct FeedbackCacheEntry {
+    std::uint64_t sequence = 0;
+    std::int64_t timestamp_ms = 0;
+    HostFeedbackResult result;
+  };
+  struct HostFeedbackCache {
+    std::uint64_t latest_sequence = 0;
+    std::int64_t latest_timestamp_ms = 0;
+    std::deque<FeedbackCacheEntry> entries;
+  };
+  std::vector<std::unordered_map<std::string, HostFeedbackCache>>
+      shard_feedback_caches_;
+  const std::chrono::milliseconds health_maintenance_interval_;
+  const std::chrono::milliseconds health_max_idle_;
+  health::HealthConfig health_config_;
+  std::atomic<std::uint64_t> health_state_evicted_count_{0};
   std::atomic<std::uint64_t> accepted_count_{0};
   std::atomic<std::uint64_t> queue_full_count_{0};
   std::atomic<std::uint64_t> processed_count_{0};

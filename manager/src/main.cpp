@@ -60,8 +60,10 @@ int main(int argc, char* argv[]) {
   // 创建 HostManager 并设置回调；RPC handler 只把消息交给有界 shard 队列。
   monitor::HostManager mgr;
   service.SetDataReceivedCallback(
-      [&mgr](const monitor::proto::MonitorInfo& info) {
-        return mgr.Submit(info);
+      [&mgr](const monitor::proto::MonitorInfo& info,
+             std::chrono::system_clock::time_point deadline,
+             monitor::proto::MonitorFeedback* feedback) {
+        return mgr.SubmitWithFeedback(info, deadline, feedback);
       });
 
   // 先启动 HostManager，确保 gRPC 开始接收前已有消费者和持久化能力状态。

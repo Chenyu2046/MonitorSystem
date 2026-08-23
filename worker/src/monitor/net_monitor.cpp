@@ -127,6 +127,7 @@ CollectStatus NetMonitor::UpdateOnce(
     net->set_err_out(current_sample.err_out);
     net->set_drop_in(current_sample.drop_in);
     net->set_drop_out(current_sample.drop_out);
+    net->set_sample_valid(true);
   }
   return CollectStatus::kOk;
 }

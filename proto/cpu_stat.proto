@@ -13,4 +13,6 @@ message CpuStat{
     float io_wait_percent = 7;
     float irq_percent = 8;
     float soft_irq_percent = 9;
+    // Additive presence marker: true only when this complete sample was read.
+    bool sample_valid = 20;
   }

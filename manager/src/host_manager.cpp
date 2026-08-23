@@ -10,7 +10,11 @@
 
 #include "host_manager.h"
 
+#include "canonical_host_key.h"
+
 #include "mysql_timeout_config.h"
+#include "mysql_schema.h"
+#include "health/top_signal_codec.h"
 
 #include <algorithm>
 #include <charconv>
@@ -83,31 +87,11 @@ std::size_t DefaultShardCount() {
   return std::min<std::size_t>(half, 8);
 }
 
-std::string HostNameForInfo(const monitor::proto::MonitorInfo& info) {
-  std::string host_name;
-  if (info.has_host_info()) {
-    const auto& host_info = info.host_info();
-    const std::string& hostname = host_info.hostname();
-    const std::string& ip = host_info.ip_address();
-    if (!hostname.empty() && !ip.empty()) {
-      host_name = hostname + "_" + ip;
-    } else if (!hostname.empty()) {
-      host_name = hostname;
-    } else if (!ip.empty()) {
-      host_name = ip;
-    }
-  }
-  if (host_name.empty()) {
-    host_name = info.name();
-  }
-  return host_name;
-}
-
 bool IsValidMonitorInfo(const monitor::proto::MonitorInfo& info) {
   const auto cpu = BuildCpuOverview(info);
-  if (HostNameForInfo(info).empty() || cpu.cpu_count == 0) return false;
+  if (CanonicalHostKey(info).empty() || cpu.cpu_count == 0) return false;
   for (const auto& core : info.cpu_stat()) {
-    if (!std::isfinite(core.cpu_percent()) ||
+    if (!core.sample_valid() || !std::isfinite(core.cpu_percent()) ||
         !std::isfinite(core.usr_percent()) ||
         !std::isfinite(core.system_percent()) ||
         !std::isfinite(core.nice_percent()) ||
@@ -132,11 +116,13 @@ bool IsValidMonitorInfo(const monitor::proto::MonitorInfo& info) {
                             cpu.irq_percent, cpu.soft_irq_percent}) {
     if (!std::isfinite(value) || value < 0 || value > 100) return false;
   }
-  if (!info.has_cpu_load() || !std::isfinite(info.cpu_load().load_avg_1()) ||
+  if (!info.has_cpu_load() || !info.cpu_load().sample_valid() ||
+      !std::isfinite(info.cpu_load().load_avg_1()) ||
       !std::isfinite(info.cpu_load().load_avg_3()) ||
       !std::isfinite(info.cpu_load().load_avg_15()) ||
       info.cpu_load().load_avg_1() < 0 || info.cpu_load().load_avg_3() < 0 ||
       info.cpu_load().load_avg_15() < 0 || !info.has_mem_info() ||
+      !info.mem_info().sample_valid() ||
       !std::isfinite(info.mem_info().used_percent()) ||
       info.mem_info().used_percent() < 0 ||
       info.mem_info().used_percent() > 100 ||
@@ -149,7 +135,8 @@ bool IsValidMonitorInfo(const monitor::proto::MonitorInfo& info) {
   const auto network = BuildNetworkOverview(info);
   if (network.interface_count == 0 || info.disk_info_size() == 0) return false;
   for (const auto& net : info.net_info()) {
-    if (!std::isfinite(net.rcv_rate()) || !std::isfinite(net.send_rate()) ||
+    if (!net.sample_valid() || !std::isfinite(net.rcv_rate()) ||
+        !std::isfinite(net.send_rate()) ||
         !std::isfinite(net.rcv_packets_rate()) ||
         !std::isfinite(net.send_packets_rate()) || net.rcv_rate() < 0 ||
         net.send_rate() < 0 || net.rcv_packets_rate() < 0 ||
@@ -158,7 +145,8 @@ bool IsValidMonitorInfo(const monitor::proto::MonitorInfo& info) {
     }
   }
   for (const auto& disk : info.disk_info()) {
-    if (!std::isfinite(disk.util_percent()) || disk.util_percent() < 0 ||
+    if (!disk.sample_valid() || !std::isfinite(disk.util_percent()) ||
+        disk.util_percent() < 0 ||
         disk.util_percent() > 100 ||
         !std::isfinite(disk.read_bytes_per_sec()) ||
         !std::isfinite(disk.write_bytes_per_sec()) ||
@@ -267,47 +255,6 @@ const char* MYSQL_DB = "monitor_db";
 
 MYSQL* mysql_conn = nullptr;
 
-bool QueryCountEquals(MYSQL* connection, const char* query,
-                      const char* expected, const char* description) {
-  if (!connection || mysql_query(connection, query) != 0) {
-    if (connection) {
-      std::cerr << description << " check failed: " << mysql_error(connection)
-                << "\n";
-    }
-    return false;
-  }
-  MYSQL_RES* result = mysql_store_result(connection);
-  if (!result) {
-    std::cerr << description << " result unavailable: "
-              << mysql_error(connection) << "\n";
-    return false;
-  }
-  MYSQL_ROW row = mysql_fetch_row(result);
-  const bool ready = row && row[0] && std::string(row[0]) == expected;
-  mysql_free_result(result);
-  if (!ready) std::cerr << description << " is incompatible\n";
-  return ready;
-}
-
-bool EnsureOrdinarySchema(MYSQL* connection) {
-  constexpr char kTableQuery[] =
-      "SELECT COUNT(DISTINCT table_name) FROM information_schema.tables "
-      "WHERE table_schema = DATABASE() AND table_name IN "
-      "('server_performance','server_net_detail','server_disk_detail',"
-      "'server_mem_detail','server_softirq_detail')";
-  constexpr char kSoftIrqTypeQuery[] =
-      "SELECT COUNT(DISTINCT column_name) FROM information_schema.columns "
-      "WHERE table_schema = DATABASE() "
-      "AND table_name = 'server_softirq_detail' "
-      "AND column_name IN "
-      "('hi','timer','net_tx','net_rx','block','irq_poll','tasklet','sched',"
-      "'hrtimer','rcu') AND data_type IN ('float','double')";
-  return QueryCountEquals(connection, kTableQuery, "5",
-                          "ordinary MySQL table schema") &&
-         QueryCountEquals(connection, kSoftIrqTypeQuery, "10",
-                          "SoftIRQ rate column schema");
-}
-
 MYSQL* GetMysqlConnection() {
   if (mysql_conn) return mysql_conn;
 
@@ -345,7 +292,11 @@ void CloseMysqlConnection() {
 }  // namespace
 #endif
 
-HostManager::HostManager() : running_(false) {}
+HostManager::HostManager(std::chrono::milliseconds health_maintenance_interval,
+                         std::chrono::milliseconds health_max_idle)
+    : running_(false),
+      health_maintenance_interval_(health_maintenance_interval),
+      health_max_idle_(health_max_idle) {}
 
 HostManager::~HostManager() {
   Stop();
@@ -359,6 +310,12 @@ bool HostManager::Start() {
   // host shard workers 和 stale-host 管理线程，确保提交路径有消费者。
   bool expected = false;
   if (!running_.compare_exchange_strong(expected, true)) {
+    return false;
+  }
+  if (health_maintenance_interval_.count() <= 0 ||
+      health_max_idle_.count() <= 0) {
+    std::cerr << "invalid health maintenance interval\n";
+    running_.store(false);
     return false;
   }
 
@@ -383,12 +340,20 @@ bool HostManager::Start() {
     running_.store(false);
     return false;
   }
+  health::HealthConfig health_config;
+  std::string health_error;
+  if (!health::LoadHealthConfigFromEnvironment(&health_config, &health_error)) {
+    std::cerr << health_error << "\n";
+    running_.store(false);
+    return false;
+  }
+  health_config_ = health_config;
 #ifdef ENABLE_MYSQL
   if (!GetMysqlConnection()) {
     running_.store(false);
     return false;
   }
-  if (!EnsureOrdinarySchema(GetMysqlConnection())) {
+  if (!EnsureOrdinarySchemaReady(GetMysqlConnection())) {
     running_.store(false);
     return false;
   }
@@ -408,6 +373,10 @@ bool HostManager::Start() {
 
   shard_perf_samples_.clear();
   shard_perf_samples_.resize(*shard_count);
+  shard_health_engines_.clear();
+  shard_health_engines_.resize(*shard_count);
+  shard_feedback_caches_.clear();
+  shard_feedback_caches_.resize(*shard_count);
 
   persistence_worker_ = std::make_unique<PersistenceWorker>(
       *persistence_queue_capacity, *persistence_queue_max_bytes,
@@ -426,8 +395,13 @@ bool HostManager::Start() {
              const monitor::proto::MonitorInfo& info,
              std::chrono::system_clock::time_point received_at,
              std::chrono::steady_clock::time_point enqueued_at) {
-        ProcessOne(shard_id, host_name, info, received_at, enqueued_at);
-      });
+        return ProcessOne(shard_id, host_name, info, received_at, enqueued_at);
+      },
+      [this](std::size_t shard_id,
+             std::chrono::steady_clock::time_point now) {
+        MaintainShard(shard_id, now);
+      },
+      health_maintenance_interval_);
   shard_executor_->Start();
   thread_ = std::make_unique<std::thread>(&HostManager::ProcessLoop, this);
   return true;
@@ -512,7 +486,7 @@ DataReceiveResult HostManager::Submit(
     const monitor::proto::MonitorInfo& info) {
   // gRPC handler 到这里仍在接收线程；只做主机名校验和有界入队，避免
   // 在 RPC 线程执行 CPU 评分、规则诊断或 MySQL。
-  const std::string host_name = HostNameForInfo(info);
+  const std::string host_name = CanonicalHostKey(info);
   if (host_name.empty()) {
     std::cerr << "Received data with empty server identifier" << std::endl;
     return DataReceiveResult::kInvalidHost;
@@ -529,22 +503,129 @@ DataReceiveResult HostManager::Submit(
   return result;
 }
 
+DataReceiveResult HostManager::SubmitWithFeedback(
+    const monitor::proto::MonitorInfo& info,
+    std::chrono::system_clock::time_point deadline,
+    monitor::proto::MonitorFeedback* feedback) {
+  if (feedback) feedback->Clear();
+  const std::string host_name = CanonicalHostKey(info);
+  if (host_name.empty()) return DataReceiveResult::kInvalidHost;
+  if (!shard_executor_) return DataReceiveResult::kStopping;
+
+  // Requests from old Workers have no correlation identity. They retain the
+  // original asynchronous accepted semantics and receive no remote signal.
+  if (!feedback || info.sample_sequence() == 0 ||
+      info.sample_timestamp_ms() <= 0) {
+    return Submit(info);
+  }
+
+  auto completion =
+      std::make_shared<std::promise<HostFeedbackResult>>();
+  auto completed = completion->get_future();
+  const auto result = shard_executor_->SubmitTracked(host_name, info,
+                                                      std::move(completion));
+  if (result == DataReceiveResult::kAccepted) {
+    accepted_count_.fetch_add(1, std::memory_order_relaxed);
+  } else if (result == DataReceiveResult::kQueueFull) {
+    queue_full_count_.fetch_add(1, std::memory_order_relaxed);
+  }
+  if (result != DataReceiveResult::kAccepted ||
+      completed.wait_until(deadline) != std::future_status::ready) {
+    return result;
+  }
+
+  const HostFeedbackResult work_result = completed.get();
+  if (!work_result.health_valid || work_result.host_name != host_name ||
+      work_result.result_timestamp_ms != info.sample_timestamp_ms() ||
+      work_result.result_version != info.sample_sequence() ||
+      !std::isfinite(work_result.node_anomaly_score)) {
+    return result;
+  }
+  feedback->set_host_name(work_result.host_name);
+  feedback->set_health_valid(true);
+  feedback->set_node_anomaly_score(
+      std::clamp(work_result.node_anomaly_score, 0.0, 1.0));
+  feedback->set_result_timestamp_ms(work_result.result_timestamp_ms);
+  feedback->set_result_version(work_result.result_version);
+  return result;
+}
+
+void HostManager::MaintainShard(
+    std::size_t shard_id, std::chrono::steady_clock::time_point now) {
+  // The timed callback runs on this shard's sole worker, preserving ownership
+  // of both maps even when no host submits another message.
+  for (const auto& stale_host : health::PruneStaleHealthEngines(
+           &shard_health_engines_[shard_id], now, health_max_idle_)) {
+    shard_perf_samples_[shard_id].erase(stale_host);
+    shard_feedback_caches_[shard_id].erase(stale_host);
+    health_state_evicted_count_.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
 // 计算主机的综合评分
-void HostManager::ProcessOne(
+HostFeedbackResult HostManager::ProcessOne(
     std::size_t shard_id, const std::string& host_name,
     const monitor::proto::MonitorInfo& info,
     std::chrono::system_clock::time_point received_at,
     std::chrono::steady_clock::time_point enqueued_at) {
+  constexpr std::size_t kFeedbackCacheEntriesPerHost = 16;
+  const bool has_sample_identity =
+      info.sample_sequence() != 0 && info.sample_timestamp_ms() > 0;
+  HostFeedbackCache* feedback_cache = nullptr;
+  if (has_sample_identity) {
+    auto& cache = shard_feedback_caches_[shard_id][host_name];
+    for (const auto& entry : cache.entries) {
+      if (entry.sequence == info.sample_sequence() &&
+          entry.timestamp_ms == info.sample_timestamp_ms()) {
+        return entry.result;
+      }
+    }
+    if (info.sample_timestamp_ms() < cache.latest_timestamp_ms ||
+        (info.sample_timestamp_ms() == cache.latest_timestamp_ms &&
+         info.sample_sequence() <= cache.latest_sequence)) {
+      return {};
+    }
+    feedback_cache = &cache;
+  }
+
+  const auto cache_result = [&](HostFeedbackResult result) {
+    if (!feedback_cache) return result;
+    feedback_cache->latest_timestamp_ms = info.sample_timestamp_ms();
+    feedback_cache->latest_sequence = info.sample_sequence();
+    feedback_cache->entries.push_back(
+        {info.sample_sequence(), info.sample_timestamp_ms(), result});
+    while (feedback_cache->entries.size() >
+           kFeedbackCacheEntriesPerHost) {
+      feedback_cache->entries.pop_front();
+    }
+    return result;
+  };
 
   // 一个 host 始终落到同一个 shard，因而 shard_perf_samples_[shard_id]
   // 的 previous/current 顺序成立，无需为每台主机增加独立锁。
-  const ScoreResult score_result = CalcScore(info);
+  const ScoreResult score_result = CalcResourceScore(info);
   const double score = score_result.score;
+  auto& health_engines = shard_health_engines_[shard_id];
+  auto [engine_it, inserted] =
+      health_engines.try_emplace(host_name, health_config_);
+  (void)inserted;
+  const health::HealthResult health_result =
+      engine_it->second.Evaluate(info, enqueued_at, score);
+  HostFeedbackResult feedback_result;
+  if (has_sample_identity && score_result.valid && health_result.valid &&
+      std::isfinite(health_result.anomaly_score)) {
+    feedback_result.host_name = host_name;
+    feedback_result.node_anomaly_score =
+        std::clamp(health_result.anomaly_score, 0.0, 1.0);
+    feedback_result.result_timestamp_ms = info.sample_timestamp_ms();
+    feedback_result.result_version = info.sample_sequence();
+    feedback_result.health_valid = true;
+  }
   if (!score_result.valid || !IsValidMonitorInfo(info)) {
     std::lock_guard<std::mutex> lock(mtx_);
-    host_scores_[host_name] =
-        HostScore{info, score, false, received_at};
-    return;
+    host_scores_[host_name] = HostScore{info, score, false, received_at,
+                                       health_result};
+    return cache_result(std::move(feedback_result));
   }
   const auto now = received_at;
   const auto queue_delay = std::chrono::steady_clock::now() - enqueued_at;
@@ -601,7 +682,8 @@ void HostManager::ProcessOne(
 
   PersistenceTask task;
   task.host_name = host_name;
-  task.host_score = HostScore{info, score, score_result.valid, now};
+  task.host_score =
+      HostScore{info, score, score_result.valid, now, health_result};
   task.net_in_rate = net_in_rate;
   task.net_out_rate = net_out_rate;
   task.cpu_percent_rate = rate(curr.cpu_percent, last.cpu_percent);
@@ -630,7 +712,10 @@ void HostManager::ProcessOne(
   }
 
   if (info.has_diagnostic()) {
-    const auto evidence = evidence_builder_.Build(info, now);
+    // Health signals enrich Evidence/RCA only. Worker state remains authoritative;
+    // there is deliberately no Manager -> Worker probe-control RPC.
+    const auto evidence =
+        evidence_builder_.Build(info, now, &health_result);
     const auto root_causes = root_cause_engine_.Evaluate(evidence);
     if (IsDiagnosticLogEnabled()) {
       std::cout << "[KernScopeManager] state="
@@ -739,6 +824,7 @@ void HostManager::ProcessOne(
                  "closed, or task exceeded the byte budget)"
               << std::endl;
   }
+  return cache_result(std::move(feedback_result));
 }
 
 bool HostManager::PersistTask(PersistenceTask task) {
@@ -793,6 +879,20 @@ std::string HostManager::GetBestHost() {
   return best_host;
 }
 
+std::string HostManager::GetHealthiestHost() {
+  std::lock_guard<std::mutex> lock(mtx_);
+  std::string healthiest_host;
+  double healthiest_score = -1;
+  for (const auto& [host, data] : host_scores_) {
+    if (!data.score_valid || !data.health.valid) continue;
+    if (data.health.health_score > healthiest_score) {
+      healthiest_score = data.health.health_score;
+      healthiest_host = host;
+    }
+  }
+  return healthiest_host;
+}
+
 std::vector<diagnostics::IncidentRecord> HostManager::GetIncidents(
     const std::string& server_name,
     std::chrono::system_clock::time_point start_time,
@@ -812,7 +912,8 @@ std::vector<diagnostics::IncidentRecord> HostManager::GetActiveIncidents(
   return incident_store_.Active(server_name);
 }
 
-ScoreResult HostManager::CalcScore(const monitor::proto::MonitorInfo& info) {
+ScoreResult HostManager::CalcResourceScore(
+    const monitor::proto::MonitorInfo& info) {
   ScoreResult result;
   if (!IsValidMonitorInfo(info)) return result;
   const double cpu_weight = 0.35;
@@ -959,7 +1060,10 @@ bool HostManager::WriteToMysql(
         << "idle_percent, io_wait_percent, irq_percent, soft_irq_percent, "
         << "load_avg_1, load_avg_3, load_avg_15, "
         << "mem_used_percent, total, free, avail, "
-        << "disk_util_percent, send_rate, rcv_rate, score, "
+        << "disk_util_percent, send_rate, rcv_rate, score, health_score, "
+           "resource_score, anomaly_score, anomaly_rate_5m, confidence, "
+           "health_state, health_model_state, health_valid, "
+           "health_top_signals, "
         << "cpu_percent_rate, usr_percent_rate, system_percent_rate, "
         << "nice_percent_rate, idle_percent_rate, io_wait_percent_rate, "
         << "irq_percent_rate, soft_irq_percent_rate, "
@@ -973,7 +1077,21 @@ bool HostManager::WriteToMysql(
         << "," << load_avg_1 << "," << load_avg_3 << "," << load_avg_15 << ","
         << mem_used_percent << "," << total << "," << free_mem << "," << avail
         << "," << disk_util_percent << "," << send_rate << "," << rcv_rate
-        << "," << host_score.score << "," << cpu_percent_rate << ","
+        << "," << host_score.score << ",";
+    if (host_score.health.valid) {
+      oss << host_score.health.health_score << "," << host_score.score << ","
+          << host_score.health.anomaly_score << ","
+          << host_score.health.anomaly_rate_5m << ","
+          << host_score.health.confidence << ",'" << host_score.health.state
+          << "','" << health::ModelStateName(host_score.health.model_state)
+          << "',1,'" << health::EncodeTopSignals(
+                              host_score.health.top_signals)
+          << "',";
+    } else {
+      oss << "NULL," << host_score.score
+          << ",NULL,NULL,NULL,NULL,NULL,0,NULL,";
+    }
+    oss << cpu_percent_rate << ","
         << usr_percent_rate << "," << system_percent_rate << ","
         << nice_percent_rate << "," << idle_percent_rate << ","
         << io_wait_percent_rate << "," << irq_percent_rate << ","

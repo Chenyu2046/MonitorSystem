@@ -20,6 +20,7 @@ set(DIAGNOSTICS_SOURCES
     src/diagnostics/observability_config.cpp
     src/diagnostics/anomaly_detector.cpp
     src/diagnostics/observability_state.cpp
+    src/diagnostics/remote_health_feedback.cpp
     src/diagnostics/probe_controller.cpp
     src/diagnostics/profile_session.cpp
     src/diagnostics/symbolizer.cpp

@@ -50,7 +50,8 @@ else()
 endif()
 
 target_include_directories(monitor_proto PUBLIC
-${CMAKE_CURRENT_BINARY_DIR})     # 生成的代码路径（build/proto/）
+${CMAKE_CURRENT_BINARY_DIR}
+${CMAKE_CURRENT_SOURCE_DIR})     # 生成代码和共享 proto helper 路径
 
 #
 # Compile protobuf and grpc files in mointor proto target to cpp

@@ -128,6 +128,7 @@ CollectStatus CpuStatMonitor::UpdateOnce(
     message->set_io_wait_percent(delta.io_wait * 100.0 / total);
     message->set_irq_percent(delta.irq * 100.0 / total);
     message->set_soft_irq_percent(delta.soft_irq * 100.0 / total);
+    message->set_sample_valid(true);
   }
   return CollectStatus::kOk;
 }

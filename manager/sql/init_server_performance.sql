@@ -32,7 +32,16 @@ CREATE TABLE IF NOT EXISTS server_performance (
     send_rate FLOAT DEFAULT 0,                -- 发送速率，单位：KiB/s
     rcv_rate FLOAT DEFAULT 0,                 -- 接收速率，单位：KiB/s
     -- 性能评分
-    score FLOAT DEFAULT 0,                    -- 综合评分，范围：0-100，分数越高性能越好
+    score FLOAT DEFAULT 0,                    -- 兼容字段：资源余量评分
+    health_score FLOAT NULL,
+    resource_score FLOAT NOT NULL DEFAULT 0,
+    anomaly_score FLOAT NULL,
+    anomaly_rate_5m FLOAT NULL,
+    confidence FLOAT NULL,
+    health_state VARCHAR(32) NULL,
+    health_model_state VARCHAR(16) NULL,
+    health_valid BOOLEAN NOT NULL DEFAULT FALSE,
+    health_top_signals TEXT NULL,
     -- CPU 变化率
     cpu_percent_rate FLOAT DEFAULT 0,         -- CPU总使用率变化率
     usr_percent_rate FLOAT DEFAULT 0,         -- 用户态CPU变化率

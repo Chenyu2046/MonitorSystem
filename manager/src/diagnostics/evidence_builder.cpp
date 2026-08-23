@@ -104,6 +104,28 @@ bool HasLockWaitStack(const monitor::proto::ProfileEntry& profile) {
   return false;
 }
 
+EvidenceType HealthEvidenceType(health::MetricId metric) {
+  switch (metric) {
+    case health::MetricId::kCpuAverage:
+    case health::MetricId::kCpuPeak:
+      return EvidenceType::kCpuUsage;
+    case health::MetricId::kIoWait:
+      return EvidenceType::kIoWait;
+    case health::MetricId::kLoadPerCpu:
+      return EvidenceType::kRunQueue;
+    case health::MetricId::kDiskUtil:
+      return EvidenceType::kDiskUtil;
+    case health::MetricId::kDiskLatency:
+      return EvidenceType::kDiskLatency;
+    case health::MetricId::kNetworkPps:
+      return EvidenceType::kNetPps;
+    case health::MetricId::kNetworkSoftIrqPerSec:
+      return EvidenceType::kSoftirqNetRx;
+    default:
+      return EvidenceType::kHealthAnomalySignal;
+  }
+}
+
 }  // namespace
 
 const char* EvidenceTypeName(EvidenceType type) {
@@ -140,13 +162,16 @@ const char* EvidenceTypeName(EvidenceType type) {
       return "offcpu_stack";
     case EvidenceType::kLockWaitStack:
       return "lock_wait_stack";
+    case EvidenceType::kHealthAnomalySignal:
+      return "health_anomaly_signal";
   }
   return "unknown";
 }
 
 std::vector<Evidence> EvidenceBuilder::Build(
     const monitor::proto::MonitorInfo& info,
-    std::chrono::system_clock::time_point timestamp) const {
+    std::chrono::system_clock::time_point timestamp,
+    const health::HealthResult* health_result) const {
   // EvidenceBuilder 不保存跨轮状态；它只解释当前 MonitorInfo，并把
   // 逐核/逐设备 max 与网络总包速率转换为本轮可组合证据。
   std::vector<Evidence> evidence;
@@ -312,6 +337,50 @@ std::vector<Evidence> EvidenceBuilder::Build(
         Add(&evidence, EvidenceType::kLockWaitStack, "DiagnosticSnapshot",
             lock_duration_ns, "ns", 1.0, timestamp, lock_detail);
       }
+    }
+  }
+  if (health_result && health_result->valid) {
+    const auto unit = [](health::MetricId metric) {
+      switch (metric) {
+        case health::MetricId::kCpuAverage:
+        case health::MetricId::kCpuPeak:
+        case health::MetricId::kIoWait:
+        case health::MetricId::kSoftIrqPercent:
+        case health::MetricId::kMemoryUsed:
+        case health::MetricId::kDiskUtil:
+          return "%";
+        case health::MetricId::kLoadPerCpu:
+          return "load/cpu";
+        case health::MetricId::kDiskLatency:
+          return "ms";
+        case health::MetricId::kDiskIops:
+          return "ops/s";
+        case health::MetricId::kNetworkPps:
+          return "pkt/s";
+        case health::MetricId::kNetworkRxThroughput:
+        case health::MetricId::kNetworkTxThroughput:
+          return "KiB/s";
+        case health::MetricId::kNetworkDropsPerSec:
+        case health::MetricId::kNetworkErrorsPerSec:
+        case health::MetricId::kNetworkSoftIrqPerSec:
+          return "events/s";
+      }
+      return "";
+    };
+    for (const auto& signal : health_result->top_signals) {
+      std::ostringstream detail;
+      detail << "threshold_available="
+             << (signal.detector.threshold_available ? 1 : 0)
+             << " threshold=" << signal.detector.threshold_score
+             << " mad=" << signal.detector.mad_score
+             << " ewma=" << signal.detector.ewma_score
+             << " votes=" << signal.detector.anomaly_votes
+             << " model="
+             << health::ModelStateName(signal.detector.model_state);
+      Add(&evidence, HealthEvidenceType(signal.metric),
+          "HealthScoreEngine", signal.value, unit(signal.metric),
+          signal.detector.anomaly_score, timestamp, detail.str(),
+          health::MetricName(signal.metric));
     }
   }
   return evidence;

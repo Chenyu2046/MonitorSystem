@@ -40,6 +40,7 @@ CollectStatus CpuLoadMonitor::UpdateOnce(
     cpu_load_msg->set_load_avg_1(load1);
     cpu_load_msg->set_load_avg_3(load5);
     cpu_load_msg->set_load_avg_15(load15);
+    cpu_load_msg->set_sample_valid(true);
     return CollectStatus::kOk;
 }
 }  // namespace monitor

@@ -9,6 +9,7 @@
  * 唤醒 not_empty_ 与 not_full_，为线程生命周期提供明确退出边界。
  */
 
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
@@ -29,6 +30,7 @@ template <typename T>
 class BoundedQueue {
  public:
   using WeightFn = std::function<std::size_t(const T&)>;
+  enum class PopResult { kItem, kTimeout, kClosed };
 
   BoundedQueue(std::size_t max_items, std::size_t max_bytes)
       : BoundedQueue(max_items, max_bytes,
@@ -113,6 +115,28 @@ class BoundedQueue {
     }
     not_full_.notify_all();
     return true;
+  }
+
+  /** @brief 限时等待元素；超时与关闭分开返回，供 shard 定时维护。 */
+  template <typename Rep, typename Period>
+  PopResult PopFor(T* value,
+                   const std::chrono::duration<Rep, Period>& timeout) {
+    if (!value) return PopResult::kClosed;
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      if (!not_empty_.wait_for(
+              lock, timeout,
+              [this] { return closed_ || !queue_.empty(); })) {
+        return PopResult::kTimeout;
+      }
+      if (queue_.empty()) return PopResult::kClosed;
+      Entry& entry = queue_.front();
+      *value = std::move(entry.value);
+      current_bytes_ -= entry.weight;
+      queue_.pop_front();
+    }
+    not_full_.notify_all();
+    return PopResult::kItem;
   }
 
   /** @brief 关闭队列并唤醒所有生产者/消费者。 */

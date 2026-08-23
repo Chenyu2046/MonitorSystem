@@ -4,7 +4,6 @@ package monitor.proto;
 // Worker -> Manager 的普通监控和诊断消息。repeated 字段保留 CPU 核、网卡、
 // 磁盘和 SoftIRQ 的逐实体粒度；Manager 再分别生成平均概览与异常 max-core。
 
-import "google/protobuf/empty.proto";
 import "net_info.proto";
 import "mem_info.proto";
 import "cpu_stat.proto";
@@ -99,11 +98,25 @@ message MonitorInfo{
   repeated NetInfo net_info = 8;
   repeated DiskInfo disk_info = 9;
   DiagnosticSnapshot diagnostic = 10;
+  // New Workers identify a sample so the asynchronous Manager can correlate
+  // health feedback with exactly the item processed by the host shard.
+  uint64 sample_sequence = 20;
+  int64 sample_timestamp_ms = 21;
+}
+
+// Optional Manager health feedback carried by the existing unary RPC. Old
+// servers return an empty payload and old clients ignore these additive tags.
+message MonitorFeedback {
+  string host_name = 1;
+  bool health_valid = 2;
+  double node_anomaly_score = 3;
+  int64 result_timestamp_ms = 4;
+  uint64 result_version = 5;
 }
 
 // Worker push / Manager receive。
 service GrpcManager {
   // 工作者推送监控数据给管理者
-  rpc SetMonitorInfo(MonitorInfo) returns (google.protobuf.Empty) {
+  rpc SetMonitorInfo(MonitorInfo) returns (MonitorFeedback) {
   }
 }

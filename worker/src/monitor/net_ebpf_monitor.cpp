@@ -402,6 +402,7 @@ CollectStatus NetEbpfMonitor::UpdateOnce(
     net->set_err_out(value.err_out);
     net->set_drop_in(value.drop_in);
     net->set_drop_out(value.drop_out);
+    net->set_sample_valid(true);
   }
   return CollectStatus::kOk;
 }

@@ -17,6 +17,7 @@
 #include "diagnostics/observability_config.h"
 #include "diagnostics/observability_state.h"
 #include "diagnostics/probe_controller.h"
+#include "diagnostics/remote_health_feedback.h"
 #include "diagnostics/profile_session.h"
 #include "diagnostics/symbolizer.h"
 #include "rpc/monitor_send_queue.h"
@@ -312,6 +313,38 @@ void TestMonitorSendQueuePriority() {
   assert(!drain.Pop(&output));
 }
 
+void TestRemoteHealthFeedbackIsConservativeAndMonotonic() {
+  monitor::diagnostics::RemoteHealthFeedback remote(
+      std::chrono::seconds(1));
+  monitor::proto::MonitorFeedback empty_from_old_server;
+  assert(!remote.Accept(empty_from_old_server, "host-a", 100000));
+
+  monitor::proto::MonitorFeedback feedback;
+  feedback.set_host_name("host-a");
+  feedback.set_health_valid(true);
+  feedback.set_node_anomaly_score(0.9);
+  feedback.set_result_timestamp_ms(99990);
+  feedback.set_result_version(2);
+  const auto received =
+      monitor::diagnostics::RemoteHealthFeedback::Clock::time_point{};
+  assert(!remote.Accept(feedback, "host-b", 100000, received));
+  assert(remote.Accept(feedback, "host-a", 100000, received));
+  assert(!remote.Accept(feedback, "host-a", 100000, received));
+
+  AnomalyResult local;
+  local.overall_score = 0.8;
+  ObservabilityConfig config;
+  auto merged = remote.Merge(local, "host-a", config, received);
+  assert(merged.overall_score == 0.9);
+  merged = remote.Merge(local, "host-a", config,
+                        received + std::chrono::seconds(2));
+  assert(merged.overall_score == local.overall_score);
+
+  feedback.set_result_version(3);
+  feedback.set_result_timestamp_ms(98000);
+  assert(!remote.Accept(feedback, "host-a", 100000, received));
+}
+
 }  // namespace
 
 int main() {
@@ -324,5 +357,6 @@ int main() {
   TestProfileStackFrames();
   TestProbeRuntimeStatusProto();
   TestMonitorSendQueuePriority();
+  TestRemoteHealthFeedbackIsConservativeAndMonotonic();
   return 0;
 }

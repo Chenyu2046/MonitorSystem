@@ -22,4 +22,5 @@ message DiskInfo {
   double avg_read_latency_ms = 24;
   double avg_write_latency_ms = 25;
   double util_percent = 26;
+  bool sample_valid = 30;
 }

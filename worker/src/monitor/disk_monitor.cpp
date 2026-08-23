@@ -143,6 +143,7 @@ CollectStatus DiskMonitor::UpdateOnce(
     disk->set_avg_read_latency_ms(read_ios > 0 ? read_time / read_ios : 0);
     disk->set_avg_write_latency_ms(write_ios > 0 ? write_time / write_ios : 0);
     disk->set_util_percent(io_time / (dt * 1000.0) * 100.0);
+    disk->set_sample_valid(true);
   }
   return CollectStatus::kOk;
 }

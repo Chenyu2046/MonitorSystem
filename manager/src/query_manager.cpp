@@ -8,6 +8,8 @@
  */
 
 #include "query_manager.h"
+#include "health/top_signal_codec.h"
+#include "mysql_schema.h"
 
 #include <algorithm>
 #include <array>
@@ -35,6 +37,60 @@ bool ParseFiniteDouble(const char* text, double* value) {
   }
   *value = parsed;
   return true;
+}
+
+bool ParseHealthColumns(MYSQL_ROW row, int* index,
+                        PerformanceRecord* record) {
+  double values[5]{};
+  bool valid = true;
+  for (double& value : values) {
+    valid = ParseFiniteDouble(row[*index], &value) && valid;
+    ++*index;
+  }
+  record->health_score = static_cast<float>(values[0]);
+  record->resource_score = static_cast<float>(values[1]);
+  record->anomaly_score = static_cast<float>(values[2]);
+  record->anomaly_rate_5m = static_cast<float>(values[3]);
+  record->confidence = static_cast<float>(values[4]);
+  record->state = row[*index] ? row[*index] : "";
+  ++*index;
+  record->model_state = row[*index] ? row[*index] : "";
+  ++*index;
+  const bool stored_valid = row[*index] && std::string(row[*index]) == "1";
+  ++*index;
+  record->top_signals =
+      health::DecodeTopSignals(row[*index] ? row[*index] : "");
+  ++*index;
+  record->health_valid = stored_valid && valid && !record->state.empty() &&
+                         !record->model_state.empty();
+  return record->health_valid;
+}
+
+bool ParseHealthColumns(MYSQL_ROW row, int* index,
+                        ServerScoreSummary* record) {
+  double values[5]{};
+  bool valid = true;
+  for (double& value : values) {
+    valid = ParseFiniteDouble(row[*index], &value) && valid;
+    ++*index;
+  }
+  record->health_score = static_cast<float>(values[0]);
+  record->resource_score = static_cast<float>(values[1]);
+  record->anomaly_score = static_cast<float>(values[2]);
+  record->anomaly_rate_5m = static_cast<float>(values[3]);
+  record->confidence = static_cast<float>(values[4]);
+  record->state = row[*index] ? row[*index] : "";
+  ++*index;
+  record->model_state = row[*index] ? row[*index] : "";
+  ++*index;
+  const bool stored_valid = row[*index] && std::string(row[*index]) == "1";
+  ++*index;
+  record->top_signals =
+      health::DecodeTopSignals(row[*index] ? row[*index] : "");
+  ++*index;
+  record->health_valid = stored_valid && valid && !record->state.empty() &&
+                         !record->model_state.empty();
+  return record->health_valid;
 }
 
 /** @brief 使用当前 MySQL 连接转义查询字符串。 */
@@ -86,6 +142,8 @@ diagnostics::EvidenceType ParseEvidenceType(const std::string& name) {
   if (name == "offcpu_stack") return diagnostics::EvidenceType::kOffCpuStack;
   if (name == "lock_wait_stack")
     return diagnostics::EvidenceType::kLockWaitStack;
+  if (name == "health_anomaly_signal")
+    return diagnostics::EvidenceType::kHealthAnomalySignal;
   return diagnostics::EvidenceType::kCpuUsage;
 }
 
@@ -135,6 +193,12 @@ bool QueryManager::Init(const std::string& host, const std::string& user,
 
   // 设置字符集
   mysql_set_character_set(conn_, "utf8mb4");
+  if (!EnsureOrdinarySchemaReady(conn_)) {
+    std::cerr << "QueryManager: incompatible ordinary schema" << std::endl;
+    mysql_close(conn_);
+    conn_ = nullptr;
+    return false;
+  }
   initialized_ = true;
   std::cout << "QueryManager: MySQL connection initialized" << std::endl;
   return true;
@@ -273,7 +337,11 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
          "system_percent, nice_percent, idle_percent, io_wait_percent, "
          "irq_percent, soft_irq_percent, load_avg_1, load_avg_3, load_avg_15, "
          "mem_used_percent, total, free, avail, disk_util_percent, "
-         "send_rate, rcv_rate, score, cpu_percent_rate, mem_used_percent_rate, "
+         "send_rate, rcv_rate, score, health_score, resource_score, "
+         "anomaly_score, anomaly_rate_5m, confidence, health_state, "
+         "health_model_state, health_valid, health_top_signals, "
+         "cpu_percent_rate, "
+         "mem_used_percent_rate, "
          "disk_util_percent_rate, load_avg_1_rate, send_rate_rate, rcv_rate_rate "
          "FROM server_performance WHERE server_name='"
       << server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
@@ -317,6 +385,7 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
     rec.send_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.rcv_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.score = row[i] ? std::atof(row[i]) : 0; i++;
+    ParseHealthColumns(row, &i, &rec);
     rec.cpu_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.mem_used_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.disk_util_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
@@ -378,6 +447,18 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
            "AVG(send_rate) as send_rate, "
            "AVG(rcv_rate) as rcv_rate, "
            "AVG(score) as score, "
+           "AVG(health_score) as health_score, "
+           "AVG(resource_score) as resource_score, "
+           "AVG(anomaly_score) as anomaly_score, "
+           "AVG(anomaly_rate_5m) as anomaly_rate_5m, "
+           "AVG(confidence) as confidence, "
+           "SUBSTRING_INDEX(GROUP_CONCAT(health_state ORDER BY timestamp "
+           "DESC), ',', 1) as health_state, "
+           "SUBSTRING_INDEX(GROUP_CONCAT(health_model_state ORDER BY "
+           "timestamp DESC), ',', 1) as health_model_state, "
+           "MIN(health_valid) as health_valid, "
+           "SUBSTRING_INDEX(GROUP_CONCAT(health_top_signals ORDER BY "
+           "timestamp DESC), ',', 1) as health_top_signals, "
            "AVG(cpu_percent_rate) as cpu_percent_rate, "
            "AVG(mem_used_percent_rate) as mem_used_percent_rate, "
            "AVG(disk_util_percent_rate) as disk_util_percent_rate, "
@@ -391,7 +472,10 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
     sql << "SELECT server_name, timestamp, cpu_percent, usr_percent, "
            "system_percent, io_wait_percent, load_avg_1, load_avg_3, "
            "load_avg_15, mem_used_percent, disk_util_percent, send_rate, "
-           "rcv_rate, score, cpu_percent_rate, mem_used_percent_rate, "
+           "rcv_rate, score, health_score, resource_score, anomaly_score, "
+           "anomaly_rate_5m, confidence, health_state, health_model_state, "
+           "health_valid, health_top_signals, cpu_percent_rate, "
+           "mem_used_percent_rate, "
            "disk_util_percent_rate, load_avg_1_rate "
            "FROM server_performance WHERE server_name='"
         << server_name << "' AND timestamp BETWEEN '" << start_time
@@ -428,6 +512,7 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
     rec.send_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.rcv_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.score = row[i] ? std::atof(row[i]) : 0; i++;
+    ParseHealthColumns(row, &i, &rec);
     rec.cpu_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.mem_used_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.disk_util_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
@@ -579,10 +664,9 @@ std::vector<AnomalyRecord> QueryManager::QueryAnomaly(
 }
 
 
-std::vector<ServerScoreSummary> QueryManager::QueryScoreRank(SortOrder order,
-                                                              int page,
-                                                              int page_size,
-                                                              int* total_count) {
+std::vector<ServerScoreSummary> QueryManager::QueryScoreRank(
+    SortOrder order, ScoreKind score_kind, int page, int page_size,
+    int* total_count) {
   std::vector<ServerScoreSummary> records;
 
 #ifdef ENABLE_MYSQL
@@ -595,8 +679,18 @@ std::vector<ServerScoreSummary> QueryManager::QueryScoreRank(SortOrder order,
   if (page_size < 1) page_size = 100;
 
   // 获取总数（不同服务器数量）
-  std::string count_sql =
-      "SELECT COUNT(DISTINCT server_name) FROM server_performance";
+  std::string count_sql;
+  if (score_kind == ScoreKind::HEALTH) {
+    count_sql =
+        "SELECT COUNT(*) FROM server_performance p1 INNER JOIN ("
+        "SELECT server_name, MAX(timestamp) AS max_ts FROM "
+        "server_performance GROUP BY server_name) p2 ON "
+        "p1.server_name=p2.server_name AND p1.timestamp=p2.max_ts "
+        "WHERE p1.health_valid=1";
+  } else {
+    count_sql =
+        "SELECT COUNT(DISTINCT server_name) FROM server_performance";
+  }
   if (total_count) {
     *total_count = GetTotalCount(count_sql);
   }
@@ -604,17 +698,25 @@ std::vector<ServerScoreSummary> QueryManager::QueryScoreRank(SortOrder order,
   // 查询每台服务器的最新数据并排序
   int offset = (page - 1) * page_size;
   std::string order_str = (order == SortOrder::ASC) ? "ASC" : "DESC";
+  const char* order_column =
+      score_kind == ScoreKind::HEALTH ? "p1.health_score"
+                                      : "p1.resource_score";
 
   std::ostringstream sql;
-  sql << "SELECT p1.server_name, p1.score, p1.timestamp, p1.cpu_percent, "
+  sql << "SELECT p1.server_name, p1.score, p1.health_score, "
+         "p1.resource_score, p1.anomaly_score, p1.anomaly_rate_5m, "
+         "p1.confidence, p1.health_state, p1.health_model_state, "
+         "p1.health_valid, p1.health_top_signals, p1.timestamp, "
+         "p1.cpu_percent, "
          "p1.mem_used_percent, p1.disk_util_percent, p1.load_avg_1 "
          "FROM server_performance p1 "
          "INNER JOIN ("
          "  SELECT server_name, MAX(timestamp) as max_ts "
          "  FROM server_performance GROUP BY server_name"
          ") p2 ON p1.server_name = p2.server_name AND p1.timestamp = p2.max_ts "
-         "ORDER BY p1.score "
-      << order_str << " LIMIT " << page_size << " OFFSET " << offset;
+      << (score_kind == ScoreKind::HEALTH ? "WHERE p1.health_valid=1 " : "")
+      << "ORDER BY " << order_column << " " << order_str << " LIMIT "
+      << page_size << " OFFSET " << offset;
 
   if (mysql_query(conn_, sql.str().c_str()) != 0) {
     std::cerr << "QueryManager: score rank query failed: " << mysql_error(conn_)
@@ -631,13 +733,21 @@ std::vector<ServerScoreSummary> QueryManager::QueryScoreRank(SortOrder order,
   MYSQL_ROW row;
   while ((row = mysql_fetch_row(result))) {
     ServerScoreSummary rec;
-    rec.server_name = row[0] ? row[0] : "";
-    rec.score = row[1] ? std::atof(row[1]) : 0;
-    rec.last_update = row[2] ? ParseTime(row[2]) : now;
-    rec.cpu_percent = row[3] ? std::atof(row[3]) : 0;
-    rec.mem_used_percent = row[4] ? std::atof(row[4]) : 0;
-    rec.disk_util_percent = row[5] ? std::atof(row[5]) : 0;
-    rec.load_avg_1 = row[6] ? std::atof(row[6]) : 0;
+    int i = 0;
+    rec.server_name = row[i] ? row[i] : "";
+    ++i;
+    rec.score = row[i] ? std::atof(row[i]) : 0;
+    ++i;
+    ParseHealthColumns(row, &i, &rec);
+    rec.last_update = row[i] ? ParseTime(row[i]) : now;
+    ++i;
+    rec.cpu_percent = row[i] ? std::atof(row[i]) : 0;
+    ++i;
+    rec.mem_used_percent = row[i] ? std::atof(row[i]) : 0;
+    ++i;
+    rec.disk_util_percent = row[i] ? std::atof(row[i]) : 0;
+    ++i;
+    rec.load_avg_1 = row[i] ? std::atof(row[i]) : 0;
 
     // 判断在线状态（60秒阈值）
     auto age = std::chrono::duration_cast<std::chrono::seconds>(
@@ -650,6 +760,7 @@ std::vector<ServerScoreSummary> QueryManager::QueryScoreRank(SortOrder order,
   mysql_free_result(result);
 #else
   (void)order;
+  (void)score_kind;
   (void)page;
   (void)page_size;
   (void)total_count;
@@ -671,7 +782,11 @@ std::vector<ServerScoreSummary> QueryManager::QueryLatestScore(
 
   // 查询每台服务器的最新数据
   std::string sql =
-      "SELECT p1.server_name, p1.score, p1.timestamp, p1.cpu_percent, "
+      "SELECT p1.server_name, p1.score, p1.health_score, p1.resource_score, "
+      "p1.anomaly_score, p1.anomaly_rate_5m, p1.confidence, "
+      "p1.health_state, p1.health_model_state, p1.health_valid, "
+      "p1.health_top_signals, "
+      "p1.timestamp, p1.cpu_percent, "
       "p1.mem_used_percent, p1.disk_util_percent, p1.load_avg_1 "
       "FROM server_performance p1 "
       "INNER JOIN ("
@@ -696,18 +811,31 @@ std::vector<ServerScoreSummary> QueryManager::QueryLatestScore(
   float max_score = -1;
   float min_score = 101;
   std::string best_server, worst_server;
+  float total_health_score = 0;
+  float max_health_score = -1;
+  float min_health_score = 101;
+  int valid_health_count = 0;
+  std::string healthiest_server, least_healthy_server;
   int online_count = 0, offline_count = 0;
 
   MYSQL_ROW row;
   while ((row = mysql_fetch_row(result))) {
     ServerScoreSummary rec;
-    rec.server_name = row[0] ? row[0] : "";
-    rec.score = row[1] ? std::atof(row[1]) : 0;
-    rec.last_update = row[2] ? ParseTime(row[2]) : now;
-    rec.cpu_percent = row[3] ? std::atof(row[3]) : 0;
-    rec.mem_used_percent = row[4] ? std::atof(row[4]) : 0;
-    rec.disk_util_percent = row[5] ? std::atof(row[5]) : 0;
-    rec.load_avg_1 = row[6] ? std::atof(row[6]) : 0;
+    int i = 0;
+    rec.server_name = row[i] ? row[i] : "";
+    ++i;
+    rec.score = row[i] ? std::atof(row[i]) : 0;
+    ++i;
+    ParseHealthColumns(row, &i, &rec);
+    rec.last_update = row[i] ? ParseTime(row[i]) : now;
+    ++i;
+    rec.cpu_percent = row[i] ? std::atof(row[i]) : 0;
+    ++i;
+    rec.mem_used_percent = row[i] ? std::atof(row[i]) : 0;
+    ++i;
+    rec.disk_util_percent = row[i] ? std::atof(row[i]) : 0;
+    ++i;
+    rec.load_avg_1 = row[i] ? std::atof(row[i]) : 0;
 
     // 判断在线状态（60秒阈值）
     auto age = std::chrono::duration_cast<std::chrono::seconds>(
@@ -731,6 +859,18 @@ std::vector<ServerScoreSummary> QueryManager::QueryLatestScore(
       min_score = rec.score;
       worst_server = rec.server_name;
     }
+    if (rec.health_valid) {
+      total_health_score += rec.health_score;
+      ++valid_health_count;
+      if (rec.health_score > max_health_score) {
+        max_health_score = rec.health_score;
+        healthiest_server = rec.server_name;
+      }
+      if (rec.health_score < min_health_score) {
+        min_health_score = rec.health_score;
+        least_healthy_server = rec.server_name;
+      }
+    }
 
     records.push_back(rec);
   }
@@ -746,6 +886,14 @@ std::vector<ServerScoreSummary> QueryManager::QueryLatestScore(
     stats->min_score = min_score < 101 ? min_score : 0;
     stats->best_server = best_server;
     stats->worst_server = worst_server;
+    stats->avg_health_score =
+        valid_health_count == 0 ? 0 : total_health_score / valid_health_count;
+    stats->max_health_score =
+        max_health_score >= 0 ? max_health_score : 0;
+    stats->min_health_score =
+        min_health_score <= 100 ? min_health_score : 0;
+    stats->healthiest_server = healthiest_server;
+    stats->least_healthy_server = least_healthy_server;
   }
 #else
   (void)stats;

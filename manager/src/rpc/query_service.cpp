@@ -8,6 +8,7 @@
  */
 
 #include "rpc/query_service.h"
+#include "rpc/health_score_mapper.h"
 
 #include "rpc/softirq_detail_mapper.h"
 
@@ -92,6 +93,7 @@ void QueryServiceImpl::SetTimestamp(
     proto_rec->set_send_rate(rec.send_rate);
     proto_rec->set_rcv_rate(rec.rcv_rate);
     proto_rec->set_score(rec.score);
+    PopulateHealthScoreFields(rec, proto_rec);
     proto_rec->set_cpu_percent_rate(rec.cpu_percent_rate);
     proto_rec->set_mem_used_percent_rate(rec.mem_used_percent_rate);
     proto_rec->set_disk_util_percent_rate(rec.disk_util_percent_rate);
@@ -141,6 +143,7 @@ void QueryServiceImpl::SetTimestamp(
     proto_rec->set_send_rate(rec.send_rate);
     proto_rec->set_rcv_rate(rec.rcv_rate);
     proto_rec->set_score(rec.score);
+    PopulateHealthScoreFields(rec, proto_rec);
     proto_rec->set_cpu_percent_rate(rec.cpu_percent_rate);
     proto_rec->set_mem_used_percent_rate(rec.mem_used_percent_rate);
     proto_rec->set_disk_util_percent_rate(rec.disk_util_percent_rate);
@@ -229,13 +232,18 @@ void QueryServiceImpl::SetTimestamp(
   if (page_size < 1) page_size = 100;
 
   int total_count = 0;
-  auto records =
-      query_manager_->QueryScoreRank(order, page, page_size, &total_count);
+  const ScoreKind score_kind =
+      request->score_kind() == monitor::proto::HEALTH_SCORE
+          ? ScoreKind::HEALTH
+          : ScoreKind::RESOURCE;
+  auto records = query_manager_->QueryScoreRank(
+      order, score_kind, page, page_size, &total_count);
 
   for (const auto& rec : records) {
     auto* proto_rec = response->add_servers();
     proto_rec->set_server_name(rec.server_name);
     proto_rec->set_score(rec.score);
+    PopulateHealthScoreFields(rec, proto_rec);
     SetTimestamp(proto_rec->mutable_last_update(), rec.last_update);
     proto_rec->set_status(rec.status == ServerStatus::ONLINE
                               ? ::monitor::proto::ONLINE
@@ -272,6 +280,7 @@ void QueryServiceImpl::SetTimestamp(
     auto* proto_rec = response->add_servers();
     proto_rec->set_server_name(rec.server_name);
     proto_rec->set_score(rec.score);
+    PopulateHealthScoreFields(rec, proto_rec);
     SetTimestamp(proto_rec->mutable_last_update(), rec.last_update);
     proto_rec->set_status(rec.status == ServerStatus::ONLINE
                               ? ::monitor::proto::ONLINE
@@ -291,6 +300,11 @@ void QueryServiceImpl::SetTimestamp(
   proto_stats->set_min_score(stats.min_score);
   proto_stats->set_best_server(stats.best_server);
   proto_stats->set_worst_server(stats.worst_server);
+  proto_stats->set_avg_health_score(stats.avg_health_score);
+  proto_stats->set_max_health_score(stats.max_health_score);
+  proto_stats->set_min_health_score(stats.min_health_score);
+  proto_stats->set_healthiest_server(stats.healthiest_server);
+  proto_stats->set_least_healthy_server(stats.least_healthy_server);
 
   return grpc::Status::OK;
 }

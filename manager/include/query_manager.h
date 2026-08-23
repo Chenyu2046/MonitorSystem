@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "diagnostics/incident_store.h"
+#include "health/health_types.h"
 
 #ifdef ENABLE_MYSQL
 #include <mysql/mysql.h>
@@ -27,6 +28,7 @@ namespace monitor {
 
 /** @brief 评分排序方向，与 query_api.proto 保持对应。 */
 enum class SortOrder { DESC = 0, ASC = 1 };
+enum class ScoreKind { RESOURCE = 0, HEALTH = 1 };
 
 /** @brief 查询结果中的服务器在线状态。 */
 enum class ServerStatus { ONLINE = 0, OFFLINE = 1 };
@@ -79,6 +81,15 @@ struct PerformanceRecord {
   float rcv_rate = 0;
   // 评分
   float score = 0;
+  float health_score = 0;
+  float resource_score = 0;
+  float anomaly_score = 0;
+  float anomaly_rate_5m = 0;
+  float confidence = 0;
+  std::string state;
+  std::string model_state;
+  bool health_valid = false;
+  std::vector<health::TopSignal> top_signals;
   // 变化率
   float cpu_percent_rate = 0;
   float mem_used_percent_rate = 0;
@@ -109,6 +120,15 @@ struct ServerScoreSummary {
   float mem_used_percent = 0;
   float disk_util_percent = 0;
   float load_avg_1 = 0;
+  float health_score = 0;
+  float resource_score = 0;
+  float anomaly_score = 0;
+  float anomaly_rate_5m = 0;
+  float confidence = 0;
+  std::string state;
+  std::string model_state;
+  bool health_valid = false;
+  std::vector<health::TopSignal> top_signals;
 };
 
 /** @brief 最新评分查询同时返回的集群聚合统计。 */
@@ -121,6 +141,11 @@ struct ClusterStats {
   float min_score = 0;
   std::string best_server;
   std::string worst_server;
+  float avg_health_score = 0;
+  float max_health_score = 0;
+  float min_health_score = 0;
+  std::string healthiest_server;
+  std::string least_healthy_server;
 };
 
 /** @brief 单网卡错误/丢弃和速率详细记录。 */
@@ -224,9 +249,9 @@ class QueryManager {
                                           int* total_count);
 
   /** @brief 按 score 升/降序分页查询服务器摘要。 */
-  std::vector<ServerScoreSummary> QueryScoreRank(SortOrder order, int page,
-                                                 int page_size,
-                                                 int* total_count);
+  std::vector<ServerScoreSummary> QueryScoreRank(
+      SortOrder order, ScoreKind score_kind, int page, int page_size,
+      int* total_count);
 
   /** @brief 查询每台服务器最新评分并生成集群统计。 */
   std::vector<ServerScoreSummary> QueryLatestScore(ClusterStats* stats);

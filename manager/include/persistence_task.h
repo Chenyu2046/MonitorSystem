@@ -16,6 +16,7 @@
 #include <string>
 
 #include "diagnostics/incident_store.h"
+#include "health/health_types.h"
 #include "monitor_info.pb.h"
 
 namespace monitor {
@@ -23,9 +24,10 @@ namespace monitor {
 /** @brief 主机当前 MonitorInfo、综合 score 和事件时间快照。 */
 struct HostScore {
   monitor::proto::MonitorInfo info;
-  double score;
+  double score = 0.0;  // Backward-compatible resource score alias.
   bool score_valid = false;
   std::chrono::system_clock::time_point timestamp;
+  health::HealthResult health;
 };
 
 /**
@@ -70,6 +72,9 @@ struct PersistenceTask {
 inline std::size_t EstimatePersistenceTaskBytes(const PersistenceTask& task) {
   std::size_t bytes = sizeof(PersistenceTask) + task.host_name.size() +
                       task.host_score.info.ByteSizeLong();
+  for (const auto& signal : task.host_score.health.top_signals) {
+    bytes += sizeof(signal);
+  }
   if (!task.incident) {
     return bytes;
   }

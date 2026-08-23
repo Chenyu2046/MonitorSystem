@@ -10,6 +10,8 @@
 
 #include "rpc/monitor_pusher.h"
 
+#include "canonical_host_key.h"
+
 #include <algorithm>
 #include <chrono>
 #include <climits>
@@ -322,6 +324,11 @@ MonitorPusher::MonitorPusher(const std::string& manager_address,
       interval_seconds_(interval_seconds),
       running_(false),
       observability_config_(MakeObservabilityConfig(interval_seconds)),
+      remote_health_feedback_(std::chrono::milliseconds(
+          std::max<std::int64_t>(
+              5000, static_cast<std::int64_t>(
+                        observability_config_.normal_interval_ms) *
+                        3))),
       anomaly_detector_(observability_config_),
       state_machine_(observability_config_),
       probe_controller_(observability_config_.ebpf_object_dir,
@@ -405,10 +412,18 @@ bool MonitorPusher::PushOnce() {
   if (collector_->CollectAll(&info) != CollectStatus::kOk) {
     return false;
   }
+  const auto sample_timestamp_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::system_clock::now().time_since_epoch())
+          .count();
+  info.set_sample_sequence(next_sample_sequence_++);
+  info.set_sample_timestamp_ms(sample_timestamp_ms);
 
   // ---------- 2. 根据基础指标计算异常程度 ----------
   // AnomalyDetector 输出逐核/逐设备 max 和整体 max 分数，不改写 info。
-  const auto anomaly = anomaly_detector_.Evaluate(info);
+  const auto local_anomaly = anomaly_detector_.Evaluate(info);
+  const auto anomaly = remote_health_feedback_.Merge(
+      local_anomaly, CanonicalHostKey(info), observability_config_);
   // ---------- 3. 推进异常诊断状态机 ----------
   // 状态转换依赖连续样本而非单次尖峰，避免瞬时抖动直接启用重型 Probe。
   state_machine_.Update(anomaly);
@@ -599,10 +614,15 @@ bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
     context.set_deadline(std::chrono::system_clock::now() +
                          std::chrono::milliseconds(
                              observability_config_.sender_rpc_deadline_ms));
-    google::protobuf::Empty response;
+    monitor::proto::MonitorFeedback response;
     const grpc::Status status =
         stub_->SetMonitorInfo(&context, info, &response);
     if (status.ok()) {
+      const auto now_ms =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch())
+              .count();
+      remote_health_feedback_.Accept(response, CanonicalHostKey(info), now_ms);
       return true;
     }
     if (!IsRetryable(status) ||

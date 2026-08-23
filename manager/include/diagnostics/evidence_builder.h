@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "health/health_types.h"
 #include "monitor_info.pb.h"
 
 namespace monitor::diagnostics {
@@ -34,6 +35,7 @@ enum class EvidenceType {
   kOnCpuStack,
   kOffCpuStack,
   kLockWaitStack,
+  kHealthAnomalySignal,
 };
 
 /**
@@ -68,7 +70,8 @@ class EvidenceBuilder {
   /** @brief 构造本轮所有可用证据，缺少某类字段时跳过该类。 */
   std::vector<Evidence> Build(
       const monitor::proto::MonitorInfo& info,
-      std::chrono::system_clock::time_point timestamp) const;
+      std::chrono::system_clock::time_point timestamp,
+      const health::HealthResult* health_result = nullptr) const;
 };
 
 }  // namespace monitor::diagnostics

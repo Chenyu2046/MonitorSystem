@@ -7,4 +7,5 @@ message CpuLoad {
     float load_avg_1 = 1;
     float load_avg_3 = 2;
     float load_avg_15 = 3;
+    bool sample_valid = 10;
   }

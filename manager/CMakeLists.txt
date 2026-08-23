@@ -22,6 +22,12 @@ set(MANAGER_SOURCES
     src/host_shard_executor.cpp
     src/persistence_worker.cpp
     src/mysql_timeout_config.cpp
+    src/mysql_schema.cpp
+    src/health/health_types.cpp
+    src/health/rolling_window.cpp
+    src/health/metric_detector.cpp
+    src/health/health_score_engine.cpp
+    src/health/top_signal_codec.cpp
     src/diagnostics/evidence_builder.cpp
     src/diagnostics/root_cause_engine.cpp
     src/diagnostics/incident_store.cpp
@@ -68,6 +74,7 @@ if(BUILD_TESTING)
         src/diagnostics/incident_store.cpp
         src/diagnostics/diagnostic_persistence.cpp
         src/mysql_timeout_config.cpp
+        src/health/health_types.cpp
     )
     target_include_directories(manager_diagnostics_test PRIVATE
         ${PROJECT_SOURCE_DIR}/manager/include
@@ -92,14 +99,38 @@ if(BUILD_TESTING)
         src/host_shard_executor.cpp
         src/persistence_worker.cpp
         src/mysql_timeout_config.cpp
+        src/health/health_types.cpp
+        src/health/rolling_window.cpp
+        src/health/metric_detector.cpp
+        src/health/health_score_engine.cpp
+        src/health/top_signal_codec.cpp
         src/diagnostics/evidence_builder.cpp
         src/diagnostics/root_cause_engine.cpp
         src/diagnostics/incident_store.cpp
         src/diagnostics/diagnostic_persistence.cpp
+        ${PROJECT_SOURCE_DIR}/worker/src/diagnostics/observability_config.cpp
+        ${PROJECT_SOURCE_DIR}/worker/src/diagnostics/anomaly_detector.cpp
+        ${PROJECT_SOURCE_DIR}/worker/src/diagnostics/observability_state.cpp
+        ${PROJECT_SOURCE_DIR}/worker/src/diagnostics/remote_health_feedback.cpp
     )
     target_include_directories(manager_cpu_overview_test PRIVATE
         ${PROJECT_SOURCE_DIR}/manager/include
+        ${PROJECT_SOURCE_DIR}/worker/include
     )
     target_link_libraries(manager_cpu_overview_test PRIVATE monitor_proto)
     add_test(NAME manager_cpu_overview_test COMMAND manager_cpu_overview_test)
+
+    add_executable(manager_health_score_test
+        tests/health_score_engine_test.cpp
+        src/health/health_types.cpp
+        src/health/rolling_window.cpp
+        src/health/metric_detector.cpp
+        src/health/health_score_engine.cpp
+        src/health/top_signal_codec.cpp
+    )
+    target_include_directories(manager_health_score_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/manager/include
+    )
+    target_link_libraries(manager_health_score_test PRIVATE monitor_proto)
+    add_test(NAME manager_health_score_test COMMAND manager_health_score_test)
 endif()

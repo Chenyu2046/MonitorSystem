@@ -26,6 +26,20 @@ const Evidence* Find(const std::vector<Evidence>& evidence, EvidenceType type,
   return nullptr;
 }
 
+const Evidence* FindHealth(const std::vector<Evidence>& evidence,
+                           EvidenceType type,
+                           double minimum_severity = 0.5) {
+  const Evidence* strongest = nullptr;
+  for (const auto& item : evidence) {
+    if (item.type == type && item.source == "HealthScoreEngine" &&
+        item.severity >= minimum_severity &&
+        (!strongest || item.severity > strongest->severity)) {
+      strongest = &item;
+    }
+  }
+  return strongest;
+}
+
 /** @brief 将命中证据的固定权重加入 confidence 并记录证据 ID。 */
 void AddMatch(const Evidence* item, double weight, double* score,
               std::vector<std::string>* ids) {
@@ -74,6 +88,8 @@ std::vector<RootCause> RootCauseEngine::Evaluate(
   const Evidence* load = Find(evidence, EvidenceType::kRunQueue, 0.5);
   const Evidence* io_wait = Find(evidence, EvidenceType::kIoWait);
   const Evidence* on_cpu = Find(evidence, EvidenceType::kOnCpuStack, 0.5);
+  const Evidence* health_cpu =
+      FindHealth(evidence, EvidenceType::kCpuUsage);
   double cpu_score = 0.0;
   std::vector<std::string> cpu_ids;
   AddMatch(cpu, 0.25, &cpu_score, &cpu_ids);
@@ -86,6 +102,9 @@ std::vector<RootCause> RootCauseEngine::Evaluate(
   if (cpu_ids.size() >= 3) {
     causes.push_back(
         MakeCause(RootCauseType::kCpuSaturation, cpu_score, cpu_ids));
+  } else if (health_cpu) {
+    causes.push_back(MakeCause(RootCauseType::kCpuSaturation,
+                               health_cpu->severity, {health_cpu->id}));
   }
 
   const Evidence* disk_util = Find(evidence, EvidenceType::kDiskUtil, 0.5);
@@ -95,6 +114,10 @@ std::vector<RootCause> RootCauseEngine::Evaluate(
       Find(evidence, EvidenceType::kBpfBlockLatency, 0.5);
   const Evidence* disk_io_wait = Find(evidence, EvidenceType::kIoWait, 0.5);
   const Evidence* off_cpu = Find(evidence, EvidenceType::kOffCpuStack, 0.5);
+  const Evidence* health_disk_util =
+      FindHealth(evidence, EvidenceType::kDiskUtil);
+  const Evidence* health_disk_latency =
+      FindHealth(evidence, EvidenceType::kDiskLatency);
   double disk_score = 0.0;
   std::vector<std::string> disk_ids;
   AddMatch(disk_io_wait, 0.25, &disk_score, &disk_ids);
@@ -105,6 +128,17 @@ std::vector<RootCause> RootCauseEngine::Evaluate(
   if (disk_ids.size() >= 3) {
     causes.push_back(
         MakeCause(RootCauseType::kDiskIoSaturation, disk_score, disk_ids));
+  } else {
+    const Evidence* health_disk =
+        !health_disk_latency ||
+                (health_disk_util && health_disk_util->severity >=
+                                         health_disk_latency->severity)
+            ? health_disk_util
+            : health_disk_latency;
+    if (health_disk) {
+      causes.push_back(MakeCause(RootCauseType::kDiskIoSaturation,
+                                 health_disk->severity, {health_disk->id}));
+    }
   }
 
   const Evidence* pps = Find(evidence, EvidenceType::kNetPps, 0.5);

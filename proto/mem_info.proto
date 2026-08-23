@@ -23,4 +23,5 @@ message MemInfo {
     float sReclaimable = 18;
     float sUnreclaim = 19;
     float used_percent = 31;       // percent
+    bool sample_valid = 40;
   }

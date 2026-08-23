@@ -139,6 +139,7 @@ CollectStatus CpuSoftIrqMonitor::UpdateOnce(
     message->set_sched(item.rates[7]);
     message->set_hrtimer(item.rates[8]);
     message->set_rcu(item.rates[9]);
+    message->set_sample_valid(true);
   }
   return CollectStatus::kOk;
 }

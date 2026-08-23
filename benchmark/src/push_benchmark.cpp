@@ -103,18 +103,23 @@ monitor::proto::MonitorInfo MakeRequest(const std::string& run_id, int worker_id
   cpu->set_cpu_percent(diagnostic ? 92.0f : 42.0f);
   cpu->set_usr_percent(30.0f);
   cpu->set_system_percent(12.0f);
+  cpu->set_sample_valid(true);
   info.mutable_cpu_load()->set_load_avg_1(diagnostic ? 8.0f : 1.0f);
+  info.mutable_cpu_load()->set_sample_valid(true);
   info.mutable_mem_info()->set_used_percent(55);
   info.mutable_mem_info()->set_total(16384);
   info.mutable_mem_info()->set_free(4096);
   info.mutable_mem_info()->set_avail(8192);
+  info.mutable_mem_info()->set_sample_valid(true);
   auto* net = info.add_net_info();
   net->set_name("eth0");
   net->set_send_rate(1024);
   net->set_rcv_rate(2048);
+  net->set_sample_valid(true);
   auto* disk = info.add_disk_info();
   disk->set_name("sda");
   disk->set_util_percent(20.0f);
+  disk->set_sample_valid(true);
   if (diagnostic) {
     auto* snapshot = info.mutable_diagnostic();
     snapshot->set_state(monitor::proto::OBSERVABILITY_DIAGNOSTIC);
@@ -174,7 +179,7 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_until(next);
         grpc::ClientContext context;
         context.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(5));
-        google::protobuf::Empty response;
+        monitor::proto::MonitorFeedback response;
         const auto begin = std::chrono::steady_clock::now();
         const grpc::Status status = stub->SetMonitorInfo(&context, request, &response);
         const auto latency = std::chrono::duration_cast<std::chrono::microseconds>(

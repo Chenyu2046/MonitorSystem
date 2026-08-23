@@ -97,6 +97,7 @@ CollectStatus MemMonitor::UpdateOnce(
   memory->set_kreclaimable(value("KReclaimable"));
   memory->set_sreclaimable(value("SReclaimable"));
   memory->set_sunreclaim(value("SUnreclaim"));
+  memory->set_sample_valid(true);
   return CollectStatus::kOk;
 }
 

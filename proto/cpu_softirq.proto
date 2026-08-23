@@ -15,4 +15,5 @@ message SoftIrq {
     float sched = 9;
     float hrtimer = 10;
     float rcu = 11;
+    bool sample_valid = 20;
   }

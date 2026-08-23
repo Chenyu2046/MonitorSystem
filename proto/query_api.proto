@@ -27,6 +27,12 @@ enum SortOrder {
     ASC = 1;   // 升序
 }
 
+// Rank 默认保持旧 resource score 语义；新客户端可显式按 health 排序。
+enum ScoreKind {
+    RESOURCE_SCORE = 0;
+    HEALTH_SCORE = 1;
+}
+
 // 服务器状态
 enum ServerStatus {
     ONLINE = 0;
@@ -64,6 +70,7 @@ message QueryAnomalyRequest {
 message QueryScoreRankRequest {
     SortOrder order = 1;
     Pagination pagination = 2;
+    ScoreKind score_kind = 3;
 }
 
 // 最新评分查询请求
@@ -111,6 +118,19 @@ message GetActiveDiagnosisResponse {
 
 // ========== 数据记录 ==========
 
+message HealthTopSignal {
+    string metric = 1;
+    double value = 2;
+    bool threshold_available = 3;
+    double threshold_score = 4;
+    double mad_score = 5;
+    double ewma_score = 6;
+    int32 anomaly_votes = 7;
+    double anomaly_score = 8;
+    bool anomalous = 9;
+    string model_state = 10;
+}
+
 // 主表性能快照，普通值和变化率字段共存。
 message PerformanceRecord {
     string server_name = 1;
@@ -152,6 +172,16 @@ message PerformanceRecord {
     float disk_util_percent_rate = 78;
     float send_rate_rate = 79;
     float rcv_rate_rate = 80;
+    // 自适应健康评分字段只追加新 tag；score 继续表示 resource score。
+    float health_score = 90;
+    float resource_score = 91;
+    float anomaly_score = 92;
+    float anomaly_rate_5m = 93;
+    float confidence = 94;
+    string state = 95;
+    bool health_valid = 96;
+    string model_state = 97;
+    repeated HealthTopSignal top_signals = 98;
 }
 
 // 基于历史阈值筛选得到的异常记录。
@@ -176,6 +206,15 @@ message ServerScoreSummary {
     float mem_used_percent = 11;
     float disk_util_percent = 12;
     float load_avg_1 = 13;
+    float health_score = 20;
+    float resource_score = 21;
+    float anomaly_score = 22;
+    float anomaly_rate_5m = 23;
+    float confidence = 24;
+    string state = 25;
+    bool health_valid = 26;
+    string model_state = 27;
+    repeated HealthTopSignal top_signals = 28;
 }
 
 // 最新评分查询的集群级聚合统计。
@@ -188,6 +227,11 @@ message ClusterStats {
     float min_score = 6;
     string best_server = 7;
     string worst_server = 8;
+    float avg_health_score = 20;
+    float max_health_score = 21;
+    float min_health_score = 22;
+    string healthiest_server = 23;
+    string least_healthy_server = 24;
 }
 
 
