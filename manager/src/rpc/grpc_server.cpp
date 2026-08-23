@@ -1,10 +1,10 @@
 /**
  * @file grpc_server.cpp
- * @brief Manager Worker-push gRPC handler 和兼容 pull 快照实现。
+ * @brief Manager Worker-push gRPC handler。
  *
- * SetMonitorInfo 的边界是 protobuf -> DataReceiveResult：先确保有界
- * HostManager 接收成功，再更新 host_data_；队列满返回 RESOURCE_EXHAUSTED，
- * 停止中返回 UNAVAILABLE，避免 RPC 看见“已接受”但实际丢失的假成功。
+ * SetMonitorInfo 的边界是 protobuf -> DataReceiveResult：确保有界
+ * HostManager 接收成功；队列满返回 RESOURCE_EXHAUSTED，停止中返回
+ * UNAVAILABLE，避免 RPC 看见“已接受”但实际丢失的假成功。
  */
 
 #include "rpc/grpc_server.h"
@@ -32,8 +32,7 @@ namespace monitor {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Missing hostname");
   }
 
-  // 先确认 Manager 已接受数据，再更新 Pull 查询使用的最新快照；这样
-  // 队列满/停止时不会把未入处理链的消息写入兼容快照。
+  // 先确认 Manager 已接受数据；队列满或停止时不报告假成功。
   if (callback_) {
     const DataReceiveResult result = callback_(*request);
     switch (result) {
@@ -51,41 +50,9 @@ namespace monitor {
     }
   }
 
-  {
-    std::lock_guard<std::mutex> lock(mtx_);
-    host_data_[hostname] = {*request, std::chrono::system_clock::now()};
-  }
-
   std::cout << "Received monitor data from: " << hostname << std::endl;
 
   return grpc::Status::OK;
-}
-
-::grpc::Status GrpcServerImpl::GetMonitorInfo(
-    ::grpc::ServerContext* context,
-    const ::google::protobuf::Empty* request,
-    ::monitor::proto::MonitorInfo* response) {
-  // 保留接口只返回第一个主机的数据（或空）；新 push 主链不依赖该读取。
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!host_data_.empty()) {
-    *response = host_data_.begin()->second.info;
-  }
-  return grpc::Status::OK;
-}
-
-std::unordered_map<std::string, HostData> GrpcServerImpl::GetAllHostData() {
-  std::lock_guard<std::mutex> lock(mtx_);
-  return host_data_;
-}
-
-bool GrpcServerImpl::GetHostData(const std::string& hostname, HostData* data) {
-  std::lock_guard<std::mutex> lock(mtx_);
-  auto it = host_data_.find(hostname);
-  if (it != host_data_.end()) {
-    *data = it->second;
-    return true;
-  }
-  return false;
 }
 
 }  // namespace monitor

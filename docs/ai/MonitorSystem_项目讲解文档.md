@@ -662,7 +662,7 @@ SetMonitorInfo(MonitorInfo) -> Response
 
 主链路是 Worker 主动调用该接口。
 
-需要注意：`.proto` 中也存在 `GetMonitorInfo`，但从当前 Worker 主逻辑看，实际主链路是 Push，`GetMonitorInfo` 更像早期 Pull 模型或测试接口残留。
+当前协议只保留 Worker 主动上报的 `SetMonitorInfo`，Manager 通过独立的查询服务提供历史与趋势读取。
 
 ### 6.2.2 Manager 对外查询服务
 
@@ -727,35 +727,19 @@ SetMonitorInfo 收到 MonitorInfo
 
 1. 校验 request 是否为空；
 2. 提取 hostname；
-3. 将最新数据写入内存 map；
-4. 触发 callback；
-5. 返回响应。
+3. 触发 callback；
+4. 返回响应。
 
 数据流：
 
 ```text
 Worker gRPC SetMonitorInfo
   -> GrpcServerImpl::SetMonitorInfo
-  -> host_data_[hostname] = request
   -> callback(request)
   -> HostManager::OnDataReceived
 ```
 
-### 7.2.1 为什么先缓存最新数据
-
-`host_data_` 可以理解为 Manager 内存态的“每台主机最新快照”。
-
-用途：
-
-- 快速查看当前状态；
-- 避免每次查询最新数据都访问数据库；
-- 为后续在线状态判断、调度选择、实时面板提供基础。
-
-当前实现还比较基础，没有完整的在线/离线判定逻辑，但这个设计方向是合理的。
-
----
-
-## 7.3 HostManager：Manager 的核心业务模块
+## 7.2 HostManager：Manager 的核心业务模块
 
 `HostManager` 的职责主要包括：
 

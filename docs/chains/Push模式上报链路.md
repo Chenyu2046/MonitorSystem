@@ -8,14 +8,11 @@
 
 - 当前 worker 主运行路径是主动 Push，不是 Manager 主动轮询。
 - worker 本地采集后组装 `MonitorInfo`，通过 gRPC `SetMonitorInfo` 推给 manager。
-- manager 收到后缓存最近一次原始数据，回调进入 `HostManager::OnDataReceived`，再做评分、更新在线状态和写 MySQL。
+- manager 收到后回调进入 `HostManager::OnDataReceived`，再做评分、更新在线状态和写 MySQL。
 - worker 推送失败后只打印错误并返回失败，下一轮继续采集和推送；当前没有本地队列、落盘缓存、重试退避或补传机制。
 - manager 侧后台线程每 60 秒检查一次在线主机状态，并删除超过 60 秒没有更新的主机。
 
-需要注意两个边界：
-
-- `proto/monitor_info.proto` 里仍保留了 `GetMonitorInfo` 这个 Pull 风格接口，manager 侧也有实现，但当前 worker 主链路没有使用它。
-- manager 不只是接收、评分、入库；当前进程里还注册了查询服务，并缓存了最近一次原始 `MonitorInfo`。面试时可以把“接收、评分、入库”作为主写链路讲，但不要说 manager 只有这三个职责。
+需要注意：manager 不只是接收、评分、入库；当前进程里还注册了查询服务。面试时可以把“接收、评分、入库”作为主写链路讲，但不要说 manager 只有这三个职责。
 
 ## 2. 为什么 Push 更适合当前场景
 
@@ -132,14 +129,7 @@ service GrpcManager {
 }
 ```
 
-同一个 proto 里也保留了 `GetMonitorInfo`：
-
-```proto
-rpc GetMonitorInfo(google.protobuf.Empty) returns (MonitorInfo) {
-}
-```
-
-所以严谨说法是：协议层保留了 Pull 风格接口，但当前 worker 主链路使用的是 `SetMonitorInfo` Push。
+该服务只定义 Worker 主动上报的 `SetMonitorInfo`，读取路径由独立的查询服务负责。
 
 ## 6. Manager 侧：接收、回调、评分和入库
 
@@ -173,8 +163,6 @@ builder.RegisterService(&query_service);
 Push 接收函数是 [`GrpcServerImpl::SetMonitorInfo()`](../../manager/src/rpc/grpc_server.cpp#L7)：
 
 ```cpp
-host_data_[hostname] = {*request, std::chrono::system_clock::now()};
-
 if (callback_) {
   callback_(*request);
 }
@@ -182,7 +170,7 @@ if (callback_) {
 return grpc::Status::OK;
 ```
 
-这里先缓存最近一次原始 `MonitorInfo`，再调用回调进入 `HostManager`。
+这里校验主机标识后调用回调进入 `HostManager`。
 
 `HostManager::OnDataReceived()` 位于 [manager/src/host_manager.cpp:126](../../manager/src/host_manager.cpp#L126)。它完成几件事：
 
@@ -277,13 +265,10 @@ manager 侧也没有把 MySQL 写入结果反馈给 worker。`GrpcServerImpl::Se
 | `PushOnce` 组装 `MonitorInfo` 并调用 `SetMonitorInfo` | [monitor_pusher.cpp:57](../../worker/src/rpc/monitor_pusher.cpp#L57) |
 | `MonitorInfo` 数据结构 | [monitor_info.proto:86](../../proto/monitor_info.proto#L86) |
 | Push RPC `SetMonitorInfo` 定义 | [monitor_info.proto:97](../../proto/monitor_info.proto#L97) |
-| 保留的 Pull 风格 `GetMonitorInfo` 定义 | [monitor_info.proto:102](../../proto/monitor_info.proto#L102) |
 | manager 绑定接收回调到 `HostManager::OnDataReceived` | [manager/src/main.cpp:34](../../manager/src/main.cpp#L34) |
 | manager Push 接收入口 `GrpcServerImpl::SetMonitorInfo` | [grpc_server.cpp:7](../../manager/src/rpc/grpc_server.cpp#L7) |
-| manager 保留的 `GetMonitorInfo` 实现 | [grpc_server.cpp:40](../../manager/src/rpc/grpc_server.cpp#L40) |
 | `HostManager::OnDataReceived` 处理上报数据 | [host_manager.cpp:126](../../manager/src/host_manager.cpp#L126) |
 | 更新在线评分缓存并写 MySQL | [host_manager.cpp:218](../../manager/src/host_manager.cpp#L218) |
 | 健康评分函数 `CalcScore` | [host_manager.cpp:316](../../manager/src/host_manager.cpp#L316) |
 | MySQL 写入函数 `WriteToMysql` | [host_manager.cpp:382](../../manager/src/host_manager.cpp#L382) |
 | 60 秒离线清理逻辑 | [host_manager.cpp:107](../../manager/src/host_manager.cpp#L107) |
-

@@ -101,13 +101,9 @@ message MonitorInfo{
   DiagnosticSnapshot diagnostic = 10;
 }
 
-// Worker push / Manager receive，以及保留的 Manager -> Worker pull RPC。
+// Worker push / Manager receive。
 service GrpcManager {
   // 工作者推送监控数据给管理者
   rpc SetMonitorInfo(MonitorInfo) returns (google.protobuf.Empty) {
-  }
-  
-  // 保留：管理者主动获取监控数据（可选）
-  rpc GetMonitorInfo(google.protobuf.Empty) returns (MonitorInfo) {
   }
 }

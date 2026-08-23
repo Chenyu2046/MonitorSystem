@@ -39,11 +39,11 @@
 
 核心中间结构是 `monitor::proto::MonitorInfo`，定义在 `proto/monitor_info.proto`。`MetricCollector::CollectAll` 会先 `set_name(hostname_)`，再让各 monitor 写入 `cpu_load`、`cpu_stat`、`soft_irq`、`mem_info`、`net_info`、`disk_info`、`host_info`。
 
-进入 manager 后，`GrpcServerImpl::SetMonitorInfo` 会把原始 `MonitorInfo` 缓存在 `host_data_`。随后 `HostManager::OnDataReceived` 把它转换成 `HostScore{info, score, timestamp}`，并计算 `PerfSample` 变化率。
+进入 manager 后，`GrpcServerImpl::SetMonitorInfo` 校验主机标识并通过回调将原始 `MonitorInfo` 交给 `HostManager::OnDataReceived`。后者把它转换成 `HostScore{info, score, timestamp}`，并计算 `PerfSample` 变化率。
 
 最终输出：
 
-1. manager 内存态：`GrpcServerImpl::host_data_` 和 `HostManager::host_scores_`
+1. manager 内存态：`HostManager::host_scores_`
 2. MySQL 持久化：`server_performance`、`server_net_detail`、`server_softirq_detail`、`server_mem_detail`、`server_disk_detail`
 3. gRPC 返回：`GrpcServerImpl::SetMonitorInfo` 返回 `grpc::Status::OK`，worker 侧 `PushOnce` 返回 `true`
 
@@ -65,7 +65,6 @@
 
 `manager` 侧：
 
-- `GrpcServerImpl::host_data_`：以 hostname 为 key 缓存最近一次原始上报
 - `HostManager::host_scores_`：以 `hostname_ip` 或 hostname 为 key 缓存评分和时间戳
 - `last_perf_samples`：文件级静态 map，用于计算 CPU/内存/负载/网络变化率
 - `last_net_samples`、`last_softirq_samples`、`last_mem_samples`、`last_disk_samples`：文件级静态 map，用于各详情表变化率
@@ -95,7 +94,7 @@
 
 并发：
 
-`GrpcServerImpl::host_data_` 和 `HostManager::host_scores_` 都有 mutex 保护，这是正向设计。但 `HostManager::OnDataReceived` 里更新的多个文件级 `static std::map` 没有锁，比如 `last_perf_samples`、`last_net_samples` 等。如果 gRPC server 并发处理多个 worker 上报，这些变化率缓存存在数据竞争风险。
+`HostManager::host_scores_` 有 mutex 保护，但 `HostManager::OnDataReceived` 里更新的多个文件级 `static std::map` 没有锁，比如 `last_perf_samples`、`last_net_samples` 等。如果 gRPC server 并发处理多个 worker 上报，这些变化率缓存存在数据竞争风险。
 
 生命周期：
 

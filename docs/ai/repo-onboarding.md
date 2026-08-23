@@ -34,9 +34,6 @@
 | `manager/sql/` | MySQL 表结构定义 | 高 | 是 |
 | `manager/include/` | manager 核心接口声明 | 中 | 选择性深入 |
 | `worker/include/` | worker 采集器与 RPC 接口声明 | 中 | 选择性深入 |
-| `worker/src/monitor/user_monitor.cpp` | 用户态监控代码，但当前未接入主构建链路 | 低 | 否 |
-| `worker/src/rpc/grpc_manager_impl.cpp` | 旧的 pull 模式服务实现，当前未接入主构建链路 | 低 | 否 |
-| `manager/src/rpc/rpc_client.cpp` | 旧的 pull 模式客户端实现，当前未接入主构建链路 | 低 | 否 |
 
 # 3. Build & Run Map
 
@@ -339,7 +336,6 @@ flowchart LR
 
 - 全局状态 / 单例 / Manager  
   - `HostManager::host_scores_`：当前在线主机分数快照，受 `mtx_` 保护
-  - `GrpcServerImpl::host_data_`：按主机缓存最近一次 Push 的原始 `MonitorInfo`，受 `mtx_` 保护
   - `QueryManager::conn_`：单个 MySQL 连接，受 `mtx_` 保护
   - `HostManager` 文件内多个 `static std::map`：保存上次采样，用于计算变化率  
     包括 `last_perf_samples`、`last_net_samples`、`last_softirq_samples`、`last_mem_samples`、`last_disk_samples`
@@ -372,14 +368,14 @@ flowchart LR
     - TC ingress/egress hooks 挂在各网卡
 
 - 状态流转关系  
-  `内核/系统指标` -> `worker monitor 缓存` -> `MonitorInfo` -> `manager gRPC 接收缓存` -> `HostManager 在线快照/评分` -> `MySQL 历史表` -> `QueryManager 查询结果`
+  `内核/系统指标` -> `worker monitor 缓存` -> `MonitorInfo` -> `GrpcServerImpl` -> `HostManager 在线快照/评分` -> `MySQL 历史表` -> `QueryManager 查询结果`
 
 # 9. Risk Points
 
 从工程风险角度看，这个仓库的主要风险不在“功能看不懂”，而在运行时和工程质量边界。
 
 - 并发风险  
-  - `GrpcServerImpl::SetMonitorInfo()` 可能被并发调用；它对 `host_data_` 加锁了，但回调 `callback_(*request)` 在锁外执行，回调内部再操作 `HostManager`，这一点本身可接受
+  - `GrpcServerImpl::SetMonitorInfo()` 可能被并发调用，并在校验后调用 `callback_(*request)` 进入 `HostManager`
   - `HostManager::OnDataReceived()` 会更新多个文件级 `static std::map`，但这些 map 没有统一锁保护；如果 gRPC server 并发接收多个 worker，上述变化率缓存存在数据竞争风险
   - `QueryManager` 通过 `mtx_` 串行化所有 MySQL 查询，线程安全较保守，但查询吞吐会被单连接瓶颈限制
 
@@ -407,7 +403,7 @@ flowchart LR
 - 可测试性风险  
   - 仓库缺少成体系单元测试/集成测试
   - 采集逻辑高度依赖 Linux `/proc`、`/dev`、TC hook、BPF map、MySQL，mock 难度较高
-  - `worker/src/monitor/test_user_monitor.cpp`、`worker/src/ebpf/test_net_ebpf.cpp` 更像手工验证程序，不是自动测试体系
+  - `worker/src/ebpf/test_net_ebpf.cpp` 更像手工验证程序，不是自动测试体系
 
 # 10. Recommended Reading Order
 
@@ -446,8 +442,8 @@ flowchart LR
 
 ## 附：本轮已确认的几个关键判断
 
-- 当前主架构是 `Push 模式`，不是 Pull 模式。  
-  证据：`worker/src/rpc/monitor_pusher.cpp` 调用 `SetMonitorInfo()`，`manager/src/rpc/grpc_server.cpp` 实现 `SetMonitorInfo()`；而旧的 `GetMonitorInfo()` pull 路径虽然还在仓库中，但未进入当前主构建和主运行链路。
+- 当前架构是 `Push 模式`。
+  证据：`worker/src/rpc/monitor_pusher.cpp` 调用 `SetMonitorInfo()`，`manager/src/rpc/grpc_server.cpp` 实现 `SetMonitorInfo()`。
 
 - `worker` 的网络采集存在双路径：  
   优先 `eBPF`，依赖不满足时回退到 `/proc/net/dev`。  
@@ -457,7 +453,3 @@ flowchart LR
   证据：  
   - 查询侧：`QueryManager::Init()` 初始化单连接  
   - 写入侧：`HostManager::WriteToMysql()` 每次调用单独创建和关闭连接
-
-- 有一些历史代码未接入主链路：  
-  `worker/src/rpc/grpc_manager_impl.cpp`、`manager/src/rpc/rpc_client.cpp`、`worker/src/monitor/user_monitor.cpp`。  
-  这一点在下一轮 function onboarding 时要避免误读成现网主流程。

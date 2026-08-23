@@ -409,7 +409,7 @@ Manager 的 gRPC 接收层通过回调把数据交给 `HostManager`，降低网�
 
 ### 02. 线程安全如何保证？
 
-已经加锁的部分包括：gRPC 接收缓存 `host_data_` 和 Manager 的评分缓存 `host_scores_`。接收层会在释放缓存锁后再调用业务回调，避免持锁执行评分和数据库写入。
+已经加锁的部分包括 Manager 的评分缓存 `host_scores_`。gRPC 接收层校验后会调用业务回调，不在接收层持有额外的数据缓存锁。
 
 当前不完整的部分是用于计算变化率以及保存网络、内存、磁盘和 SoftIRQ 历史样本的文件级静态 Map。多个 Worker 并发上报时，这些 Map 存在数据竞争风险。
 
@@ -421,7 +421,7 @@ Manager 的 gRPC 接收层通过回调把数据交给 `HostManager`，降低网�
 
 Worker 的 `MonitorPusher::PushOnce` 创建 `MonitorInfo`，调用 `MetricCollector::CollectAll`，各采集器填充不同指标，然后调用 gRPC `SetMonitorInfo`。
 
-Manager 的 `GrpcServerImpl::SetMonitorInfo` 接收并缓存数据，再通过回调进入 `HostManager::OnDataReceived`，完成评分、最新状态更新、变化率计算和主表、明细表写入。
+Manager 的 `GrpcServerImpl::SetMonitorInfo` 接收并校验数据，再通过回调进入 `HostManager::OnDataReceived`，完成评分、最新状态更新、变化率计算和主表、明细表写入。
 
 当前 MySQL 写入失败不会改变 gRPC 的成功返回，因此 Worker 感知到的是“Manager 已接收”，不是严格的“数据已经可靠落库”。
 
