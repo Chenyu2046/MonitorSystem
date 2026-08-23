@@ -48,3 +48,16 @@ manager/manager
 
 # Local benchmark output
 benchmark/results/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Trellis runtime state
+.trellis/.runtime/
+
+# Sensitive local files
+/Claude.reg
+
+# Local test binaries
+/worker/src/ebpf/test_net_ebpf
