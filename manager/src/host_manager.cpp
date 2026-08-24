@@ -571,37 +571,43 @@ HostFeedbackResult HostManager::ProcessOne(
     std::chrono::system_clock::time_point received_at,
     std::chrono::steady_clock::time_point enqueued_at) {
   constexpr std::size_t kFeedbackCacheEntriesPerHost = 16;
+  const bool monitor_valid = IsValidMonitorInfo(info);
   const bool has_sample_identity = info.sample_sequence() != 0;
   HostFeedbackCache* feedback_cache = nullptr;
   if (has_sample_identity) {
-    auto& cache = shard_feedback_caches_[shard_id][host_name];
-    for (const auto& entry : cache.entries) {
-      if (entry.sequence == info.sample_sequence() &&
-          entry.session_id == info.sample_session_id() &&
-          (info.sample_session_id().empty()
-               ? entry.timestamp_ms == info.sample_timestamp_ms()
-               : true)) {
-        return entry.result;
+    auto& feedback_map = shard_feedback_caches_[shard_id];
+    const auto cache_it = feedback_map.find(host_name);
+    if (cache_it != feedback_map.end()) {
+      auto& cache = cache_it->second;
+      for (const auto& entry : cache.entries) {
+        if (entry.sequence == info.sample_sequence() &&
+            entry.session_id == info.sample_session_id() &&
+            (info.sample_session_id().empty()
+                 ? entry.timestamp_ms == info.sample_timestamp_ms()
+                 : true)) {
+          return entry.result;
+        }
       }
-    }
-    if (!info.sample_session_id().empty()) {
-      if (std::find(cache.retired_session_ids.begin(),
-                    cache.retired_session_ids.end(),
-                    info.sample_session_id()) !=
-          cache.retired_session_ids.end()) {
+      if (!info.sample_session_id().empty()) {
+        if (std::find(cache.retired_session_ids.begin(),
+                      cache.retired_session_ids.end(),
+                      info.sample_session_id()) !=
+            cache.retired_session_ids.end()) {
+          return {};
+        }
+        if (cache.latest_session_id == info.sample_session_id() &&
+            info.sample_sequence() <= cache.latest_sequence) {
+          return {};
+        }
+      } else if (!cache.latest_session_id.empty()) {
+        return {};
+      } else if (info.sample_timestamp_ms() < cache.latest_timestamp_ms ||
+                 (info.sample_timestamp_ms() == cache.latest_timestamp_ms &&
+                  info.sample_sequence() <= cache.latest_sequence)) {
         return {};
       }
-      if (cache.latest_session_id == info.sample_session_id() &&
-          info.sample_sequence() <= cache.latest_sequence) {
-        return {};
-      }
-    } else if (cache.latest_session_id.empty() &&
-               (info.sample_timestamp_ms() < cache.latest_timestamp_ms ||
-                (info.sample_timestamp_ms() == cache.latest_timestamp_ms &&
-                 info.sample_sequence() <= cache.latest_sequence))) {
-      return {};
+      feedback_cache = &cache;
     }
-    feedback_cache = &cache;
   }
 
   const auto cache_result = [&](HostFeedbackResult result) {
@@ -632,7 +638,6 @@ HostFeedbackResult HostManager::ProcessOne(
 
   // 一个 host 始终落到同一个 shard，因而 shard_perf_samples_[shard_id]
   // 的 previous/current 顺序成立，无需为每台主机增加独立锁。
-  const bool monitor_valid = IsValidMonitorInfo(info);
   const ScoreResult score_result =
       monitor_valid ? CalcResourceScore(info) : ScoreResult{};
   const double score = score_result.score;
@@ -666,7 +671,13 @@ HostFeedbackResult HostManager::ProcessOne(
     std::lock_guard<std::mutex> lock(mtx_);
     host_scores_[host_name] = HostScore{info, score, false, received_at,
                                        health_result};
-    return cache_result(std::move(feedback_result));
+    return feedback_result;
+  }
+  if (has_sample_identity && !feedback_cache) {
+    auto& feedback_map = shard_feedback_caches_[shard_id];
+    auto [cache_it, inserted] = feedback_map.try_emplace(host_name);
+    (void)inserted;
+    feedback_cache = &cache_it->second;
   }
   const auto now = received_at;
   const auto queue_delay = std::chrono::steady_clock::now() - enqueued_at;

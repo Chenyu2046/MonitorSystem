@@ -634,6 +634,76 @@ void TestSessionSequenceSurvivesClockRollback() {
   manager.Stop();
 }
 
+void TestInvalidSessionDoesNotTransitionState() {
+  monitor::HostManager manager;
+  assert(manager.Start());
+  constexpr char kHost[] = "invalid-session-transition-host";
+  const auto base_timestamp = NowUnixMs();
+
+  auto submit = [&](std::uint64_t sequence, const char* session,
+                    bool valid, std::int64_t timestamp) {
+    auto info = MakeInfo(kHost, 4, 30.0F, 0.1F);
+    SetSampleIdentity(&info, sequence, session);
+    info.set_sample_timestamp_ms(timestamp);
+    if (!valid) {
+      info.mutable_disk_info(0)->set_util_percent(
+          std::numeric_limits<float>::quiet_NaN());
+    }
+    monitor::proto::MonitorFeedback feedback;
+    assert(manager.SubmitWithFeedback(
+               info, std::chrono::system_clock::now() +
+                          std::chrono::seconds(2),
+               &feedback) == monitor::DataReceiveResult::kAccepted);
+    return feedback;
+  };
+
+  const auto a100 = submit(100, "session-a", true, base_timestamp + 100);
+  assert(a100.health_valid());
+  const auto invalid_b1 =
+      submit(1, "session-b", false, base_timestamp + 200);
+  assert(!invalid_b1.health_valid());
+  const auto a101 = submit(101, "session-a", true, base_timestamp + 300);
+  assert(a101.health_valid());
+  const auto b2 = submit(2, "session-b", true, base_timestamp + 400);
+  assert(b2.health_valid());
+  const auto retired_a102 =
+      submit(102, "session-a", true, base_timestamp + 500);
+  assert(!retired_a102.health_valid());
+  assert(manager.ProcessedCount() == 3);
+  manager.Stop();
+}
+
+void TestModernSessionRejectsLegacyRollback() {
+  monitor::HostManager manager;
+  assert(manager.Start());
+  constexpr char kHost[] = "modern-legacy-transition-host";
+  const auto base_timestamp = NowUnixMs();
+
+  auto submit = [&](std::uint64_t sequence, const char* session,
+                    std::int64_t timestamp) {
+    auto info = MakeInfo(kHost, 4, 30.0F, 0.1F);
+    SetSampleIdentity(&info, sequence, session);
+    info.set_sample_timestamp_ms(timestamp);
+    monitor::proto::MonitorFeedback feedback;
+    assert(manager.SubmitWithFeedback(
+               info, std::chrono::system_clock::now() +
+                          std::chrono::seconds(2),
+               &feedback) == monitor::DataReceiveResult::kAccepted);
+    return feedback;
+  };
+
+  const auto legacy1 = submit(1, "", base_timestamp + 100);
+  assert(legacy1.health_valid());
+  const auto modern_b1 = submit(1, "session-b", base_timestamp + 200);
+  assert(modern_b1.health_valid());
+  const auto delayed_legacy2 = submit(2, "", base_timestamp + 300);
+  assert(!delayed_legacy2.health_valid());
+  const auto modern_b2 = submit(2, "session-b", base_timestamp + 400);
+  assert(modern_b2.health_valid());
+  assert(manager.ProcessedCount() == 3);
+  manager.Stop();
+}
+
 void TestInvalidFrameDoesNotTrainHealthHistory() {
   monitor::HostManager manager;
   assert(manager.Start());
@@ -879,6 +949,7 @@ void TestHealthStateExpiresWithoutNewTraffic() {
                                std::chrono::milliseconds(30));
   assert(manager.Start());
   auto info = MakeInfo("no-traffic-stale-host", 2, 20.0F, 0.1F);
+  SetSampleIdentity(&info, 1, "session-modern");
   assert(manager.Submit(info) == monitor::DataReceiveResult::kAccepted);
   WaitForScore(&manager, "no-traffic-stale-host");
   for (int attempt = 0;
@@ -886,6 +957,16 @@ void TestHealthStateExpiresWithoutNewTraffic() {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   assert(manager.HealthStateEvictedCount() == 1);
+
+  auto legacy = MakeInfo("no-traffic-stale-host", 2, 20.0F, 0.1F);
+  SetSampleIdentity(&legacy, 1, "");
+  monitor::proto::MonitorFeedback legacy_feedback;
+  assert(manager.SubmitWithFeedback(
+             legacy, std::chrono::system_clock::now() +
+                         std::chrono::seconds(2),
+             &legacy_feedback) == monitor::DataReceiveResult::kAccepted);
+  assert(legacy_feedback.health_valid());
+  assert(manager.ProcessedCount() == 2);
   manager.Stop();
 }
 
@@ -908,6 +989,8 @@ int main() {
   TestManagerFeedbackDrivesRelativeAnomalyState();
   TestTrackedFeedbackIsPerWorkItemAndDeduplicated();
   TestSessionSequenceSurvivesClockRollback();
+  TestInvalidSessionDoesNotTransitionState();
+  TestModernSessionRejectsLegacyRollback();
   TestInvalidFrameDoesNotTrainHealthHistory();
   TestSameHostnameDifferentIpIsIsolated();
   TestTimedOutFeedbackRetryUsesCachedWorkResult();
