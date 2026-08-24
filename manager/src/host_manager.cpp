@@ -585,6 +585,12 @@ HostFeedbackResult HostManager::ProcessOne(
       }
     }
     if (!info.sample_session_id().empty()) {
+      if (std::find(cache.retired_session_ids.begin(),
+                    cache.retired_session_ids.end(),
+                    info.sample_session_id()) !=
+          cache.retired_session_ids.end()) {
+        return {};
+      }
       if (cache.latest_session_id == info.sample_session_id() &&
           info.sample_sequence() <= cache.latest_sequence) {
         return {};
@@ -600,6 +606,17 @@ HostFeedbackResult HostManager::ProcessOne(
 
   const auto cache_result = [&](HostFeedbackResult result) {
     if (!feedback_cache) return result;
+    if (!info.sample_session_id().empty() &&
+        !feedback_cache->latest_session_id.empty() &&
+        feedback_cache->latest_session_id != info.sample_session_id()) {
+      feedback_cache->retired_session_ids.push_back(
+          feedback_cache->latest_session_id);
+      constexpr std::size_t kRetiredSessionsPerHost = 8;
+      while (feedback_cache->retired_session_ids.size() >
+             kRetiredSessionsPerHost) {
+        feedback_cache->retired_session_ids.pop_front();
+      }
+    }
     feedback_cache->latest_session_id = info.sample_session_id();
     feedback_cache->latest_timestamp_ms = info.sample_timestamp_ms();
     feedback_cache->latest_sequence = info.sample_sequence();

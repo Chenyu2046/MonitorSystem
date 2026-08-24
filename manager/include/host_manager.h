@@ -236,6 +236,7 @@ class HostManager {
     std::string latest_session_id;
     std::uint64_t latest_sequence = 0;
     std::int64_t latest_timestamp_ms = 0;
+    std::deque<std::string> retired_session_ids;
     std::deque<FeedbackCacheEntry> entries;
   };
   std::vector<std::unordered_map<std::string, HostFeedbackCache>>

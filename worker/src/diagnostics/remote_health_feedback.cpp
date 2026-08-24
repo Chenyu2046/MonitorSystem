@@ -30,8 +30,10 @@ bool RemoteHealthFeedback::Accept(
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
-  if (feedback.result_version() <= version_ ||
-      feedback.result_timestamp_ms() < result_timestamp_ms_) {
+  // Sequence is the ordering key within this Worker runtime. Event
+  // timestamps remain freshness metadata only; NTP/VM clock rollback must not
+  // reject a newer Manager result.
+  if (feedback.result_version() <= version_) {
     return false;
   }
   host_name_ = feedback.host_name();

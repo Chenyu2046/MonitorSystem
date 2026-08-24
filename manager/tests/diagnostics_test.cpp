@@ -7,10 +7,12 @@
  */
 
 #include <cassert>
+#include <array>
 #include <chrono>
 #include <string>
 
 #include "diagnostics/evidence_builder.h"
+#include "diagnostics/evidence_type_codec.h"
 #include "diagnostics/incident_store.h"
 #include "diagnostics/root_cause_engine.h"
 #include "host_manager.h"
@@ -24,7 +26,9 @@ monitor::proto::MonitorInfo MakeCpuProfileInfo() {
   auto* cpu = info.add_cpu_stat();
   cpu->set_cpu_percent(92.0);
   cpu->set_io_wait_percent(2.0);
+  cpu->set_sample_valid(true);
   info.mutable_cpu_load()->set_load_avg_1(8.0);
+  info.mutable_cpu_load()->set_sample_valid(true);
   auto* diagnostic = info.mutable_diagnostic();
   diagnostic->set_state(monitor::proto::OBSERVABILITY_PROFILING);
   auto* profile = diagnostic->add_oncpu_profiles();
@@ -139,8 +143,10 @@ void TestNetworkEvidenceRequiresAllSignals() {
   monitor::proto::MonitorInfo info;
   auto* net = info.add_net_info();
   net->set_rcv_packets_rate(120000.0);
+  net->set_sample_valid(true);
   auto* softirq = info.add_soft_irq();
   softirq->set_net_rx(120000);
+  softirq->set_sample_valid(true);
   auto* diagnostic = info.mutable_diagnostic();
   auto* retrans = diagnostic->add_signals();
   retrans->set_metric("tcp_retransmissions");
@@ -171,6 +177,43 @@ void TestNetworkEvidenceRequiresAllSignals() {
   single_retrans->set_value(3.0);
   const auto insufficient = builder.Build(single_signal, timestamp);
   assert(engine.Evaluate(insufficient).empty());
+}
+
+void TestEvidenceUsesPerCpuLoadAndSoftIrq() {
+  monitor::proto::MonitorInfo info;
+  for (int index = 0; index < 8; ++index) {
+    auto* cpu = info.add_cpu_stat();
+    cpu->set_cpu_percent(20.0);
+    cpu->set_sample_valid(true);
+  }
+  info.mutable_cpu_load()->set_load_avg_1(4.0);
+  info.mutable_cpu_load()->set_sample_valid(true);
+
+  auto* first = info.add_soft_irq();
+  first->set_net_rx(30000);
+  first->set_net_tx(10000);
+  first->set_sample_valid(true);
+  auto* second = info.add_soft_irq();
+  second->set_net_rx(10000);
+  second->set_net_tx(60000);
+  second->set_sample_valid(true);
+
+  monitor::diagnostics::EvidenceBuilder builder;
+  const auto evidence = builder.Build(
+      info, std::chrono::system_clock::time_point{});
+  bool saw_load = false;
+  bool saw_softirq = false;
+  for (const auto& item : evidence) {
+    if (item.type == monitor::diagnostics::EvidenceType::kRunQueue) {
+      assert(item.value == 0.5);
+      saw_load = true;
+    }
+    if (item.type == monitor::diagnostics::EvidenceType::kSoftirqNetRx) {
+      assert(item.value == 70000.0);
+      saw_softirq = true;
+    }
+  }
+  assert(saw_load && saw_softirq);
 }
 
 bool HasEvidence(const std::vector<monitor::diagnostics::Evidence>& evidence,
@@ -334,6 +377,39 @@ void TestMysqlTimeoutParsing() {
   assert(monitor::ParseMysqlTimeoutSeconds("4294967296") == std::nullopt);
 }
 
+void TestEvidenceTypeRoundTripAndUnknownHandling() {
+  constexpr std::array<monitor::diagnostics::EvidenceType, 22> kTypes{
+      monitor::diagnostics::EvidenceType::kCpuUsage,
+      monitor::diagnostics::EvidenceType::kRunQueue,
+      monitor::diagnostics::EvidenceType::kIoWait,
+      monitor::diagnostics::EvidenceType::kDiskUtil,
+      monitor::diagnostics::EvidenceType::kDiskLatency,
+      monitor::diagnostics::EvidenceType::kBpfBlockLatency,
+      monitor::diagnostics::EvidenceType::kNetPps,
+      monitor::diagnostics::EvidenceType::kTcpRetrans,
+      monitor::diagnostics::EvidenceType::kSoftirqNetRx,
+      monitor::diagnostics::EvidenceType::kSchedulerSwitches,
+      monitor::diagnostics::EvidenceType::kSchedulerWakeups,
+      monitor::diagnostics::EvidenceType::kDiagnosticCapabilityDegraded,
+      monitor::diagnostics::EvidenceType::kMemoryAvailable,
+      monitor::diagnostics::EvidenceType::kOnCpuStack,
+      monitor::diagnostics::EvidenceType::kOffCpuStack,
+      monitor::diagnostics::EvidenceType::kLockWaitStack,
+      monitor::diagnostics::EvidenceType::kHealthAnomalySignal,
+      monitor::diagnostics::EvidenceType::kHealthCpuSignal,
+      monitor::diagnostics::EvidenceType::kHealthMemorySignal,
+      monitor::diagnostics::EvidenceType::kHealthDiskSignal,
+      monitor::diagnostics::EvidenceType::kHealthNetworkSignal,
+      monitor::diagnostics::EvidenceType::kHealthSchedulerSignal};
+  for (const auto type : kTypes) {
+    const auto parsed = monitor::diagnostics::ParseEvidenceType(
+        monitor::diagnostics::EvidenceTypeName(type));
+    assert(parsed.has_value());
+    assert(*parsed == type);
+  }
+  assert(!monitor::diagnostics::ParseEvidenceType("not-a-real-evidence"));
+}
+
 }  // namespace
 
 int main() {
@@ -341,6 +417,7 @@ int main() {
   TestCpuRuleRequiresMultipleSignals();
   TestDiskRuleAndIncidentStore();
   TestNetworkEvidenceRequiresAllSignals();
+  TestEvidenceUsesPerCpuLoadAndSoftIrq();
   TestEmptyProfilesDoNotBecomeStackEvidence();
   TestLockContentionRequiresLockWaitStack();
   TestDiskWaitDoesNotBecomeLockContention();
@@ -349,5 +426,6 @@ int main() {
   TestPersistenceFailureRemainsDegradedAfterOtherSuccess();
   TestMemoryOnlyPersistenceDoesNotAccumulatePendingIncidents();
   TestMysqlTimeoutParsing();
+  TestEvidenceTypeRoundTripAndUnknownHandling();
   return 0;
 }

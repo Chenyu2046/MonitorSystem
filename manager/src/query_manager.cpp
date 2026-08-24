@@ -8,6 +8,7 @@
  */
 
 #include "query_manager.h"
+#include "diagnostics/evidence_type_codec.h"
 #include "health/top_signal_codec.h"
 #include "mysql_schema.h"
 
@@ -115,36 +116,6 @@ diagnostics::RootCauseType ParseRootCauseType(const std::string& name) {
   if (name == "LOCK_CONTENTION")
     return diagnostics::RootCauseType::kLockContention;
   return diagnostics::RootCauseType::kUnknown;
-}
-
-/** @brief 将数据库 evidence_type 名称还原为内部枚举。 */
-diagnostics::EvidenceType ParseEvidenceType(const std::string& name) {
-  if (name == "cpu_usage") return diagnostics::EvidenceType::kCpuUsage;
-  if (name == "run_queue") return diagnostics::EvidenceType::kRunQueue;
-  if (name == "io_wait") return diagnostics::EvidenceType::kIoWait;
-  if (name == "disk_util") return diagnostics::EvidenceType::kDiskUtil;
-  if (name == "disk_latency") return diagnostics::EvidenceType::kDiskLatency;
-  if (name == "bpf_block_latency")
-    return diagnostics::EvidenceType::kBpfBlockLatency;
-  if (name == "net_pps") return diagnostics::EvidenceType::kNetPps;
-  if (name == "tcp_retrans") return diagnostics::EvidenceType::kTcpRetrans;
-  if (name == "softirq_net_rx")
-    return diagnostics::EvidenceType::kSoftirqNetRx;
-  if (name == "scheduler_switches")
-    return diagnostics::EvidenceType::kSchedulerSwitches;
-  if (name == "scheduler_wakeups")
-    return diagnostics::EvidenceType::kSchedulerWakeups;
-  if (name == "diagnostic_capability_degraded")
-    return diagnostics::EvidenceType::kDiagnosticCapabilityDegraded;
-  if (name == "memory_available")
-    return diagnostics::EvidenceType::kMemoryAvailable;
-  if (name == "oncpu_stack") return diagnostics::EvidenceType::kOnCpuStack;
-  if (name == "offcpu_stack") return diagnostics::EvidenceType::kOffCpuStack;
-  if (name == "lock_wait_stack")
-    return diagnostics::EvidenceType::kLockWaitStack;
-  if (name == "health_anomaly_signal")
-    return diagnostics::EvidenceType::kHealthAnomalySignal;
-  return diagnostics::EvidenceType::kCpuUsage;
 }
 
 /** @brief 将持久化的换行分隔 evidence id 还原为 vector。 */
@@ -1219,7 +1190,9 @@ std::vector<SoftIrqDetailRecord> QueryManager::QuerySoftIrqDetail(
   int offset = (page - 1) * page_size;
   std::ostringstream sql;
   sql << "SELECT server_name, cpu_name, timestamp, hi, timer, net_tx, "
-         "net_rx, block, irq_poll, tasklet, sched, hrtimer, rcu "
+         "net_rx, block, irq_poll, tasklet, sched, hrtimer, rcu, "
+         "hi_rate, timer_rate, net_tx_rate, net_rx_rate, block_rate, "
+         "irq_poll_rate, tasklet_rate, sched_rate, hrtimer_rate, rcu_rate "
          "FROM server_softirq_detail WHERE server_name='"
       << server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
       << end_time << "' ORDER BY timestamp DESC LIMIT " << page_size
@@ -1255,6 +1228,21 @@ std::vector<SoftIrqDetailRecord> QueryManager::QuerySoftIrqDetail(
         valid = false;
       } else {
         *value = static_cast<float>(parsed);
+      }
+      ++i;
+    }
+    if (!valid) continue;
+    float* rates[] = {&rec.hi_rate,      &rec.timer_rate,
+                      &rec.net_tx_rate,  &rec.net_rx_rate,
+                      &rec.block_rate,   &rec.irq_poll_rate,
+                      &rec.tasklet_rate, &rec.sched_rate,
+                      &rec.hrtimer_rate, &rec.rcu_rate};
+    for (float* rate : rates) {
+      double parsed = 0;
+      if (!row[i] || !ParseFiniteDouble(row[i], &parsed)) {
+        valid = false;
+      } else {
+        *rate = static_cast<float>(parsed);
       }
       ++i;
     }
@@ -1372,39 +1360,11 @@ std::vector<diagnostics::IncidentRecord> QueryManager::QueryIncidents(
     if (!evidence_result) continue;
     MYSQL_ROW evidence_row;
     while ((evidence_row = mysql_fetch_row(evidence_result))) {
-      diagnostics::Evidence evidence;
-      evidence.type = diagnostics::EvidenceType::kCpuUsage;
       const std::string type_name = evidence_row[0] ? evidence_row[0] : "";
-      const std::array<std::pair<const char*, diagnostics::EvidenceType>, 16>
-          evidence_names{
-              {{"cpu_usage", diagnostics::EvidenceType::kCpuUsage},
-               {"run_queue", diagnostics::EvidenceType::kRunQueue},
-               {"io_wait", diagnostics::EvidenceType::kIoWait},
-               {"disk_util", diagnostics::EvidenceType::kDiskUtil},
-               {"disk_latency", diagnostics::EvidenceType::kDiskLatency},
-               {"bpf_block_latency",
-                diagnostics::EvidenceType::kBpfBlockLatency},
-               {"net_pps", diagnostics::EvidenceType::kNetPps},
-               {"tcp_retrans", diagnostics::EvidenceType::kTcpRetrans},
-               {"softirq_net_rx", diagnostics::EvidenceType::kSoftirqNetRx},
-               {"scheduler_switches",
-                diagnostics::EvidenceType::kSchedulerSwitches},
-               {"scheduler_wakeups",
-                diagnostics::EvidenceType::kSchedulerWakeups},
-               {"diagnostic_capability_degraded",
-                diagnostics::EvidenceType::kDiagnosticCapabilityDegraded},
-               {"memory_available",
-                diagnostics::EvidenceType::kMemoryAvailable},
-               {"oncpu_stack", diagnostics::EvidenceType::kOnCpuStack},
-               {"offcpu_stack", diagnostics::EvidenceType::kOffCpuStack},
-               {"lock_wait_stack",
-                diagnostics::EvidenceType::kLockWaitStack}}};
-      for (const auto& [name, type] : evidence_names) {
-        if (type_name == name) {
-          evidence.type = type;
-          break;
-        }
-      }
+      const auto parsed_type = diagnostics::ParseEvidenceType(type_name);
+      if (!parsed_type) continue;
+      diagnostics::Evidence evidence;
+      evidence.type = *parsed_type;
       evidence.source = evidence_row[1] ? evidence_row[1] : "";
       evidence.target = evidence_row[2] ? evidence_row[2] : "";
       evidence.id = evidence_row[3] ? evidence_row[3] : "";
@@ -1471,7 +1431,10 @@ void QueryManager::LoadIncidentDetails(
     MYSQL_ROW evidence_row;
     while ((evidence_row = mysql_fetch_row(evidence_result))) {
       diagnostics::Evidence evidence;
-      evidence.type = ParseEvidenceType(evidence_row[0] ? evidence_row[0] : "");
+      const auto parsed_type = diagnostics::ParseEvidenceType(
+          evidence_row[0] ? evidence_row[0] : "");
+      if (!parsed_type) continue;
+      evidence.type = *parsed_type;
       evidence.source = evidence_row[1] ? evidence_row[1] : "";
       evidence.target = evidence_row[2] ? evidence_row[2] : "";
       evidence.id = evidence_row[3] ? evidence_row[3] : "";

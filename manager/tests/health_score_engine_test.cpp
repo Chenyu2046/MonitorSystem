@@ -191,12 +191,12 @@ void TestHistoricalOnlyIopsAndThroughput() {
 void TestNetworkSoftIrqUsesPerCpuMaximum() {
   monitor::health::HealthScoreEngine engine;
   auto info = MakeInfo();
-  info.mutable_soft_irq(0)->set_net_rx(60000.0);
-  info.mutable_soft_irq(0)->set_net_tx(0.0);
+  info.mutable_soft_irq(0)->set_net_rx(0.0);
+  info.mutable_soft_irq(0)->set_net_tx(60000.0);
   auto* second_cpu = info.add_soft_irq();
   second_cpu->set_cpu("cpu1");
-  second_cpu->set_net_rx(60000.0);
-  second_cpu->set_net_tx(0.0);
+  second_cpu->set_net_rx(0.0);
+  second_cpu->set_net_tx(60000.0);
   second_cpu->set_sample_valid(true);
 
   const auto result = engine.Evaluate(info, Clock::time_point{}, 90.0);
@@ -204,6 +204,30 @@ void TestNetworkSoftIrqUsesPerCpuMaximum() {
   for (const auto& signal : result.top_signals) {
     if (signal.metric == monitor::health::MetricId::kNetworkSoftIrqPerSec) {
       assert(signal.value == 60000.0);
+      found = true;
+    }
+  }
+  assert(found);
+}
+
+void TestLoadUsesPerCpuMetric() {
+  monitor::health::HealthScoreEngine engine;
+  monitor::proto::MonitorInfo info;
+  for (int index = 0; index < 8; ++index) {
+    auto* cpu = info.add_cpu_stat();
+    cpu->set_cpu_name("cpu" + std::to_string(index));
+    cpu->set_cpu_percent(0.0);
+    cpu->set_io_wait_percent(std::numeric_limits<float>::quiet_NaN());
+    cpu->set_soft_irq_percent(std::numeric_limits<float>::quiet_NaN());
+    cpu->set_sample_valid(true);
+  }
+  info.mutable_cpu_load()->set_load_avg_1(4.0);
+  info.mutable_cpu_load()->set_sample_valid(true);
+  const auto result = engine.Evaluate(info, Clock::time_point{}, 90.0);
+  bool found = false;
+  for (const auto& signal : result.top_signals) {
+    if (signal.metric == monitor::health::MetricId::kLoadPerCpu) {
+      assert(signal.value == 0.5);
       found = true;
     }
   }
@@ -477,6 +501,12 @@ void TestQueryProtoMapping() {
   softirq.sched = 0.88F;
   softirq.hrtimer = 0.99F;
   softirq.rcu = 1.11F;
+  softirq.hi_rate = 0.11F;
+  softirq.timer_rate = 0.22F;
+  softirq.net_tx_rate = 0.33F;
+  softirq.net_rx_rate = 0.44F;
+  softirq.block_rate = 0.55F;
+  softirq.sched_rate = 0.66F;
   monitor::proto::SoftIrqDetailRecord softirq_output;
   monitor::PopulateSoftIrqRateFields(softirq, &softirq_output);
   assert(softirq_output.hi_per_sec() == 0.11F);
@@ -489,7 +519,17 @@ void TestQueryProtoMapping() {
   assert(softirq_output.sched_per_sec() == 0.88F);
   assert(softirq_output.hrtimer_per_sec() == 0.99F);
   assert(softirq_output.rcu_per_sec() == 1.11F);
-  assert(softirq_output.hi() == 0);
+  const auto* deprecated_hi =
+      softirq_output.GetDescriptor()->FindFieldByName("hi");
+  assert(deprecated_hi != nullptr);
+  assert(softirq_output.GetReflection()->GetInt64(softirq_output,
+                                                 deprecated_hi) == 0);
+  assert(softirq_output.hi_rate() == 0.11F);
+  assert(softirq_output.timer_rate() == 0.22F);
+  assert(softirq_output.net_tx_rate() == 0.33F);
+  assert(softirq_output.net_rx_rate() == 0.44F);
+  assert(softirq_output.block_rate() == 0.55F);
+  assert(softirq_output.sched_rate() == 0.66F);
 }
 
 void TestLowTrafficStaleStateCleanup() {
@@ -516,6 +556,7 @@ int main() {
   TestSustainedAndDiskSaturation();
   TestHistoricalOnlyIopsAndThroughput();
   TestNetworkSoftIrqUsesPerCpuMaximum();
+  TestLoadUsesPerCpuMetric();
   TestZeroVarianceUsesRelativeSpreadFloor();
   TestMinimumHistoryDuration();
   TestEventTimeControlsCounterRate();

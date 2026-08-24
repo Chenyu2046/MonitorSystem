@@ -611,7 +611,26 @@ void TestSessionSequenceSurvivesClockRollback() {
              &restarted_feedback) == monitor::DataReceiveResult::kAccepted);
   assert(restarted_feedback.health_valid());
   assert(restarted_feedback.result_version() == 1);
-  assert(manager.ProcessedCount() == 3);
+
+  auto delayed_old_session = restarted;
+  delayed_old_session.set_sample_session_id("session-a");
+  delayed_old_session.set_sample_sequence(102);
+  monitor::proto::MonitorFeedback delayed_feedback;
+  assert(manager.SubmitWithFeedback(
+             delayed_old_session,
+             std::chrono::system_clock::now() + std::chrono::seconds(2),
+             &delayed_feedback) == monitor::DataReceiveResult::kAccepted);
+  assert(!delayed_feedback.health_valid());
+
+  auto next_restarted = restarted;
+  next_restarted.set_sample_sequence(2);
+  monitor::proto::MonitorFeedback next_restarted_feedback;
+  assert(manager.SubmitWithFeedback(
+             next_restarted,
+             std::chrono::system_clock::now() + std::chrono::seconds(2),
+             &next_restarted_feedback) == monitor::DataReceiveResult::kAccepted);
+  assert(next_restarted_feedback.health_valid());
+  assert(manager.ProcessedCount() == 4);
   manager.Stop();
 }
 

@@ -88,6 +88,23 @@ void TestAnomalyDetector() {
   assert(cpu.should_diagnose);
   assert(cpu.should_profile);
 
+  auto load_info = MakeBaseInfo();
+  for (int index = 0; index < 7; ++index) {
+    auto* cpu = load_info.add_cpu_stat();
+    cpu->set_cpu_percent(20.0);
+    cpu->set_sample_valid(true);
+  }
+  load_info.mutable_cpu_load()->set_load_avg_1(4.0);
+  const auto load_result = detector.Evaluate(load_info);
+  bool saw_load_per_cpu = false;
+  for (const auto& signal : load_result.signals) {
+    if (signal.metric == "load_per_cpu") {
+      assert(signal.value == 0.5);
+      saw_load_per_cpu = true;
+    }
+  }
+  assert(saw_load_per_cpu);
+
   auto hot_core_info = MakeBaseInfo();
   hot_core_info.mutable_cpu_stat(0)->set_cpu_percent(20.0);
   auto* hot_core = hot_core_info.add_cpu_stat();
@@ -330,13 +347,17 @@ void TestRemoteHealthFeedbackIsConservativeAndMonotonic() {
   feedback.set_host_name("host-a");
   feedback.set_health_valid(true);
   feedback.set_node_anomaly_score(0.9);
-  feedback.set_result_timestamp_ms(99990);
-  feedback.set_result_version(2);
+  feedback.set_result_timestamp_ms(100000);
+  feedback.set_result_version(100);
   const auto received =
       monitor::diagnostics::RemoteHealthFeedback::Clock::time_point{};
   assert(!remote.Accept(feedback, "host-b", 100000, received));
   assert(remote.Accept(feedback, "host-a", 100000, received));
   assert(!remote.Accept(feedback, "host-a", 100000, received));
+
+  feedback.set_result_version(101);
+  feedback.set_result_timestamp_ms(99000);
+  assert(remote.Accept(feedback, "host-a", 100000, received));
 
   AnomalyResult local;
   local.overall_score = 0.8;
@@ -347,7 +368,19 @@ void TestRemoteHealthFeedbackIsConservativeAndMonotonic() {
                         received + std::chrono::seconds(2));
   assert(merged.overall_score == local.overall_score);
 
-  feedback.set_result_version(3);
+  feedback.set_result_version(100);
+  feedback.set_result_timestamp_ms(99999);
+  assert(!remote.Accept(feedback, "host-a", 100000, received));
+
+  feedback.set_result_version(101);
+  feedback.set_result_timestamp_ms(99999);
+  assert(!remote.Accept(feedback, "host-a", 100000, received));
+
+  feedback.set_result_version(102);
+  feedback.set_result_timestamp_ms(105001);
+  assert(!remote.Accept(feedback, "host-a", 100000, received));
+
+  feedback.set_result_version(103);
   feedback.set_result_timestamp_ms(98000);
   assert(!remote.Accept(feedback, "host-a", 100000, received));
 }

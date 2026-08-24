@@ -9,9 +9,12 @@
 
 #include "diagnostics/evidence_builder.h"
 
+#include "metric_semantics.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <iomanip>
 #include <sstream>
 #include <string_view>
@@ -102,6 +105,10 @@ bool HasLockWaitStack(const monitor::proto::ProfileEntry& profile) {
     }
   }
   return false;
+}
+
+bool IsFiniteNonnegative(double value) {
+  return std::isfinite(value) && value >= 0.0;
 }
 
 EvidenceType HealthEvidenceType(health::MetricId metric) {
@@ -196,10 +203,14 @@ std::vector<Evidence> EvidenceBuilder::Build(
   // 异常证据采用最大核而非主机平均值，避免单核热点被稀释。
   double max_cpu = 0.0;
   double max_io_wait = 0.0;
+  std::size_t valid_cpu_count = 0;
   for (const auto& cpu : info.cpu_stat()) {
     max_cpu = std::max(max_cpu, static_cast<double>(cpu.cpu_percent()));
     max_io_wait =
         std::max(max_io_wait, static_cast<double>(cpu.io_wait_percent()));
+    if (cpu.sample_valid() && IsFiniteNonnegative(cpu.cpu_percent())) {
+      ++valid_cpu_count;
+    }
   }
   if (info.cpu_stat_size() > 0) {
     Add(&evidence, EvidenceType::kCpuUsage, "MonitorInfo.cpu_stat", max_cpu,
@@ -208,10 +219,16 @@ std::vector<Evidence> EvidenceBuilder::Build(
         "%", Severity(max_io_wait, 10.0, 30.0), timestamp, "max IOWait");
   }
 
-  if (info.has_cpu_load()) {
-    const double load = info.cpu_load().load_avg_1();
-    Add(&evidence, EvidenceType::kRunQueue, "MonitorInfo.cpu_load", load,
-        "load", Severity(load, 1.0, 4.0), timestamp, "load average 1m");
+  if (valid_cpu_count > 0 && info.has_cpu_load() &&
+      info.cpu_load().sample_valid() &&
+      IsFiniteNonnegative(info.cpu_load().load_avg_1())) {
+    const double load_per_cpu =
+        info.cpu_load().load_avg_1() / valid_cpu_count;
+    Add(&evidence, EvidenceType::kRunQueue, "MonitorInfo.cpu_load",
+        load_per_cpu, "load/cpu",
+        Severity(load_per_cpu, metric_semantics::kLoadPerCpu.warning,
+                 metric_semantics::kLoadPerCpu.critical),
+        timestamp, "load average 1m per valid CPU");
   }
 
   // 磁盘证据采用最忙设备/最高延迟，保持热点设备的可见性。
@@ -242,15 +259,25 @@ std::vector<Evidence> EvidenceBuilder::Build(
         Severity(pps, 10000.0, 100000.0), timestamp, "aggregate packet rate");
   }
 
-  double net_rx_softirq = 0.0;
+  double net_softirq = 0.0;
+  bool has_valid_softirq = false;
   for (const auto& softirq : info.soft_irq()) {
-    net_rx_softirq =
-        std::max(net_rx_softirq, static_cast<double>(softirq.net_rx()));
+    if (!softirq.sample_valid() ||
+        !IsFiniteNonnegative(softirq.net_rx()) ||
+        !IsFiniteNonnegative(softirq.net_tx())) {
+      continue;
+    }
+    net_softirq = std::max(
+        net_softirq, static_cast<double>(softirq.net_rx()) +
+                         static_cast<double>(softirq.net_tx()));
+    has_valid_softirq = true;
   }
-  if (info.soft_irq_size() > 0) {
+  if (has_valid_softirq) {
     Add(&evidence, EvidenceType::kSoftirqNetRx, "MonitorInfo.soft_irq",
-        net_rx_softirq, "events/s", Severity(net_rx_softirq, 10000.0, 100000.0),
-        timestamp, "max NET_RX softirq");
+        net_softirq, "events/s",
+        Severity(net_softirq, metric_semantics::kNetworkSoftIrqPerSec.warning,
+                 metric_semantics::kNetworkSoftIrqPerSec.critical),
+        timestamp, "max NET_RX + NET_TX softirq per CPU");
   }
 
   if (info.has_mem_info()) {

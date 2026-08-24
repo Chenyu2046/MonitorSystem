@@ -23,6 +23,12 @@ inline void PopulateSoftIrqRateFields(
   output->set_sched_per_sec(input.sched);
   output->set_hrtimer_per_sec(input.hrtimer);
   output->set_rcu_per_sec(input.rcu);
+  output->set_hi_rate(input.hi_rate);
+  output->set_timer_rate(input.timer_rate);
+  output->set_net_tx_rate(input.net_tx_rate);
+  output->set_net_rx_rate(input.net_rx_rate);
+  output->set_block_rate(input.block_rate);
+  output->set_sched_rate(input.sched_rate);
 }
 
 }  // namespace monitor
