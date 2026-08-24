@@ -35,12 +35,19 @@ class HostShardExecutor {
       std::chrono::steady_clock::time_point enqueued_at)>;
   using MaintenanceCallback = std::function<void(
       std::size_t shard_id, std::chrono::steady_clock::time_point now)>;
+#ifdef MONITOR_TESTING
+  using BeforeQueuePushHook = std::function<void()>;
+#endif
 
   HostShardExecutor(std::size_t shard_count, std::size_t queue_capacity,
                     std::size_t queue_max_bytes, ProcessCallback callback,
                     MaintenanceCallback maintenance_callback = {},
                     std::chrono::milliseconds maintenance_interval =
-                        std::chrono::minutes(1));
+                        std::chrono::minutes(1)
+#ifdef MONITOR_TESTING
+                    , BeforeQueuePushHook before_queue_push = {}
+#endif
+  );
   ~HostShardExecutor();
 
   HostShardExecutor(const HostShardExecutor&) = delete;
@@ -91,6 +98,9 @@ class HostShardExecutor {
   const ProcessCallback callback_;
   const MaintenanceCallback maintenance_callback_;
   const std::chrono::milliseconds maintenance_interval_;
+#ifdef MONITOR_TESTING
+  const BeforeQueuePushHook before_queue_push_;
+#endif
   std::vector<std::unique_ptr<Shard>> shards_;
   std::atomic<bool> accepting_{false};
   bool started_ = false;

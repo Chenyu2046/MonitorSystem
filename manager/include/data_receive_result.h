@@ -20,6 +20,18 @@ enum class DataReceiveResult {
   kInvalidHost,
 };
 
+/** @brief 返回队列拒绝结果对应的稳定日志原因。 */
+inline const char* QueueRejectReason(DataReceiveResult result) {
+  switch (result) {
+    case DataReceiveResult::kQueueFull:
+      return "queue_full";
+    case DataReceiveResult::kStopping:
+      return "stopping";
+    default:
+      return "unknown";
+  }
+}
+
 /** @brief Result produced by one exact shard WorkItem for RPC feedback. */
 struct HostFeedbackResult {
   std::string host_name;

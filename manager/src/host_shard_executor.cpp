@@ -24,10 +24,18 @@ HostShardExecutor::HostShardExecutor(std::size_t shard_count,
                                      ProcessCallback callback,
                                      MaintenanceCallback maintenance_callback,
                                      std::chrono::milliseconds
-                                         maintenance_interval)
+                                         maintenance_interval
+#ifdef MONITOR_TESTING
+                                     , BeforeQueuePushHook before_queue_push
+#endif
+                                     )
     : callback_(std::move(callback)),
       maintenance_callback_(std::move(maintenance_callback)),
-      maintenance_interval_(maintenance_interval) {
+      maintenance_interval_(maintenance_interval)
+#ifdef MONITOR_TESTING
+      , before_queue_push_(std::move(before_queue_push))
+#endif
+{
   // 至少保留一个 shard，避免合法配置为 0 时出现取模/无消费者。
   if (shard_count == 0) {
     shard_count = 1;
@@ -102,9 +110,16 @@ DataReceiveResult HostShardExecutor::SubmitImpl(
   const auto enqueued_at = std::chrono::steady_clock::now();
   WorkItem item{host_name, std::move(info), received_at, enqueued_at,
                 completion};
+#ifdef MONITOR_TESTING
+  if (before_queue_push_) before_queue_push_();
+#endif
   if (shards_[shard_id]->queue.TryPush(std::move(item))) {
     return DataReceiveResult::kAccepted;
   }
+  const auto reject_result =
+      accepting_.load(std::memory_order_acquire)
+          ? DataReceiveResult::kQueueFull
+          : DataReceiveResult::kStopping;
   if (completion) completion->set_value({});
   if (perf::OutputEnabled()) {
     const auto trace_id = perf::BuildTraceId(host_name, item.info);
@@ -118,12 +133,10 @@ DataReceiveResult HostShardExecutor::SubmitImpl(
              std::to_string(shards_[shard_id]->queue.PeakSize()) +
              " peak_bytes=" +
              std::to_string(shards_[shard_id]->queue.PeakBytes()) +
-             " reason=queue_full";
+             " reason=" + QueueRejectReason(reject_result);
     });
   }
-  return accepting_.load(std::memory_order_acquire)
-             ? DataReceiveResult::kQueueFull
-             : DataReceiveResult::kStopping;
+  return reject_result;
 }
 
 std::size_t HostShardExecutor::PeakQueueDepth() const {

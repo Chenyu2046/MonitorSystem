@@ -267,6 +267,7 @@ void TestQueueFullAndShutdownDrain() {
   std::cerr.rdbuf(old_buffer);
   assert(captured.str().find("event=shard_queue_reject") !=
          std::string::npos);
+  assert(captured.str().find("reason=queue_full") != std::string::npos);
   assert(captured.str().find("trace_id=host:session-B:3") !=
          std::string::npos);
   {
@@ -278,6 +279,62 @@ void TestQueueFullAndShutdownDrain() {
   assert(processed == 2);
   assert(executor.Submit("host", MakeInfo(4)) ==
          monitor::DataReceiveResult::kStopping);
+  assert(std::string(monitor::QueueRejectReason(
+             monitor::DataReceiveResult::kQueueFull)) == "queue_full");
+  assert(std::string(monitor::QueueRejectReason(
+             monitor::DataReceiveResult::kStopping)) == "stopping");
+}
+
+/** @brief 验证队列已关闭时 reject 日志与 kStopping 返回值一致。 */
+void TestStoppingQueueRejectReason() {
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool before_push = false;
+  bool release_push = false;
+  monitor::DataReceiveResult result = monitor::DataReceiveResult::kAccepted;
+  monitor::HostShardExecutor executor(
+      1, 1, kLargeQueueBytes,
+      [](std::size_t, const std::string&,
+         const monitor::proto::MonitorInfo&,
+         std::chrono::system_clock::time_point,
+         std::chrono::steady_clock::time_point) {
+        return monitor::HostFeedbackResult{};
+      },
+      {}, std::chrono::minutes(1), [&] {
+        std::unique_lock<std::mutex> lock(mutex);
+        before_push = true;
+        condition.notify_all();
+        condition.wait(lock, [&] { return release_push; });
+      });
+  executor.Start();
+
+  std::ostringstream captured;
+  auto* old_buffer = std::cerr.rdbuf(captured.rdbuf());
+  std::thread submitter([&] {
+    auto info = MakeInfo(5);
+    info.set_sample_session_id("session-stop");
+    info.set_sample_sequence(5);
+    result = executor.Submit("host", std::move(info));
+  });
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    assert(condition.wait_for(lock, std::chrono::seconds(2),
+                              [&] { return before_push; }));
+  }
+
+  executor.Stop();
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    release_push = true;
+  }
+  condition.notify_all();
+  submitter.join();
+  std::cerr.rdbuf(old_buffer);
+
+  assert(result == monitor::DataReceiveResult::kStopping);
+  assert(captured.str().find("reason=stopping") != std::string::npos);
+  assert(captured.str().find("trace_id=host:session-stop:5") !=
+         std::string::npos);
 }
 
 /** @brief 验证无消息时维护仍在 shard worker 执行，Stop 后不再回调。 */
@@ -613,6 +670,7 @@ int main() {
   TestQueuedTimestampPreserved();
   TestHashCollisionPreservesEachHostOrder();
   TestQueueFullAndShutdownDrain();
+  TestStoppingQueueRejectReason();
   TestTimedMaintenanceUsesShardOwnerAndStops();
   TestMaintenanceRunsWhileQueueRemainsNonEmpty();
   TestTrackedWaiterCompletesDuringStopDrain();

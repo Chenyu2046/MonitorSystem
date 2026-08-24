@@ -11,6 +11,7 @@
 #include "host_manager.h"
 
 #include "canonical_host_key.h"
+#include "mysql_error_snapshot.h"
 #include "perf/perf_log.h"
 
 #include "mysql_timeout_config.h"
@@ -1192,6 +1193,7 @@ bool HostManager::WriteToMysql(
     bool success = false;
     MYSQL* conn = nullptr;
     std::string failed_stage;
+    MysqlErrorSnapshot error_snapshot;
 
     ~MysqlPerfTrace() {
       const auto total_us = perf::ElapsedUs(started);
@@ -1224,10 +1226,9 @@ bool HostManager::WriteToMysql(
         perf::LogError("manager", "mysql_failure", trace_id, [&] {
           std::ostringstream output;
           output << "stage=" << failed_stage;
-          if (conn) {
-            output << " mysql_errno=" << mysql_errno(conn)
-                   << " mysql_error=" << mysql_error(conn);
-          }
+          output << " mysql_errno=" << error_snapshot.failed_errno
+                 << " mysql_error=" << error_snapshot.failed_error
+                 << " mysql_sqlstate=" << error_snapshot.failed_sqlstate;
           output << " mysql_rollback_us=" << rollback_us;
           return output.str();
         });
@@ -1250,12 +1251,16 @@ bool HostManager::WriteToMysql(
   mysql_trace.begin_us = perf::ElapsedUs(begin_start);
   if (!transaction_started) {
     mysql_trace.failed_stage = "begin";
+    mysql_trace.error_snapshot.Capture(mysql_errno(conn), mysql_error(conn),
+                                       mysql_sqlstate(conn));
     return false;
   }
   PersistenceHistory next_history = persistence_history_;
   const auto exec = [&](const std::string& sql, const char* stage) {
     if (mysql_query(conn, sql.c_str()) == 0) return true;
     mysql_trace.failed_stage = stage;
+    mysql_trace.error_snapshot.Capture(mysql_errno(conn), mysql_error(conn),
+                                       mysql_sqlstate(conn));
     const auto rollback_start = std::chrono::steady_clock::now();
     mysql_query(conn, "ROLLBACK");
     mysql_trace.rollback_us += perf::ElapsedUs(rollback_start);
@@ -1620,6 +1625,8 @@ bool HostManager::WriteToMysql(
   mysql_trace.commit_us = perf::ElapsedUs(commit_start);
   if (!committed) {
     mysql_trace.failed_stage = "commit";
+    mysql_trace.error_snapshot.Capture(mysql_errno(conn), mysql_error(conn),
+                                       mysql_sqlstate(conn));
     const auto rollback_start = std::chrono::steady_clock::now();
     mysql_query(conn, "ROLLBACK");
     mysql_trace.rollback_us += perf::ElapsedUs(rollback_start);

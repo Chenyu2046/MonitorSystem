@@ -82,6 +82,15 @@ if(BUILD_TESTING)
     target_link_libraries(manager_diagnostics_test PRIVATE monitor_proto)
     add_test(NAME manager_diagnostics_test COMMAND manager_diagnostics_test)
 
+    add_executable(manager_mysql_error_snapshot_test
+        tests/mysql_error_snapshot_test.cpp
+    )
+    target_include_directories(manager_mysql_error_snapshot_test PRIVATE
+        ${PROJECT_SOURCE_DIR}/manager/include
+    )
+    add_test(NAME manager_mysql_error_snapshot_test
+             COMMAND manager_mysql_error_snapshot_test)
+
     add_executable(manager_concurrency_test
         tests/concurrency_test.cpp
         src/host_shard_executor.cpp
@@ -90,6 +99,7 @@ if(BUILD_TESTING)
     target_include_directories(manager_concurrency_test PRIVATE
         ${PROJECT_SOURCE_DIR}/manager/include
     )
+    target_compile_definitions(manager_concurrency_test PRIVATE MONITOR_TESTING=1)
     target_link_libraries(manager_concurrency_test PRIVATE monitor_proto monitor_perf)
     add_test(NAME manager_concurrency_test COMMAND manager_concurrency_test)
 
