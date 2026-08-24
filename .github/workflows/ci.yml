@@ -1,0 +1,79 @@
+name: Core CI
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-ci:
+    name: core-ci
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            protobuf-compiler \
+            protobuf-compiler-grpc \
+            libprotobuf-dev \
+            libgrpc++-dev
+
+      - name: Check patch whitespace
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            git diff --check "${BASE_SHA}" HEAD
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            BEFORE_SHA="${{ github.event.before }}"
+            if [[ "${BEFORE_SHA}" != "0000000000000000000000000000000000000000" ]]; then
+              git diff --check "${BEFORE_SHA}" HEAD
+            else
+              EMPTY_TREE="$(git hash-object -t tree /dev/null)"
+              git diff --check "${EMPTY_TREE}" HEAD
+            fi
+          else
+            git diff --check
+          fi
+
+      - name: Configure
+        run: |
+          # Keep assert-based test actions active while retaining Release optimization.
+          cmake -S . -B build-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -UNDEBUG" \
+            -DBUILD_TESTING=ON \
+            -DBUILD_BENCHMARK=ON \
+            -DENABLE_EBPF=OFF \
+            -DENABLE_MYSQL=OFF
+
+      - name: Build
+        run: cmake --build build-ci --parallel
+
+      - name: Test
+        run: ctest --test-dir build-ci --output-on-failure
