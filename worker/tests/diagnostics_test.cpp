@@ -20,6 +20,7 @@
 #include "diagnostics/remote_health_feedback.h"
 #include "diagnostics/profile_session.h"
 #include "diagnostics/symbolizer.h"
+#include "perf/perf_log.h"
 #include "rpc/monitor_send_queue.h"
 
 namespace {
@@ -337,6 +338,26 @@ void TestMonitorSendQueuePriority() {
   assert(!drain.Pop(&output));
 }
 
+void TestMonitorSendQueueQueueWaitUsesSteadyClock() {
+  monitor::MonitorSendQueue queue(2, 1024);
+  queue.Open();
+  monitor::proto::MonitorInfo info;
+  info.set_name("queue-host");
+  info.set_sample_session_id("session");
+  info.set_sample_sequence(7);
+  const auto enqueued_at =
+      std::chrono::steady_clock::now() - std::chrono::milliseconds(2);
+  assert(queue.Push(info, enqueued_at));
+
+  monitor::PendingMonitorSample sample;
+  assert(queue.Pop(&sample));
+  assert(sample.info.sample_sequence() == 7);
+  assert(sample.enqueued_at == enqueued_at);
+  assert(monitor::perf::ElapsedUs(sample.enqueued_at) > 0);
+  assert(queue.size() == 0);
+  assert(queue.bytes() == 0);
+}
+
 void TestRemoteHealthFeedbackIsConservativeAndMonotonic() {
   monitor::diagnostics::RemoteHealthFeedback remote(
       std::chrono::seconds(1));
@@ -397,6 +418,7 @@ int main() {
   TestProfileStackFrames();
   TestProbeRuntimeStatusProto();
   TestMonitorSendQueuePriority();
+  TestMonitorSendQueueQueueWaitUsesSteadyClock();
   TestRemoteHealthFeedbackIsConservativeAndMonotonic();
   return 0;
 }

@@ -11,6 +11,7 @@
 #include "rpc/monitor_pusher.h"
 
 #include "canonical_host_key.h"
+#include "perf/perf_log.h"
 
 #include <algorithm>
 #include <chrono>
@@ -419,12 +420,15 @@ void MonitorPusher::PushLoop() {
 }
 
 bool MonitorPusher::PushOnce() {
+  const auto prepare_start = std::chrono::steady_clock::now();
   // ---------- 1. 采集本轮基础监控数据 ----------
   // MetricCollector 只填充 CPU/内存/磁盘/网络/主机等普通指标。
   monitor::proto::MonitorInfo info;
+  const auto collect_start = std::chrono::steady_clock::now();
   if (collector_->CollectAll(&info) != CollectStatus::kOk) {
     return false;
   }
+  const auto collect_us = perf::ElapsedUs(collect_start);
   const auto sample_timestamp_ms =
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::system_clock::now().time_since_epoch())
@@ -435,16 +439,35 @@ bool MonitorPusher::PushOnce() {
 
   // ---------- 2. 根据基础指标计算异常程度 ----------
   // AnomalyDetector 输出逐核/逐设备 max 和整体 max 分数，不改写 info。
+  const auto anomaly_start = std::chrono::steady_clock::now();
   const auto local_anomaly = anomaly_detector_.Evaluate(info);
+  const auto anomaly_us = perf::ElapsedUs(anomaly_start);
+  const auto remote_merge_start = std::chrono::steady_clock::now();
   const auto anomaly = remote_health_feedback_.Merge(
       local_anomaly, CanonicalHostKey(info), observability_config_);
+  const auto remote_merge_us = perf::ElapsedUs(remote_merge_start);
   // ---------- 3. 推进异常诊断状态机 ----------
   // 状态转换依赖连续样本而非单次尖峰，避免瞬时抖动直接启用重型 Probe。
+  const auto state_before = state_machine_.state();
+  const auto state_machine_start = std::chrono::steady_clock::now();
   state_machine_.Update(anomaly);
+  const auto state_machine_us = perf::ElapsedUs(state_machine_start);
   const auto state = state_machine_.state();
+  if (perf::OutputEnabled() && state != state_before) {
+    const auto trace_id = perf::BuildTraceId(info);
+    perf::LogPerf("worker", "state_transition", trace_id, [&] {
+      std::ostringstream output;
+      output << "state_before=" << StateName(state_before)
+             << " state=" << StateName(state)
+             << " state_machine_us=" << state_machine_us;
+      return output.str();
+    });
+  }
   // ---------- 4. 根据状态按需开启/关闭诊断 Probe ----------
+  const auto probe_apply_start = std::chrono::steady_clock::now();
   const bool probes_ready =
       probe_controller_.Apply(state, SelectProfileType(anomaly));
+  const auto probe_apply_us = perf::ElapsedUs(probe_apply_start);
   if (IsDiagnosticLogEnabled()) {
     const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                   std::chrono::system_clock::now().time_since_epoch())
@@ -467,10 +490,14 @@ bool MonitorPusher::PushOnce() {
   }
   // ---------- 5. 读取本轮 eBPF/profiling 诊断快照 ----------
   diagnostics::DiagnosticSnapshot diagnostic_snapshot;
+  const auto probe_snapshot_start = std::chrono::steady_clock::now();
   probe_controller_.CollectSnapshot(&diagnostic_snapshot);
+  const auto probe_snapshot_us = perf::ElapsedUs(probe_snapshot_start);
   // ---------- 6. 将诊断结果填入 protobuf ----------
+  const auto proto_build_start = std::chrono::steady_clock::now();
   FillDiagnosticProto(anomaly, state, diagnostic_snapshot,
                       probe_controller_, symbolizer_, info.mutable_diagnostic());
+  const auto proto_build_us = perf::ElapsedUs(proto_build_start);
 
   // 可选的 verbose 日志只读本轮 protobuf，不参与业务处理。
   if (IsMetricsLogEnabled()) {
@@ -597,15 +624,85 @@ bool MonitorPusher::PushOnce() {
   }
 
   // ---------- 7. 放入发送队列，由发送线程异步上报 Manager ----------
-  return send_queue_.Push(std::move(info));
+  const auto enqueue_start = std::chrono::steady_clock::now();
+  const bool slow =
+      perf::IsSlow(collect_us, perf::GetConfig().slow_worker_collect_ms);
+  const bool need_perf_identity = perf::OutputEnabled() || slow;
+  const auto trace_id =
+      need_perf_identity ? perf::BuildTraceId(info) : std::string{};
+  const auto host_key = need_perf_identity ? CanonicalHostKey(info)
+                                           : std::string{};
+  const auto session_id = need_perf_identity ? info.sample_session_id()
+                                             : std::string{};
+  const auto sequence = info.sample_sequence();
+  const bool queued = send_queue_.Push(std::move(info), enqueue_start);
+  const auto enqueue_us = perf::ElapsedUs(enqueue_start);
+  const auto total_us = perf::ElapsedUs(prepare_start);
+  if (perf::OutputEnabled() || slow) {
+    const auto fields = [&] {
+      std::ostringstream output;
+      std::size_t active_probe_count = 0;
+      for (const auto kind : {diagnostics::ProbeKind::kTcp,
+                              diagnostics::ProbeKind::kBlockIo,
+                              diagnostics::ProbeKind::kScheduler,
+                              diagnostics::ProbeKind::kOnCpuProfile,
+                              diagnostics::ProbeKind::kOffCpuProfile}) {
+        if (probe_controller_.Status(kind).attached) ++active_probe_count;
+      }
+      output << "host=" << host_key << " session=" << session_id
+             << " seq=" << sequence
+             << " collect_us=" << collect_us
+             << " collect_total_us=" << collect_us
+             << " anomaly_us=" << anomaly_us
+             << " remote_merge_us=" << remote_merge_us
+             << " state_machine_us=" << state_machine_us
+             << " probe_apply_us=" << probe_apply_us
+             << " probe_snapshot_us=" << probe_snapshot_us
+             << " proto_build_us=" << proto_build_us
+             << " enqueue_us=" << enqueue_us
+             << " total_us=" << total_us
+             << " worker_prepare_total_us=" << total_us
+             << " state_before=" << StateName(state_before)
+             << " state=" << StateName(state)
+             << " active_probe_count=" << active_probe_count
+             << " probes_ready=" << (probes_ready ? 1 : 0)
+             << " result=" << (queued ? "ok" : "queue_rejected");
+      return output.str();
+    };
+    if (perf::OutputEnabled()) {
+      perf::LogPerf("worker", "sample_prepare", trace_id, fields);
+    } else {
+      perf::LogSlow("worker", "sample_prepare", trace_id, fields);
+    }
+  }
+  return queued;
 }
 
 void MonitorPusher::SendLoop() {
   // sender thread 与 PushLoop 解耦；队列关闭后 Pop() 会在剩余消息发送
   // 完成时返回 false，形成可等待的退出边界。
-  monitor::proto::MonitorInfo info;
-  while (send_queue_.Pop(&info)) {
-    if (!SendWithRetry(info)) {
+  PendingMonitorSample sample;
+  while (send_queue_.Pop(&sample)) {
+    const auto queue_wait_us = perf::ElapsedUs(sample.enqueued_at);
+    const bool slow = perf::IsSlow(
+        queue_wait_us,
+        perf::GetConfig().slow_manager_queue_ms);
+    if (perf::OutputEnabled() || slow) {
+      const auto trace_id = perf::BuildTraceId(sample.info);
+      const auto fields = [&] {
+        std::ostringstream output;
+        output << "queue_wait_us=" << queue_wait_us
+               << " queue_depth=" << send_queue_.size()
+               << " queue_bytes=" << send_queue_.bytes();
+        return output.str();
+      };
+      if (perf::OutputEnabled()) {
+        perf::LogPerf("worker", "send_queue", trace_id, fields);
+      } else {
+        perf::LogSlow("worker", "send_queue", trace_id, fields);
+      }
+    }
+    if (!SendWithRetry(sample.info)) {
       std::cerr << ">>> Push failed after retries to " << manager_address_
                 << " <<<" << std::endl;
     }
@@ -618,12 +715,39 @@ bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
   if (!running_.load()) {
     return false;
   }
+  const auto total_start = std::chrono::steady_clock::now();
+  std::string trace_id =
+      (perf::OutputEnabled() ? perf::BuildTraceId(info) : std::string{});
   int backoff_ms = observability_config_.sender_retry_initial_ms;
+  int retry_count = 0;
+  grpc::StatusCode final_code = grpc::StatusCode::UNKNOWN;
+  const auto log_total = [&](bool success) {
+    const auto total_us = perf::ElapsedUs(total_start);
+    const bool slow = perf::IsSlow(
+        total_us, perf::GetConfig().slow_worker_rpc_ms);
+    if (!perf::OutputEnabled() && !slow) return;
+    if (trace_id.empty()) trace_id = perf::BuildTraceId(info);
+    const auto fields = [&] {
+      std::ostringstream output;
+      output << "rpc_total_us=" << total_us
+             << " attempt_count=" << (retry_count + 1)
+             << " retry_count=" << retry_count
+             << " final_grpc_code=" << static_cast<int>(final_code)
+             << " result=" << (success ? "success" : "failure");
+      return output.str();
+    };
+    if (perf::OutputEnabled()) {
+      perf::LogPerf("worker", "rpc_total", trace_id, fields);
+    } else {
+      perf::LogSlow("worker", "rpc_total", trace_id, fields);
+    }
+  };
   for (int attempt = 0; attempt <= observability_config_.sender_max_retries;
        ++attempt) {
     if (!running_.load()) {
       return false;
     }
+    const auto attempt_start = std::chrono::steady_clock::now();
     grpc::ClientContext context;
     context.set_deadline(std::chrono::system_clock::now() +
                          std::chrono::milliseconds(
@@ -631,16 +755,39 @@ bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
     monitor::proto::MonitorFeedback response;
     const grpc::Status status =
         stub_->SetMonitorInfo(&context, info, &response);
+    final_code = status.error_code();
+    const auto rpc_us = perf::ElapsedUs(attempt_start);
+    const bool retryable = IsRetryable(status);
+    const bool slow = perf::IsSlow(rpc_us, perf::GetConfig().slow_worker_rpc_ms);
+    if (perf::OutputEnabled() || slow) {
+      if (trace_id.empty()) trace_id = perf::BuildTraceId(info);
+      const auto fields = [&] {
+        std::ostringstream output;
+        output << "attempt=" << (attempt + 1) << " rpc_us=" << rpc_us
+               << " grpc_code=" << static_cast<int>(status.error_code())
+               << " retryable=" << (retryable ? 1 : 0)
+               << " request_bytes=" << info.ByteSizeLong()
+               << " health_valid=" << (response.health_valid() ? 1 : 0);
+        return output.str();
+      };
+      if (perf::OutputEnabled()) {
+        perf::LogPerf("worker", "rpc_attempt", trace_id, fields);
+      } else {
+        perf::LogSlow("worker", "rpc_attempt", trace_id, fields);
+      }
+    }
     if (status.ok()) {
       const auto now_ms =
           std::chrono::duration_cast<std::chrono::milliseconds>(
               std::chrono::system_clock::now().time_since_epoch())
               .count();
       remote_health_feedback_.Accept(response, CanonicalHostKey(info), now_ms);
+      log_total(true);
       return true;
     }
-    if (!IsRetryable(status) ||
+    if (!retryable ||
         attempt == observability_config_.sender_max_retries) {
+      log_total(false);
       return false;
     }
 
@@ -655,13 +802,21 @@ bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
     std::uniform_int_distribution<int> jitter(0, jitter_limit);
     const auto delay =
         std::chrono::milliseconds(backoff_ms + jitter(random_engine));
+    ++retry_count;
+    if (perf::OutputEnabled()) {
+      perf::LogPerf("worker", "rpc_backoff", trace_id, [&] {
+        return "backoff_ms=" + std::to_string(delay.count());
+      });
+    }
     if (WaitForRetry(delay)) {
+      log_total(false);
       return false;
     }
     backoff_ms = backoff_ms > max_backoff / 2
                      ? max_backoff
                      : std::min(max_backoff, backoff_ms * 2);
   }
+  log_total(false);
   return false;
 }
 

@@ -10,6 +10,7 @@
  */
 
 #include <condition_variable>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -18,6 +19,12 @@
 #include "monitor_info.pb.h"
 
 namespace monitor {
+
+/** @brief Worker queue item with local enqueue timing; never serialized. */
+struct PendingMonitorSample {
+  monitor::proto::MonitorInfo info;
+  std::chrono::steady_clock::time_point enqueued_at;
+};
 
 /**
  * @brief 在线程边界上传递 MonitorInfo，并实施背压和丢弃策略。
@@ -30,12 +37,16 @@ class MonitorSendQueue {
   void Open();
   /** @brief 按大小/优先级入队，容量不足时按策略丢弃并计数。 */
   bool Push(monitor::proto::MonitorInfo info);
+  bool Push(monitor::proto::MonitorInfo info,
+            std::chrono::steady_clock::time_point enqueued_at);
   /** @brief 阻塞到有数据或关闭，并移动出一条消息。 */
   bool Pop(monitor::proto::MonitorInfo* info);
+  bool Pop(PendingMonitorSample* sample);
   /** @brief 标记关闭并唤醒所有等待中的发送线程。 */
   void Close();
 
   std::size_t size() const;
+  std::size_t bytes() const;
   std::uint64_t dropped_count() const;
 
  private:
@@ -44,6 +55,7 @@ class MonitorSendQueue {
     monitor::proto::MonitorInfo info;
     std::size_t bytes = 0;
     bool priority = false;
+    std::chrono::steady_clock::time_point enqueued_at;
   };
 
   static bool IsPriority(const monitor::proto::MonitorInfo& info);

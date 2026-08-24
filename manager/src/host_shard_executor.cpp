@@ -9,6 +9,8 @@
 
 #include "host_shard_executor.h"
 
+#include "perf/perf_log.h"
+
 #include <algorithm>
 #include <chrono>
 #include <functional>
@@ -98,12 +100,30 @@ DataReceiveResult HostShardExecutor::SubmitImpl(
   const std::size_t shard_id = ShardFor(host_name);
   const auto received_at = std::chrono::system_clock::now();
   const auto enqueued_at = std::chrono::steady_clock::now();
+  const bool need_perf_identity = perf::OutputEnabled();
+  const auto trace_id = need_perf_identity
+                            ? perf::BuildTraceId(host_name, info)
+                            : std::string{};
   if (shards_[shard_id]->queue.TryPush(WorkItem{
           host_name, std::move(info), received_at, enqueued_at,
           completion})) {
     return DataReceiveResult::kAccepted;
   }
   if (completion) completion->set_value({});
+  if (perf::OutputEnabled()) {
+    perf::LogWarn("manager", "shard_queue_reject", trace_id, [&] {
+      return "host=" + host_name + " shard=" + std::to_string(shard_id) +
+             " queue_depth=" +
+             std::to_string(shards_[shard_id]->queue.Size()) +
+             " queue_bytes=" +
+             std::to_string(shards_[shard_id]->queue.Bytes()) +
+             " peak_depth=" +
+             std::to_string(shards_[shard_id]->queue.PeakSize()) +
+             " peak_bytes=" +
+             std::to_string(shards_[shard_id]->queue.PeakBytes()) +
+             " reason=queue_full";
+    });
+  }
   return accepting_.load(std::memory_order_acquire)
              ? DataReceiveResult::kQueueFull
              : DataReceiveResult::kStopping;
@@ -153,6 +173,25 @@ void HostShardExecutor::RunShard(std::size_t shard_id) {
       }
       if (result == decltype(shards_[shard_id]->queue)::PopResult::kClosed) {
         return;
+      }
+    }
+    const auto queue_wait_us = perf::ElapsedUs(item.enqueued_at);
+    const bool slow = perf::IsSlow(
+        queue_wait_us, perf::GetConfig().slow_manager_queue_ms);
+    if (perf::OutputEnabled() || slow) {
+      const auto trace_id = perf::BuildTraceId(item.host_name, item.info);
+      const auto fields = [&] {
+        return "shard=" + std::to_string(shard_id) +
+               " queue_wait_us=" + std::to_string(queue_wait_us) +
+               " queue_depth=" +
+               std::to_string(shards_[shard_id]->queue.Size()) +
+               " queue_bytes=" +
+               std::to_string(shards_[shard_id]->queue.Bytes());
+      };
+      if (perf::OutputEnabled()) {
+        perf::LogPerf("manager", "shard_queue", trace_id, fields);
+      } else {
+        perf::LogSlow("manager", "shard_queue", trace_id, fields);
       }
     }
     const HostFeedbackResult result =

@@ -1,6 +1,7 @@
 #include "health/health_score_engine.h"
 
 #include "metric_semantics.h"
+#include "perf/perf_log.h"
 
 #include <algorithm>
 #include <array>
@@ -9,6 +10,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <sstream>
 #include <string_view>
 
 namespace monitor::health {
@@ -50,6 +52,22 @@ const char* WorkerState(const monitor::proto::MonitorInfo& info) {
       return "COOLDOWN";
   }
   return "UNKNOWN";
+}
+
+const char* DomainName(Domain domain) {
+  switch (domain) {
+    case Domain::kCpu:
+      return "cpu";
+    case Domain::kMemory:
+      return "memory";
+    case Domain::kDisk:
+      return "disk";
+    case Domain::kNetwork:
+      return "network";
+    case Domain::kScheduler:
+      return "scheduler";
+  }
+  return "unknown";
 }
 
 bool ParseSize(const char* name, std::size_t* output, std::string* error) {
@@ -197,10 +215,58 @@ HealthResult HealthScoreEngine::Evaluate(
 HealthResult HealthScoreEngine::Evaluate(
     const monitor::proto::MonitorInfo& info, Clock::time_point timestamp,
     double resource_score, ActivityClock::time_point activity_timestamp) {
+  const auto health_start = ActivityClock::now();
   HealthResult result;
   result.resource_score = std::isfinite(resource_score) ? resource_score : 0.0;
   result.state = WorkerState(info);
+  const auto log_health = [&](const HealthResult& health,
+                              std::size_t observation_count,
+                              std::size_t anomalous_metric_count) {
+    const auto health_us = perf::ElapsedUs(health_start);
+    const bool slow =
+        perf::IsSlow(health_us, perf::GetConfig().slow_health_ms);
+    if (!perf::OutputEnabled() && !perf::HealthTraceEnabled() && !slow) {
+      return;
+    }
+    const auto trace_id = perf::BuildTraceId(info);
+    const auto fields = [&] {
+      std::ostringstream output;
+      output << "health_us=" << health_us
+             << " model_state=" << ModelStateName(health.model_state)
+             << " observations=" << observation_count
+             << " anomalous_metric_count=" << anomalous_metric_count
+             << " cpu_score=" << health.cpu_score
+             << " memory_score=" << health.memory_score
+             << " disk_score=" << health.disk_score
+             << " network_score=" << health.network_score
+             << " scheduler_score=" << health.scheduler_score
+             << " anomaly_score=" << health.anomaly_score
+             << " remote_trigger_score=" << health.remote_trigger_score
+             << " health_score=" << health.health_score
+             << " confidence=" << health.confidence
+             << " anomaly_rate_5m=" << health.anomaly_rate_5m;
+      for (std::size_t index = 0;
+           index < std::min<std::size_t>(3, health.top_signals.size());
+           ++index) {
+        const auto& signal = health.top_signals[index];
+        output << " top" << (index + 1)
+               << "_metric=" << MetricName(signal.metric)
+               << " top" << (index + 1) << "_value=" << signal.value
+               << " top" << (index + 1)
+               << "_score=" << signal.detector.anomaly_score;
+      }
+      return output.str();
+    };
+    if (perf::OutputEnabled()) {
+      perf::LogPerf("manager", "health", trace_id, fields);
+    } else if (slow) {
+      perf::LogSlow("manager", "health", trace_id, fields);
+    } else {
+      perf::LogHealth("health", trace_id, fields);
+    }
+  };
   if (!config_.IsValid()) {
+    log_health(result, 0, 0);
     return result;
   }
 
@@ -416,9 +482,25 @@ HealthResult HealthScoreEngine::Evaluate(
   for (const auto& observation : observations) {
     const std::size_t index = MetricIndex(observation.metric);
     windows_[index].Prune(model_timestamp);
+    const auto detector_start = ActivityClock::now();
     DetectorResult detector = detector_.Evaluate(
         observation.value, observation.threshold, windows_[index],
         model_timestamp);
+    if (perf::HealthTraceEnabled()) {
+      const auto detector_us = perf::ElapsedUs(detector_start);
+      const auto trace_id = perf::BuildTraceId(info);
+      perf::LogHealth("health_metric", trace_id, [&] {
+        std::ostringstream output;
+        output << "metric=" << MetricName(observation.metric)
+               << " domain=" << DomainName(observation.domain)
+               << " value=" << observation.value
+               << " anomaly_score=" << detector.anomaly_score
+               << " anomalous=" << (detector.anomalous ? 1 : 0)
+               << " model_state=" << ModelStateName(detector.model_state)
+               << " duration_us=" << detector_us;
+        return output.str();
+      });
+    }
     windows_[index].Push(observation.value, model_timestamp);
     const auto domain = static_cast<std::size_t>(observation.domain);
     domain_scores[domain] =
@@ -435,6 +517,7 @@ HealthResult HealthScoreEngine::Evaluate(
 
   if (observations.empty()) {
     result.model_state = ModelState::kCold;
+    log_health(result, 0, 0);
     return result;
   }
   result.confidence =
@@ -502,6 +585,7 @@ HealthResult HealthScoreEngine::Evaluate(
     last_event_timestamp_ = model_timestamp;
     last_activity_ = activity_timestamp;
   }
+  log_health(result, observations.size(), anomalous_metrics);
   return result;
 }
 

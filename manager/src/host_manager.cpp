@@ -11,6 +11,7 @@
 #include "host_manager.h"
 
 #include "canonical_host_key.h"
+#include "perf/perf_log.h"
 
 #include "mysql_timeout_config.h"
 #include "mysql_schema.h"
@@ -570,10 +571,28 @@ HostFeedbackResult HostManager::ProcessOne(
     const monitor::proto::MonitorInfo& info,
     std::chrono::system_clock::time_point received_at,
     std::chrono::steady_clock::time_point enqueued_at) {
-  constexpr std::size_t kFeedbackCacheEntriesPerHost = 16;
+  const auto process_start = std::chrono::steady_clock::now();
+  const auto queue_wait_us = perf::ElapsedUs(enqueued_at, process_start);
+  const auto validate_start = std::chrono::steady_clock::now();
   const bool monitor_valid = IsValidMonitorInfo(info);
+  const auto validate_us = perf::ElapsedUs(validate_start);
+  constexpr std::size_t kFeedbackCacheEntriesPerHost = 16;
   const bool has_sample_identity = info.sample_sequence() != 0;
   HostFeedbackCache* feedback_cache = nullptr;
+  const auto log_session_reject = [&](const char* reason,
+                                      const HostFeedbackCache& cache) {
+    if (!perf::OutputEnabled()) return;
+    perf::LogPerf("manager", "session_reject",
+                  perf::BuildTraceId(host_name, info), [&] {
+                    std::ostringstream output;
+                    output << "reason=" << reason
+                           << " latest_session=" << cache.latest_session_id
+                           << " latest_sequence=" << cache.latest_sequence
+                           << " incoming_session=" << info.sample_session_id()
+                           << " incoming_sequence=" << info.sample_sequence();
+                    return output.str();
+                  });
+  };
   if (has_sample_identity) {
     auto& feedback_map = shard_feedback_caches_[shard_id];
     const auto cache_it = feedback_map.find(host_name);
@@ -585,6 +604,7 @@ HostFeedbackResult HostManager::ProcessOne(
             (info.sample_session_id().empty()
                  ? entry.timestamp_ms == info.sample_timestamp_ms()
                  : true)) {
+          log_session_reject("duplicate", cache);
           return entry.result;
         }
       }
@@ -593,17 +613,21 @@ HostFeedbackResult HostManager::ProcessOne(
                       cache.retired_session_ids.end(),
                       info.sample_session_id()) !=
             cache.retired_session_ids.end()) {
+          log_session_reject("retired_session", cache);
           return {};
         }
         if (cache.latest_session_id == info.sample_session_id() &&
             info.sample_sequence() <= cache.latest_sequence) {
+          log_session_reject("stale_sequence", cache);
           return {};
         }
       } else if (!cache.latest_session_id.empty()) {
+        log_session_reject("legacy_after_modern", cache);
         return {};
       } else if (info.sample_timestamp_ms() < cache.latest_timestamp_ms ||
                  (info.sample_timestamp_ms() == cache.latest_timestamp_ms &&
                   info.sample_sequence() <= cache.latest_sequence)) {
+        log_session_reject("legacy_timestamp_stale", cache);
         return {};
       }
       feedback_cache = &cache;
@@ -636,12 +660,16 @@ HostFeedbackResult HostManager::ProcessOne(
     return result;
   };
 
+  const auto session_gate_us = perf::ElapsedUs(validate_start) - validate_us;
   // 一个 host 始终落到同一个 shard，因而 shard_perf_samples_[shard_id]
   // 的 previous/current 顺序成立，无需为每台主机增加独立锁。
+  const auto resource_score_start = std::chrono::steady_clock::now();
   const ScoreResult score_result =
       monitor_valid ? CalcResourceScore(info) : ScoreResult{};
+  const auto resource_score_us = perf::ElapsedUs(resource_score_start);
   const double score = score_result.score;
   health::HealthResult health_result;
+  std::int64_t health_us = 0;
   if (monitor_valid && score_result.valid) {
     auto& health_engines = shard_health_engines_[shard_id];
     auto [engine_it, inserted] =
@@ -652,8 +680,10 @@ HostFeedbackResult HostManager::ProcessOne(
       event_timestamp = std::chrono::system_clock::time_point(
           std::chrono::milliseconds(info.sample_timestamp_ms()));
     }
+    const auto health_start = std::chrono::steady_clock::now();
     health_result = engine_it->second.Evaluate(info, event_timestamp, score,
                                                enqueued_at);
+    health_us = perf::ElapsedUs(health_start);
   }
   HostFeedbackResult feedback_result;
   if (has_sample_identity && score_result.valid && health_result.valid &&
@@ -668,6 +698,14 @@ HostFeedbackResult HostManager::ProcessOne(
     feedback_result.health_valid = true;
   }
   if (!score_result.valid || !monitor_valid) {
+    if (perf::OutputEnabled()) {
+      perf::LogPerf("manager", "monitor_invalid",
+                    perf::BuildTraceId(host_name, info), [&] {
+                      return "validate_us=" + std::to_string(validate_us) +
+                             " session_gate_us=" +
+                             std::to_string(session_gate_us);
+                    });
+    }
     std::lock_guard<std::mutex> lock(mtx_);
     host_scores_[host_name] = HostScore{info, score, false, received_at,
                                        health_result};
@@ -680,10 +718,8 @@ HostFeedbackResult HostManager::ProcessOne(
     feedback_cache = &cache_it->second;
   }
   const auto now = received_at;
-  const auto queue_delay = std::chrono::steady_clock::now() - enqueued_at;
-  const auto queue_delay_us = static_cast<std::uint64_t>(std::max<std::int64_t>(
-      0, std::chrono::duration_cast<std::chrono::microseconds>(queue_delay)
-             .count()));
+  const auto queue_delay_us = static_cast<std::uint64_t>(
+      std::max<std::int64_t>(0, queue_wait_us));
   queue_delay_samples_.fetch_add(1, std::memory_order_relaxed);
   queue_delay_total_us_.fetch_add(queue_delay_us, std::memory_order_relaxed);
   auto current_max = max_queue_delay_us_.load(std::memory_order_relaxed);
@@ -699,6 +735,7 @@ HostFeedbackResult HostManager::ProcessOne(
 
   // 当前采样：PerfSample 只保存下一轮变化率所需的基础值，不替代原始
   // MonitorInfo，也不改变 protobuf 的字段语义。
+  const auto perf_rate_start = std::chrono::steady_clock::now();
   PerfSample curr;
   const CpuOverview cpu = BuildCpuOverview(info);
   curr.cpu_percent = cpu.cpu_percent;
@@ -757,18 +794,36 @@ HostFeedbackResult HostManager::ProcessOne(
   task.net_in_rate_rate = rate(curr.net_in_rate, last.net_in_rate);
   task.net_out_rate_rate = rate(curr.net_out_rate, last.net_out_rate);
   last = curr;
+  const auto perf_rate_us = perf::ElapsedUs(perf_rate_start);
 
+  const auto host_score_update_start = std::chrono::steady_clock::now();
   {
     std::lock_guard<std::mutex> lock(mtx_);
     host_scores_[host_name] = task.host_score;
   }
+  const auto host_score_update_us =
+      perf::ElapsedUs(host_score_update_start);
+
+  std::int64_t evidence_us = 0;
+  std::int64_t rca_us = 0;
+  std::int64_t incident_us = 0;
+  std::size_t evidence_count = 0;
+  std::size_t root_cause_count = 0;
+  bool incident_created = false;
+  std::uint64_t incident_id = 0;
 
   if (info.has_diagnostic()) {
     // Health signals enrich Evidence/RCA only. Worker state remains authoritative;
     // there is deliberately no Manager -> Worker probe-control RPC.
+    const auto evidence_start = std::chrono::steady_clock::now();
     const auto evidence =
         evidence_builder_.Build(info, now, &health_result);
+    evidence_us = perf::ElapsedUs(evidence_start);
+    evidence_count = evidence.size();
+    const auto rca_start = std::chrono::steady_clock::now();
     const auto root_causes = root_cause_engine_.Evaluate(evidence);
+    rca_us = perf::ElapsedUs(rca_start);
+    root_cause_count = root_causes.size();
     if (IsDiagnosticLogEnabled()) {
       std::cout << "[KernScopeManager] state="
                 << DiagnosticStateName(info.diagnostic().state())
@@ -786,9 +841,13 @@ HostFeedbackResult HostManager::ProcessOne(
       }
       std::cout << std::endl;
     }
+    const auto incident_start = std::chrono::steady_clock::now();
     task.incident = incident_store_.Observe(
         host_name, DiagnosticStateName(info.diagnostic().state()), evidence,
         root_causes, now);
+    incident_us = perf::ElapsedUs(incident_start);
+    incident_created = task.incident.has_value();
+    if (task.incident) incident_id = task.incident->id;
   }
 
   if (IsMetricsLogEnabled()) {
@@ -868,13 +927,77 @@ HostFeedbackResult HostManager::ProcessOne(
 
   // processed means ProcessOne completed and the PersistenceTask was accepted
   // by the PersistenceWorker; it does not mean that MySQL has completed.
-  if (persistence_worker_ && persistence_worker_->Enqueue(std::move(task))) {
+  const bool has_incident = task.incident.has_value();
+  const auto persistence_enqueue_start = std::chrono::steady_clock::now();
+  const bool persistence_enqueued =
+      persistence_worker_ && persistence_worker_->Enqueue(std::move(task));
+  const auto persistence_enqueue_us =
+      perf::ElapsedUs(persistence_enqueue_start);
+  if (persistence_enqueued) {
     processed_count_.fetch_add(1, std::memory_order_relaxed);
   } else {
     persistence_rejected_count_.fetch_add(1, std::memory_order_relaxed);
     std::cerr << "ERROR: persistence task rejected (worker stopped, queue "
                  "closed, or task exceeded the byte budget)"
               << std::endl;
+  }
+  const auto process_total_us = perf::ElapsedUs(process_start);
+  const bool slow_queue = perf::IsSlow(
+      static_cast<std::int64_t>(queue_wait_us),
+      perf::GetConfig().slow_manager_queue_ms);
+  const bool slow_process = perf::IsSlow(
+      process_total_us, perf::GetConfig().slow_manager_process_ms);
+  const bool slow_health =
+      health_us > 0 && perf::IsSlow(health_us, perf::GetConfig().slow_health_ms);
+  if (perf::OutputEnabled() || slow_queue || slow_process || slow_health) {
+    const auto trace_id = perf::BuildTraceId(host_name, info);
+    const auto fields = [&] {
+      std::ostringstream output;
+      output << "host=" << host_name << " shard=" << shard_id
+             << " seq=" << info.sample_sequence()
+             << " queue_wait_us=" << queue_wait_us
+             << " validate_us=" << validate_us
+             << " session_gate_us=" << session_gate_us
+             << " resource_score_us=" << resource_score_us
+             << " health_us=" << health_us
+             << " perf_rate_us=" << perf_rate_us
+             << " host_score_update_us=" << host_score_update_us
+             << " evidence_us=" << evidence_us << " rca_us=" << rca_us
+             << " incident_us=" << incident_us
+             << " persistence_enqueue_us=" << persistence_enqueue_us
+             << " evidence_count=" << evidence_count
+             << " root_cause_count=" << root_cause_count
+             << " incident_created=" << (incident_created ? 1 : 0)
+             << " incident_id=" << incident_id
+             << " process_total_us=" << process_total_us
+             << " health_valid=" << (health_result.valid ? 1 : 0)
+             << " persistence_enqueued=" << (persistence_enqueued ? 1 : 0)
+             << " has_incident=" << (has_incident ? 1 : 0)
+             << " result=ok";
+      if (slow_queue || slow_process || slow_health) {
+        output << " reason=";
+        bool first_reason = true;
+        if (slow_queue) {
+          output << "queue_wait";
+          first_reason = false;
+        }
+        if (slow_health) {
+          if (!first_reason) output << ",";
+          output << "health";
+          first_reason = false;
+        }
+        if (slow_process) {
+          if (!first_reason) output << ",";
+          output << "process";
+        }
+      }
+      return output.str();
+    };
+    if (perf::OutputEnabled()) {
+      perf::LogPerf("manager", "sample_process", trace_id, fields);
+    } else {
+      perf::LogSlow("manager", "sample_process", trace_id, fields);
+    }
   }
   return cache_result(std::move(feedback_result));
 }
@@ -884,10 +1007,14 @@ bool HostManager::PersistTask(PersistenceTask task) {
   // incident/evidence/root-cause 持久化，接收和 shard 处理线程不被 SQL 阻塞。
   // Only the single PersistenceWorker thread calls this method. The legacy
   // WriteToMysql detail-rate history therefore has one owner and no mutex.
+  const auto persist_start = std::chrono::steady_clock::now();
   persistence_task_count_.fetch_add(1, std::memory_order_relaxed);
   bool success = true;
+  std::int64_t diagnostic_persist_us = 0;
   if (task.incident) {
+    const auto diagnostic_start = std::chrono::steady_clock::now();
     const bool persisted = diagnostic_persistence_.Save(*task.incident);
+    diagnostic_persist_us = perf::ElapsedUs(diagnostic_start);
     success = persisted && success;
     diagnostic_persistence_state_.RecordSave(task.incident->id, persisted);
     if (!persisted) {
@@ -897,6 +1024,7 @@ bool HostManager::PersistTask(PersistenceTask task) {
     }
   }
 
+  const auto mysql_start = std::chrono::steady_clock::now();
   success = WriteToMysql(task.host_name, task.host_score, task.net_in_rate,
                task.net_out_rate, task.cpu_percent_rate, task.usr_percent_rate,
                task.system_percent_rate, task.nice_percent_rate,
@@ -909,6 +1037,25 @@ bool HostManager::PersistTask(PersistenceTask task) {
                task.mem_free_rate, task.mem_avail_rate, task.net_in_rate_rate,
                task.net_out_rate_rate, task.net_in_drop_rate_rate,
                task.net_out_drop_rate_rate) && success;
+  const auto mysql_us = perf::ElapsedUs(mysql_start);
+  const auto persist_total_us = perf::ElapsedUs(persist_start);
+  const bool slow_mysql =
+      perf::IsSlow(mysql_us, perf::GetConfig().slow_mysql_ms);
+  if (perf::OutputEnabled() || slow_mysql) {
+    const auto trace_id = perf::BuildTraceId(task.host_score.info);
+    const auto fields = [&] {
+      return "diagnostic_persist_us=" +
+             std::to_string(diagnostic_persist_us) +
+             " mysql_us=" + std::to_string(mysql_us) +
+             " persist_total_us=" + std::to_string(persist_total_us) +
+             " success=" + (success ? std::string("1") : std::string("0"));
+    };
+    if (perf::OutputEnabled()) {
+      perf::LogPerf("manager", "persistence", trace_id, fields);
+    } else {
+      perf::LogSlow("manager", "persistence", trace_id, fields);
+    }
+  }
   return success;
 }
 
@@ -1035,13 +1182,87 @@ bool HostManager::WriteToMysql(
   // Legacy 普通监控写库路径保留现有表/字段语义；本任务只解释调用边界，
   // 不重排 SQL、不改变事务和连接策略。
 #ifdef ENABLE_MYSQL
+  struct MysqlPerfTrace {
+    const monitor::proto::MonitorInfo& info;
+    const std::chrono::steady_clock::time_point started =
+        std::chrono::steady_clock::now();
+    std::string trace_id;
+    std::int64_t connect_us = 0;
+    std::int64_t begin_us = 0;
+    std::int64_t main_us = 0;
+    std::int64_t net_us = 0;
+    std::int64_t softirq_us = 0;
+    std::int64_t mem_us = 0;
+    std::int64_t disk_us = 0;
+    std::int64_t commit_us = 0;
+    std::int64_t rollback_us = 0;
+    bool success = false;
+
+    ~MysqlPerfTrace() {
+      const auto total_us = perf::ElapsedUs(started);
+      const bool slow = perf::IsSlow(total_us, perf::GetConfig().slow_mysql_ms);
+      if (!perf::OutputEnabled() && !slow) return;
+      if (trace_id.empty()) trace_id = perf::BuildTraceId(info);
+      const auto fields = [&] {
+        std::ostringstream output;
+        output << "mysql_connect_us=" << connect_us
+               << " mysql_begin_us=" << begin_us
+               << " mysql_main_us=" << main_us
+               << " mysql_net_us=" << net_us
+               << " mysql_softirq_us=" << softirq_us
+               << " mysql_mem_us=" << mem_us
+               << " mysql_disk_us=" << disk_us
+               << " mysql_commit_us=" << commit_us
+               << " mysql_rollback_us=" << rollback_us
+               << " mysql_total_us=" << total_us
+               << " result=" << (success ? "success" : "failure");
+        return output.str();
+      };
+      if (perf::OutputEnabled()) {
+        perf::LogPerf("manager", "mysql", trace_id, fields);
+      } else {
+        perf::LogSlow("manager", "mysql", trace_id, fields);
+      }
+    }
+  } mysql_trace{host_score.info};
+  if (perf::OutputEnabled()) {
+    mysql_trace.trace_id = perf::BuildTraceId(host_score.info);
+  }
+  const auto connect_start = std::chrono::steady_clock::now();
   MYSQL* conn = GetMysqlConnection();
-  if (!conn) return false;
-  if (mysql_query(conn, "START TRANSACTION") != 0) return false;
+  mysql_trace.connect_us = perf::ElapsedUs(connect_start);
+  if (!conn) {
+    if (perf::OutputEnabled()) {
+      perf::LogError("manager", "mysql_failure", mysql_trace.trace_id,
+                     [] { return std::string("stage=connect"); });
+    }
+    return false;
+  }
+  const auto log_mysql_failure = [&](const char* stage) {
+    if (mysql_trace.trace_id.empty()) {
+      mysql_trace.trace_id = perf::BuildTraceId(host_score.info);
+    }
+    perf::LogError("manager", "mysql_failure", mysql_trace.trace_id, [&] {
+      std::ostringstream output;
+      output << "stage=" << stage << " mysql_errno=" << mysql_errno(conn)
+             << " mysql_error=" << mysql_error(conn);
+      return output.str();
+    });
+  };
+  const auto begin_start = std::chrono::steady_clock::now();
+  const bool transaction_started = mysql_query(conn, "START TRANSACTION") == 0;
+  mysql_trace.begin_us = perf::ElapsedUs(begin_start);
+  if (!transaction_started) {
+    log_mysql_failure("begin");
+    return false;
+  }
   PersistenceHistory next_history = persistence_history_;
   const auto exec = [&](const std::string& sql) {
     if (mysql_query(conn, sql.c_str()) == 0) return true;
+    const auto rollback_start = std::chrono::steady_clock::now();
     mysql_query(conn, "ROLLBACK");
+    mysql_trace.rollback_us += perf::ElapsedUs(rollback_start);
+    log_mysql_failure("statement");
     return false;
   };
 
@@ -1059,6 +1280,7 @@ bool HostManager::WriteToMysql(
   };
 
   // ========== 1. 写入主表 server_performance ==========
+  const auto main_start = std::chrono::steady_clock::now();
   {
     float total = 0, free_mem = 0, avail = 0, send_rate = 0, rcv_rate = 0;
     float cpu_percent = 0, usr_percent = 0, system_percent = 0;
@@ -1155,8 +1377,10 @@ bool HostManager::WriteToMysql(
         << net_in_rate_rate << ",'" << time_buf << "')";
     if (!exec(oss.str())) return false;
   }
+  mysql_trace.main_us = perf::ElapsedUs(main_start);
 
   // ========== 2. 写入网络详细表 server_net_detail ==========
+  const auto net_start = std::chrono::steady_clock::now();
   for (int i = 0; i < info.net_info_size(); ++i) {
     const auto& net = info.net_info(i);
     std::string net_name = net.name();
@@ -1206,8 +1430,10 @@ bool HostManager::WriteToMysql(
 
     last = curr;
   }
+  mysql_trace.net_us = perf::ElapsedUs(net_start);
 
   // ========== 3. 写入软中断详细表 server_softirq_detail ==========
+  const auto softirq_start = std::chrono::steady_clock::now();
   for (int i = 0; i < info.soft_irq_size(); ++i) {
     const auto& sirq = info.soft_irq(i);
     std::string cpu_name = sirq.cpu();
@@ -1250,8 +1476,10 @@ bool HostManager::WriteToMysql(
 
     last = curr;
   }
+  mysql_trace.softirq_us = perf::ElapsedUs(softirq_start);
 
   // ========== 4. 写入内存详细表 server_mem_detail ==========
+  const auto mem_start = std::chrono::steady_clock::now();
   if (info.has_mem_info()) {
     const auto& mem = info.mem_info();
 
@@ -1321,8 +1549,10 @@ bool HostManager::WriteToMysql(
 
     last = curr;
   }
+  mysql_trace.mem_us = perf::ElapsedUs(mem_start);
 
   // ========== 5. 写入磁盘详细表 server_disk_detail ==========
+  const auto disk_start = std::chrono::steady_clock::now();
   for (int i = 0; i < info.disk_info_size(); ++i) {
     const auto& disk = info.disk_info(i);
     std::string disk_name = disk.name();
@@ -1372,12 +1602,20 @@ bool HostManager::WriteToMysql(
 
     last = curr;
   }
+  mysql_trace.disk_us = perf::ElapsedUs(disk_start);
 
-  if (mysql_query(conn, "COMMIT") != 0) {
+  const auto commit_start = std::chrono::steady_clock::now();
+  const bool committed = mysql_query(conn, "COMMIT") == 0;
+  mysql_trace.commit_us = perf::ElapsedUs(commit_start);
+  if (!committed) {
+    const auto rollback_start = std::chrono::steady_clock::now();
     mysql_query(conn, "ROLLBACK");
+    mysql_trace.rollback_us += perf::ElapsedUs(rollback_start);
+    log_mysql_failure("commit");
     return false;
   }
   persistence_history_ = std::move(next_history);
+  mysql_trace.success = true;
 
 #else
   (void)host_name;

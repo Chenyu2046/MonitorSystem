@@ -39,6 +39,8 @@ class PersistenceWorker {
   void Stop();
   std::size_t PeakQueueDepth() const;
   std::size_t PeakQueueBytes() const;
+  std::size_t QueueDepth() const;
+  std::size_t QueueBytes() const;
 
  private:
   /** @brief 消费队列并调用外部 TaskHandler。 */

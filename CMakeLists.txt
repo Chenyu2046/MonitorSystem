@@ -10,6 +10,13 @@ option(BUILD_MANAGER "Build manager server (requires MySQL)" ON)
 option(BUILD_BENCHMARK "Build the gRPC benchmark client" ON)
 set(SANITIZER "" CACHE STRING "Sanitizer to use for checks: address, thread, or undefined")
 
+# Header-only performance helpers. Keeping this as an INTERFACE target avoids
+# adding a runtime library or changing the Worker/Manager ownership model.
+add_library(monitor_perf INTERFACE)
+target_include_directories(monitor_perf INTERFACE
+    ${CMAKE_SOURCE_DIR}/common/include
+)
+
 if(SANITIZER)
     if(MSVC)
         message(FATAL_ERROR "SANITIZER is only supported by the GCC/Clang toolchain")

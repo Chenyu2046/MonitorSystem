@@ -5,6 +5,8 @@
 
 #include "persistence_worker.h"
 
+#include "perf/perf_log.h"
+
 #include <utility>
 
 namespace monitor {
@@ -37,6 +39,7 @@ bool PersistenceWorker::Enqueue(PersistenceTask task) {
   if (!started_.load(std::memory_order_acquire)) {
     return false;
   }
+  task.perf_enqueued_at = std::chrono::steady_clock::now();
   return queue_.Push(std::move(task));
 }
 
@@ -60,11 +63,31 @@ std::size_t PersistenceWorker::PeakQueueBytes() const {
   return queue_.PeakBytes();
 }
 
+std::size_t PersistenceWorker::QueueDepth() const { return queue_.Size(); }
+
+std::size_t PersistenceWorker::QueueBytes() const { return queue_.Bytes(); }
+
 void PersistenceWorker::Run() {
   // Pop 返回 false 表示队列已关闭且没有剩余任务；每轮清空 task，避免
   // 上一条 protobuf/detail 数据在下一轮复用时造成额外保留。
   PersistenceTask task;
   while (queue_.Pop(&task)) {
+    const auto queue_wait_us = perf::ElapsedUs(task.perf_enqueued_at);
+    const bool slow = perf::IsSlow(
+        queue_wait_us, perf::GetConfig().slow_persist_queue_ms);
+    if (perf::OutputEnabled() || slow) {
+      const auto trace_id = perf::BuildTraceId(task.host_score.info);
+      const auto fields = [&] {
+        return "queue_wait_us=" + std::to_string(queue_wait_us) +
+               " queue_depth=" + std::to_string(queue_.Size()) +
+               " queue_bytes=" + std::to_string(queue_.Bytes());
+      };
+      if (perf::OutputEnabled()) {
+        perf::LogPerf("manager", "persistence_queue", trace_id, fields);
+      } else {
+        perf::LogSlow("manager", "persistence_queue", trace_id, fields);
+      }
+    }
     (void)handler_(std::move(task));
     task = PersistenceTask{};
   }

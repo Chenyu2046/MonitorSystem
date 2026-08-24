@@ -64,7 +64,7 @@ if(ENABLE_MYSQL)
     endif()
 endif()
 
-target_link_libraries(manager PUBLIC ${MANAGER_LIBS})
+target_link_libraries(manager PUBLIC ${MANAGER_LIBS} monitor_perf)
 
 if(BUILD_TESTING)
     add_executable(manager_diagnostics_test
@@ -90,7 +90,7 @@ if(BUILD_TESTING)
     target_include_directories(manager_concurrency_test PRIVATE
         ${PROJECT_SOURCE_DIR}/manager/include
     )
-    target_link_libraries(manager_concurrency_test PRIVATE monitor_proto)
+    target_link_libraries(manager_concurrency_test PRIVATE monitor_proto monitor_perf)
     add_test(NAME manager_concurrency_test COMMAND manager_concurrency_test)
 
     add_executable(manager_cpu_overview_test
@@ -117,7 +117,7 @@ if(BUILD_TESTING)
         ${PROJECT_SOURCE_DIR}/manager/include
         ${PROJECT_SOURCE_DIR}/worker/include
     )
-    target_link_libraries(manager_cpu_overview_test PRIVATE monitor_proto)
+    target_link_libraries(manager_cpu_overview_test PRIVATE monitor_proto monitor_perf)
     add_test(NAME manager_cpu_overview_test COMMAND manager_cpu_overview_test)
 
     add_executable(manager_health_score_test
@@ -131,6 +131,6 @@ if(BUILD_TESTING)
     target_include_directories(manager_health_score_test PRIVATE
         ${PROJECT_SOURCE_DIR}/manager/include
     )
-    target_link_libraries(manager_health_score_test PRIVATE monitor_proto)
+    target_link_libraries(manager_health_score_test PRIVATE monitor_proto monitor_perf)
     add_test(NAME manager_health_score_test COMMAND manager_health_score_test)
 endif()

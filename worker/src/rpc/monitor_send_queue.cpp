@@ -25,6 +25,12 @@ void MonitorSendQueue::Open() {
 }
 
 bool MonitorSendQueue::Push(monitor::proto::MonitorInfo info) {
+  return Push(std::move(info), std::chrono::steady_clock::now());
+}
+
+bool MonitorSendQueue::Push(
+    monitor::proto::MonitorInfo info,
+    std::chrono::steady_clock::time_point enqueued_at) {
   // ByteSizeLong() 以序列化大小参与容量控制，防止 profiling stack 让
   // 消息条数未超限但内存占用突破 max_bytes_。
   const std::size_t bytes = info.ByteSizeLong();
@@ -53,12 +59,21 @@ bool MonitorSendQueue::Push(monitor::proto::MonitorInfo info) {
   }
 
   bytes_ += bytes;
-  items_.push_back(Item{std::move(info), bytes, priority});
+  items_.push_back(Item{std::move(info), bytes, priority, enqueued_at});
   condition_.notify_one();
   return true;
 }
 
 bool MonitorSendQueue::Pop(monitor::proto::MonitorInfo* info) {
+  if (!info) return false;
+  PendingMonitorSample sample;
+  if (!Pop(&sample)) return false;
+  *info = std::move(sample.info);
+  return true;
+}
+
+bool MonitorSendQueue::Pop(PendingMonitorSample* sample) {
+  if (!sample) return false;
   // 关闭只阻止继续等待；若队列中仍有消息，先把剩余消息发送完。
   std::unique_lock<std::mutex> lock(mutex_);
   condition_.wait(lock, [this] { return closed_ || !items_.empty(); });
@@ -69,7 +84,8 @@ bool MonitorSendQueue::Pop(monitor::proto::MonitorInfo* info) {
   Item item = std::move(items_.front());
   items_.pop_front();
   bytes_ -= item.bytes;
-  *info = std::move(item.info);
+  sample->info = std::move(item.info);
+  sample->enqueued_at = item.enqueued_at;
   return true;
 }
 
@@ -86,6 +102,11 @@ void MonitorSendQueue::Close() {
 std::size_t MonitorSendQueue::size() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return items_.size();
+}
+
+std::size_t MonitorSendQueue::bytes() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return bytes_;
 }
 
 std::uint64_t MonitorSendQueue::dropped_count() const {

@@ -109,7 +109,7 @@ if(EBPF_FOUND)
     list(APPEND WORKER_LIBS ${LIBBPF_LIBRARY} ${LIBELF_LIBRARY} ${LIBZ_LIBRARY})
 endif()
 
-target_link_libraries(worker PUBLIC ${WORKER_LIBS})
+target_link_libraries(worker PUBLIC ${WORKER_LIBS} monitor_perf)
 
 if(BUILD_TESTING)
     add_executable(diagnostics_test
@@ -120,7 +120,7 @@ if(BUILD_TESTING)
     target_include_directories(diagnostics_test PRIVATE
         ${PROJECT_SOURCE_DIR}/worker/include
     )
-    target_link_libraries(diagnostics_test PRIVATE monitor_proto)
+    target_link_libraries(diagnostics_test PRIVATE monitor_proto monitor_perf)
     add_test(NAME diagnostics_test COMMAND diagnostics_test)
 
     add_executable(cpu_stat_monitor_test
@@ -159,6 +159,10 @@ if(BUILD_TESTING)
     )
     target_link_libraries(collector_contract_test PRIVATE monitor_proto)
     add_test(NAME collector_contract_test COMMAND collector_contract_test)
+
+    add_executable(perf_log_test tests/perf_log_test.cpp)
+    target_link_libraries(perf_log_test PRIVATE monitor_proto monitor_perf)
+    add_test(NAME perf_log_test COMMAND perf_log_test)
 endif()
 
 # 内核模块构建（可选）
