@@ -65,8 +65,6 @@ struct PersistenceTask {
   float net_in_drop_rate_rate = 0;
   float net_out_drop_rate_rate = 0;
 
-  // Local queue timing only; never serialized or written to MySQL.
-  std::chrono::steady_clock::time_point perf_enqueued_at;
   std::optional<diagnostics::IncidentRecord> incident;
 };
 

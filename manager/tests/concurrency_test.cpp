@@ -517,6 +517,59 @@ void TestPersistenceProducerUnblocksDuringDrain() {
   assert(processed == 3);
 }
 
+/** @brief 验证持久化队列按业务任务计费且 handler 仍收到原任务。 */
+void TestPersistenceQueueBudgetAndHandlerSemantics() {
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool first_started = false;
+  bool release_first = false;
+  int callbacks = 0;
+  std::string received_host;
+
+  monitor::PersistenceTask queued_task;
+  queued_task.host_name = "queued-host";
+  const std::size_t task_budget =
+      monitor::EstimatePersistenceTaskBytes(queued_task);
+
+  monitor::PersistenceWorker worker(
+      2, task_budget,
+      [&](monitor::PersistenceTask&& task) {
+        std::unique_lock<std::mutex> lock(mutex);
+        ++callbacks;
+        if (callbacks == 1) {
+          first_started = true;
+          condition.notify_all();
+          condition.wait(lock, [&] { return release_first; });
+        } else {
+          received_host = task.host_name;
+        }
+        return true;
+      });
+  worker.Start();
+
+  monitor::PersistenceTask first_task;
+  first_task.host_name = "a";
+  assert(worker.Enqueue(std::move(first_task)));
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    assert(condition.wait_for(lock, std::chrono::seconds(2),
+                              [&] { return first_started; }));
+  }
+
+  assert(worker.Enqueue(queued_task));
+  assert(worker.QueueDepth() == 1);
+  assert(worker.QueueBytes() == task_budget);
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    release_first = true;
+  }
+  condition.notify_all();
+  worker.Stop();
+
+  assert(callbacks == 2);
+  assert(received_host == "queued-host");
+}
+
 /** @brief 验证持久化任务超过 byte 上限时不会进入 worker。 */
 void TestPersistenceWorkerRejectsOversizeTask() {
   bool handler_called = false;
@@ -545,6 +598,7 @@ int main() {
   TestQueueByteBudgetAndOversize();
   TestPersistenceWorkerDrainsAcceptedTasks();
   TestPersistenceProducerUnblocksDuringDrain();
+  TestPersistenceQueueBudgetAndHandlerSemantics();
   TestPersistenceWorkerRejectsOversizeTask();
   return 0;
 }

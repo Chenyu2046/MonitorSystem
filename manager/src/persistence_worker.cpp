@@ -17,8 +17,8 @@ PersistenceWorker::PersistenceWorker(std::size_t queue_capacity,
     // 队列大小估算包含 protobuf/detail 字符串，避免只按对象 sizeof
     // 限制而低估实际内存占用。
     : queue_(queue_capacity, queue_max_bytes,
-             [](const PersistenceTask& task) {
-               return EstimatePersistenceTaskBytes(task);
+             [](const QueuedPersistenceTask& item) {
+               return EstimatePersistenceTaskBytes(item.task);
              }),
       handler_(std::move(handler)) {}
 
@@ -39,8 +39,9 @@ bool PersistenceWorker::Enqueue(PersistenceTask task) {
   if (!started_.load(std::memory_order_acquire)) {
     return false;
   }
-  task.perf_enqueued_at = std::chrono::steady_clock::now();
-  return queue_.Push(std::move(task));
+  QueuedPersistenceTask queued{
+      std::move(task), std::chrono::steady_clock::now()};
+  return queue_.Push(std::move(queued));
 }
 
 void PersistenceWorker::Stop() {
@@ -68,15 +69,15 @@ std::size_t PersistenceWorker::QueueDepth() const { return queue_.Size(); }
 std::size_t PersistenceWorker::QueueBytes() const { return queue_.Bytes(); }
 
 void PersistenceWorker::Run() {
-  // Pop 返回 false 表示队列已关闭且没有剩余任务；每轮清空 task，避免
+  // Pop 返回 false 表示队列已关闭且没有剩余任务；每轮清空 queued，避免
   // 上一条 protobuf/detail 数据在下一轮复用时造成额外保留。
-  PersistenceTask task;
-  while (queue_.Pop(&task)) {
-    const auto queue_wait_us = perf::ElapsedUs(task.perf_enqueued_at);
+  QueuedPersistenceTask queued;
+  while (queue_.Pop(&queued)) {
+    const auto queue_wait_us = perf::ElapsedUs(queued.enqueued_at);
     const bool slow = perf::IsSlow(
         queue_wait_us, perf::GetConfig().slow_persist_queue_ms);
     if (perf::OutputEnabled() || slow) {
-      const auto trace_id = perf::BuildTraceId(task.host_score.info);
+      const auto trace_id = perf::BuildTraceId(queued.task.host_score.info);
       const auto fields = [&] {
         return "queue_wait_us=" + std::to_string(queue_wait_us) +
                " queue_depth=" + std::to_string(queue_.Size()) +
@@ -88,8 +89,8 @@ void PersistenceWorker::Run() {
         perf::LogSlow("manager", "persistence_queue", trace_id, fields);
       }
     }
-    (void)handler_(std::move(task));
-    task = PersistenceTask{};
+    (void)handler_(std::move(queued.task));
+    queued = QueuedPersistenceTask{};
   }
 }
 

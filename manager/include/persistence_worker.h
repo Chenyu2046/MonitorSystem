@@ -10,6 +10,7 @@
  */
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <thread>
@@ -43,10 +44,16 @@ class PersistenceWorker {
   std::size_t QueueBytes() const;
 
  private:
+  /** @brief 埋点元数据与业务任务分离，避免污染业务字节预算。 */
+  struct QueuedPersistenceTask {
+    PersistenceTask task;
+    std::chrono::steady_clock::time_point enqueued_at;
+  };
+
   /** @brief 消费队列并调用外部 TaskHandler。 */
   void Run();
 
-  concurrency::BoundedQueue<PersistenceTask> queue_;
+  concurrency::BoundedQueue<QueuedPersistenceTask> queue_;
   const TaskHandler handler_;
   std::thread worker_;
   std::atomic<bool> started_{false};
