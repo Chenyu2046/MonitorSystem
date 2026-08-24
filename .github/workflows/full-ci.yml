@@ -1,0 +1,215 @@
+name: Full CI
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  asan:
+    name: asan
+    runs-on: ubuntu-24.04
+    env:
+      ASAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            protobuf-compiler \
+            protobuf-compiler-grpc \
+            libprotobuf-dev \
+            libgrpc++-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-asan -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O2 -g -UNDEBUG" \
+            -DBUILD_TESTING=ON \
+            -DBUILD_BENCHMARK=ON \
+            -DENABLE_EBPF=OFF \
+            -DENABLE_MYSQL=OFF \
+            -DSANITIZER=address
+
+      - name: Build
+        run: cmake --build build-asan --parallel
+
+      - name: Test
+        run: ctest --test-dir build-asan --output-on-failure
+
+  ubsan:
+    name: ubsan
+    runs-on: ubuntu-24.04
+    env:
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            protobuf-compiler \
+            protobuf-compiler-grpc \
+            libprotobuf-dev \
+            libgrpc++-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-ubsan -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O2 -g -UNDEBUG" \
+            -DBUILD_TESTING=ON \
+            -DBUILD_BENCHMARK=ON \
+            -DENABLE_EBPF=OFF \
+            -DENABLE_MYSQL=OFF \
+            -DSANITIZER=undefined
+
+      - name: Build
+        run: cmake --build build-ubsan --parallel
+
+      - name: Test
+        run: ctest --test-dir build-ubsan --output-on-failure
+
+  mysql-build:
+    name: mysql-build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            protobuf-compiler \
+            protobuf-compiler-grpc \
+            libprotobuf-dev \
+            libgrpc++-dev \
+            default-libmysqlclient-dev
+
+      - name: Verify MySQL client dependency
+        run: |
+          pkg-config --modversion mysqlclient
+          pkg-config --cflags mysqlclient
+          pkg-config --libs mysqlclient
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-mysql -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -UNDEBUG" \
+            -DBUILD_TESTING=ON \
+            -DBUILD_BENCHMARK=ON \
+            -DENABLE_EBPF=OFF \
+            -DENABLE_MYSQL=ON
+
+      - name: Build
+        run: cmake --build build-mysql --parallel
+
+      - name: Test
+        run: ctest --test-dir build-mysql --output-on-failure
+
+  ebpf-build:
+    name: ebpf-build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            pkg-config \
+            protobuf-compiler \
+            protobuf-compiler-grpc \
+            libprotobuf-dev \
+            libgrpc++-dev \
+            clang \
+            llvm \
+            libbpf-dev \
+            libelf-dev \
+            zlib1g-dev \
+            linux-tools-common \
+            linux-tools-generic
+
+      - name: Verify eBPF toolchain
+        run: |
+          clang --version
+          if bpftool version >/dev/null 2>&1; then
+            BPFTOOL_BIN="$(command -v bpftool)"
+          else
+            BPFTOOL_BIN="$(find /usr/lib -type f -path '*/linux-tools*/*' -name bpftool -print -quit)"
+          fi
+          test -n "${BPFTOOL_BIN}"
+          "${BPFTOOL_BIN}" version
+          echo "BPFTOOL=${BPFTOOL_BIN}" >> "${GITHUB_ENV}"
+          test -s worker/src/ebpf/vmlinux.h
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-ebpf -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -UNDEBUG" \
+            -DBUILD_TESTING=ON \
+            -DBUILD_BENCHMARK=ON \
+            -DENABLE_EBPF=ON \
+            -DENABLE_MYSQL=OFF
+
+      - name: Compile BPF programs and generate skeletons
+        run: |
+          cmake --build build-ebpf --target ebpf_skeleton --parallel
+          test -s worker/include/monitor/net_stats.skel.h
+
+      - name: Build and link Worker
+        run: cmake --build build-ebpf --target worker --parallel
