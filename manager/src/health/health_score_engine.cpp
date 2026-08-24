@@ -216,22 +216,31 @@ HealthResult HealthScoreEngine::Evaluate(
     const monitor::proto::MonitorInfo& info, Clock::time_point timestamp,
     double resource_score, ActivityClock::time_point activity_timestamp) {
   const auto health_start = ActivityClock::now();
+  std::int64_t health_compute_us = 0;
+  struct MetricTrace {
+    MetricId metric;
+    Domain domain;
+    double value;
+    DetectorResult detector;
+    std::int64_t duration_us;
+  };
+  std::vector<MetricTrace> metric_traces;
+  if (perf::HealthTraceEnabled()) metric_traces.reserve(kMetricCount);
   HealthResult result;
   result.resource_score = std::isfinite(resource_score) ? resource_score : 0.0;
   result.state = WorkerState(info);
   const auto log_health = [&](const HealthResult& health,
                               std::size_t observation_count,
                               std::size_t anomalous_metric_count) {
-    const auto health_us = perf::ElapsedUs(health_start);
     const bool slow =
-        perf::IsSlow(health_us, perf::GetConfig().slow_health_ms);
-    if (!perf::OutputEnabled() && !perf::HealthTraceEnabled() && !slow) {
+        perf::IsSlow(health_compute_us, perf::GetConfig().slow_health_ms);
+    if (!perf::PerfTraceEnabled() && !perf::HealthTraceEnabled() && !slow) {
       return;
     }
     const auto trace_id = perf::BuildTraceId(info);
     const auto fields = [&] {
       std::ostringstream output;
-      output << "health_us=" << health_us
+      output << "health_compute_us=" << health_compute_us
              << " model_state=" << ModelStateName(health.model_state)
              << " observations=" << observation_count
              << " anomalous_metric_count=" << anomalous_metric_count
@@ -257,7 +266,7 @@ HealthResult HealthScoreEngine::Evaluate(
       }
       return output.str();
     };
-    if (perf::OutputEnabled()) {
+    if (perf::PerfTraceEnabled()) {
       perf::LogPerf("manager", "health", trace_id, fields);
     } else if (slow) {
       perf::LogSlow("manager", "health", trace_id, fields);
@@ -266,6 +275,7 @@ HealthResult HealthScoreEngine::Evaluate(
     }
   };
   if (!config_.IsValid()) {
+    health_compute_us = perf::ElapsedUs(health_start);
     log_health(result, 0, 0);
     return result;
   }
@@ -487,19 +497,9 @@ HealthResult HealthScoreEngine::Evaluate(
         observation.value, observation.threshold, windows_[index],
         model_timestamp);
     if (perf::HealthTraceEnabled()) {
-      const auto detector_us = perf::ElapsedUs(detector_start);
-      const auto trace_id = perf::BuildTraceId(info);
-      perf::LogHealth("health_metric", trace_id, [&] {
-        std::ostringstream output;
-        output << "metric=" << MetricName(observation.metric)
-               << " domain=" << DomainName(observation.domain)
-               << " value=" << observation.value
-               << " anomaly_score=" << detector.anomaly_score
-               << " anomalous=" << (detector.anomalous ? 1 : 0)
-               << " model_state=" << ModelStateName(detector.model_state)
-               << " duration_us=" << detector_us;
-        return output.str();
-      });
+      metric_traces.push_back(
+          {observation.metric, observation.domain, observation.value, detector,
+           perf::ElapsedUs(detector_start)});
     }
     windows_[index].Push(observation.value, model_timestamp);
     const auto domain = static_cast<std::size_t>(observation.domain);
@@ -517,6 +517,7 @@ HealthResult HealthScoreEngine::Evaluate(
 
   if (observations.empty()) {
     result.model_state = ModelState::kCold;
+    health_compute_us = perf::ElapsedUs(health_start);
     log_health(result, 0, 0);
     return result;
   }
@@ -584,6 +585,24 @@ HealthResult HealthScoreEngine::Evaluate(
   if (result.valid) {
     last_event_timestamp_ = model_timestamp;
     last_activity_ = activity_timestamp;
+  }
+  health_compute_us = perf::ElapsedUs(health_start);
+  if (perf::HealthTraceEnabled()) {
+    const auto trace_id = perf::BuildTraceId(info);
+    for (const auto& metric : metric_traces) {
+      perf::LogHealth("health_metric", trace_id, [&] {
+        std::ostringstream output;
+        output << "metric=" << MetricName(metric.metric)
+               << " domain=" << DomainName(metric.domain)
+               << " value=" << metric.value
+               << " anomaly_score=" << metric.detector.anomaly_score
+               << " anomalous=" << (metric.detector.anomalous ? 1 : 0)
+               << " model_state="
+               << ModelStateName(metric.detector.model_state)
+               << " duration_us=" << metric.duration_us;
+        return output.str();
+      });
+    }
   }
   log_health(result, observations.size(), anomalous_metrics);
   return result;

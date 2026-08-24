@@ -31,6 +31,7 @@ struct Config {
   bool trace_enabled = false;
   bool health_trace_enabled = false;
   int slow_worker_collect_ms = 50;
+  int slow_worker_queue_ms = 100;
   int slow_worker_rpc_ms = 500;
   int slow_manager_queue_ms = 100;
   int slow_manager_process_ms = 50;
@@ -87,6 +88,8 @@ inline Config LoadConfig() {
   config.health_trace_enabled = ParseFlag("MONITOR_HEALTH_TRACE", false);
   config.slow_worker_collect_ms = ParsePositiveMilliseconds(
       "PERF_SLOW_WORKER_COLLECT_MS", config.slow_worker_collect_ms);
+  config.slow_worker_queue_ms = ParsePositiveMilliseconds(
+      "PERF_SLOW_WORKER_QUEUE_MS", config.slow_worker_queue_ms);
   config.slow_worker_rpc_ms = ParsePositiveMilliseconds(
       "PERF_SLOW_WORKER_RPC_MS", config.slow_worker_rpc_ms);
   config.slow_manager_queue_ms = ParsePositiveMilliseconds(
@@ -190,7 +193,6 @@ inline void LogWarn(std::string_view component, std::string_view event,
 template <typename Builder>
 inline void LogError(std::string_view component, std::string_view event,
                      std::string_view trace_id, Builder&& builder) {
-  if (!OutputEnabled()) return;
   Emit("[PERF][ERROR]", component, event, trace_id,
        std::forward<Builder>(builder)());
 }

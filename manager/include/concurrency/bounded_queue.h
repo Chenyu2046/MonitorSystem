@@ -56,7 +56,12 @@ class BoundedQueue {
   BoundedQueue& operator=(const BoundedQueue&) = delete;
 
   /** @brief 不等待容量，满/关闭/单项超限时返回 false。 */
-  bool TryPush(T value) {
+  bool TryPush(const T& value) { return TryPush(T(value)); }
+
+  /**
+   * @brief 尝试移动入队；失败时保留调用方的值，便于记录拒绝事件。
+   */
+  bool TryPush(T&& value) {
     const std::size_t weight = weight_fn_(value);
     if (weight > max_bytes_) {
       return false;

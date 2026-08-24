@@ -163,6 +163,8 @@ if(BUILD_TESTING)
     add_executable(perf_log_test tests/perf_log_test.cpp)
     target_link_libraries(perf_log_test PRIVATE monitor_proto monitor_perf)
     add_test(NAME perf_log_test COMMAND perf_log_test)
+    add_test(NAME perf_log_log_gate COMMAND perf_log_test log_gate)
+    add_test(NAME perf_log_trace_gate COMMAND perf_log_test trace_gate)
 endif()
 
 # 内核模块构建（可选）

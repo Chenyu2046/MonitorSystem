@@ -669,7 +669,7 @@ HostFeedbackResult HostManager::ProcessOne(
   const auto resource_score_us = perf::ElapsedUs(resource_score_start);
   const double score = score_result.score;
   health::HealthResult health_result;
-  std::int64_t health_us = 0;
+  std::int64_t health_call_us = 0;
   if (monitor_valid && score_result.valid) {
     auto& health_engines = shard_health_engines_[shard_id];
     auto [engine_it, inserted] =
@@ -683,7 +683,7 @@ HostFeedbackResult HostManager::ProcessOne(
     const auto health_start = std::chrono::steady_clock::now();
     health_result = engine_it->second.Evaluate(info, event_timestamp, score,
                                                enqueued_at);
-    health_us = perf::ElapsedUs(health_start);
+    health_call_us = perf::ElapsedUs(health_start);
   }
   HostFeedbackResult feedback_result;
   if (has_sample_identity && score_result.valid && health_result.valid &&
@@ -947,9 +947,7 @@ HostFeedbackResult HostManager::ProcessOne(
       perf::GetConfig().slow_manager_queue_ms);
   const bool slow_process = perf::IsSlow(
       process_total_us, perf::GetConfig().slow_manager_process_ms);
-  const bool slow_health =
-      health_us > 0 && perf::IsSlow(health_us, perf::GetConfig().slow_health_ms);
-  if (perf::OutputEnabled() || slow_queue || slow_process || slow_health) {
+  if (perf::PerfTraceEnabled() || slow_queue || slow_process) {
     const auto trace_id = perf::BuildTraceId(host_name, info);
     const auto fields = [&] {
       std::ostringstream output;
@@ -959,7 +957,7 @@ HostFeedbackResult HostManager::ProcessOne(
              << " validate_us=" << validate_us
              << " session_gate_us=" << session_gate_us
              << " resource_score_us=" << resource_score_us
-             << " health_us=" << health_us
+             << " health_call_us=" << health_call_us
              << " perf_rate_us=" << perf_rate_us
              << " host_score_update_us=" << host_score_update_us
              << " evidence_us=" << evidence_us << " rca_us=" << rca_us
@@ -974,16 +972,11 @@ HostFeedbackResult HostManager::ProcessOne(
              << " persistence_enqueued=" << (persistence_enqueued ? 1 : 0)
              << " has_incident=" << (has_incident ? 1 : 0)
              << " result=ok";
-      if (slow_queue || slow_process || slow_health) {
+      if (slow_queue || slow_process) {
         output << " reason=";
         bool first_reason = true;
         if (slow_queue) {
           output << "queue_wait";
-          first_reason = false;
-        }
-        if (slow_health) {
-          if (!first_reason) output << ",";
-          output << "health";
           first_reason = false;
         }
         if (slow_process) {
@@ -993,7 +986,7 @@ HostFeedbackResult HostManager::ProcessOne(
       }
       return output.str();
     };
-    if (perf::OutputEnabled()) {
+    if (perf::PerfTraceEnabled()) {
       perf::LogPerf("manager", "sample_process", trace_id, fields);
     } else {
       perf::LogSlow("manager", "sample_process", trace_id, fields);
@@ -1041,7 +1034,7 @@ bool HostManager::PersistTask(PersistenceTask task) {
   const auto persist_total_us = perf::ElapsedUs(persist_start);
   const bool slow_mysql =
       perf::IsSlow(mysql_us, perf::GetConfig().slow_mysql_ms);
-  if (perf::OutputEnabled() || slow_mysql) {
+  if (perf::PerfTraceEnabled() || slow_mysql) {
     const auto trace_id = perf::BuildTraceId(task.host_score.info);
     const auto fields = [&] {
       return "diagnostic_persist_us=" +
@@ -1050,7 +1043,7 @@ bool HostManager::PersistTask(PersistenceTask task) {
              " persist_total_us=" + std::to_string(persist_total_us) +
              " success=" + (success ? std::string("1") : std::string("0"));
     };
-    if (perf::OutputEnabled()) {
+    if (perf::PerfTraceEnabled()) {
       perf::LogPerf("manager", "persistence", trace_id, fields);
     } else {
       perf::LogSlow("manager", "persistence", trace_id, fields);
@@ -1197,11 +1190,14 @@ bool HostManager::WriteToMysql(
     std::int64_t commit_us = 0;
     std::int64_t rollback_us = 0;
     bool success = false;
+    MYSQL* conn = nullptr;
+    std::string failed_stage;
 
     ~MysqlPerfTrace() {
       const auto total_us = perf::ElapsedUs(started);
       const bool slow = perf::IsSlow(total_us, perf::GetConfig().slow_mysql_ms);
-      if (!perf::OutputEnabled() && !slow) return;
+      const bool trace = perf::PerfTraceEnabled();
+      if (!trace && !slow && failed_stage.empty()) return;
       if (trace_id.empty()) trace_id = perf::BuildTraceId(info);
       const auto fields = [&] {
         std::ostringstream output;
@@ -1216,53 +1212,53 @@ bool HostManager::WriteToMysql(
                << " mysql_rollback_us=" << rollback_us
                << " mysql_total_us=" << total_us
                << " result=" << (success ? "success" : "failure");
+        if (!failed_stage.empty()) output << " failed_stage=" << failed_stage;
         return output.str();
       };
-      if (perf::OutputEnabled()) {
+      if (trace) {
         perf::LogPerf("manager", "mysql", trace_id, fields);
-      } else {
+      } else if (slow) {
         perf::LogSlow("manager", "mysql", trace_id, fields);
+      }
+      if (!failed_stage.empty()) {
+        perf::LogError("manager", "mysql_failure", trace_id, [&] {
+          std::ostringstream output;
+          output << "stage=" << failed_stage;
+          if (conn) {
+            output << " mysql_errno=" << mysql_errno(conn)
+                   << " mysql_error=" << mysql_error(conn);
+          }
+          output << " mysql_rollback_us=" << rollback_us;
+          return output.str();
+        });
       }
     }
   } mysql_trace{host_score.info};
-  if (perf::OutputEnabled()) {
+  if (perf::PerfTraceEnabled()) {
     mysql_trace.trace_id = perf::BuildTraceId(host_score.info);
   }
   const auto connect_start = std::chrono::steady_clock::now();
   MYSQL* conn = GetMysqlConnection();
+  mysql_trace.conn = conn;
   mysql_trace.connect_us = perf::ElapsedUs(connect_start);
   if (!conn) {
-    if (perf::OutputEnabled()) {
-      perf::LogError("manager", "mysql_failure", mysql_trace.trace_id,
-                     [] { return std::string("stage=connect"); });
-    }
+    mysql_trace.failed_stage = "connect";
     return false;
   }
-  const auto log_mysql_failure = [&](const char* stage) {
-    if (mysql_trace.trace_id.empty()) {
-      mysql_trace.trace_id = perf::BuildTraceId(host_score.info);
-    }
-    perf::LogError("manager", "mysql_failure", mysql_trace.trace_id, [&] {
-      std::ostringstream output;
-      output << "stage=" << stage << " mysql_errno=" << mysql_errno(conn)
-             << " mysql_error=" << mysql_error(conn);
-      return output.str();
-    });
-  };
   const auto begin_start = std::chrono::steady_clock::now();
   const bool transaction_started = mysql_query(conn, "START TRANSACTION") == 0;
   mysql_trace.begin_us = perf::ElapsedUs(begin_start);
   if (!transaction_started) {
-    log_mysql_failure("begin");
+    mysql_trace.failed_stage = "begin";
     return false;
   }
   PersistenceHistory next_history = persistence_history_;
-  const auto exec = [&](const std::string& sql) {
+  const auto exec = [&](const std::string& sql, const char* stage) {
     if (mysql_query(conn, sql.c_str()) == 0) return true;
+    mysql_trace.failed_stage = stage;
     const auto rollback_start = std::chrono::steady_clock::now();
     mysql_query(conn, "ROLLBACK");
     mysql_trace.rollback_us += perf::ElapsedUs(rollback_start);
-    log_mysql_failure("statement");
     return false;
   };
 
@@ -1375,7 +1371,10 @@ bool HostManager::WriteToMysql(
         << mem_free_rate << "," << mem_avail_rate << ","
         << disk_util_percent_rate << "," << net_out_rate_rate << ","
         << net_in_rate_rate << ",'" << time_buf << "')";
-    if (!exec(oss.str())) return false;
+    if (!exec(oss.str(), "server_performance")) {
+      mysql_trace.main_us = perf::ElapsedUs(main_start);
+      return false;
+    }
   }
   mysql_trace.main_us = perf::ElapsedUs(main_start);
 
@@ -1426,7 +1425,10 @@ bool HostManager::WriteToMysql(
         << rate_u64(curr.err_out, last.err_out) << ","
         << rate_u64(curr.drop_in, last.drop_in) << ","
         << rate_u64(curr.drop_out, last.drop_out) << ",'" << time_buf << "')";
-    if (!exec(oss.str())) return false;
+    if (!exec(oss.str(), "server_net_detail")) {
+      mysql_trace.net_us = perf::ElapsedUs(net_start);
+      return false;
+    }
 
     last = curr;
   }
@@ -1472,7 +1474,10 @@ bool HostManager::WriteToMysql(
         << rate(curr.sched, last.sched) << ","
         << rate(curr.hrtimer, last.hrtimer) << "," << rate(curr.rcu, last.rcu)
         << ",'" << time_buf << "')";
-    if (!exec(oss.str())) return false;
+    if (!exec(oss.str(), "server_softirq_detail")) {
+      mysql_trace.softirq_us = perf::ElapsedUs(softirq_start);
+      return false;
+    }
 
     last = curr;
   }
@@ -1545,7 +1550,10 @@ bool HostManager::WriteToMysql(
         << rate(curr.kreclaimable, last.kreclaimable) << ","
         << rate(curr.sreclaimable, last.sreclaimable) << ","
         << rate(curr.sunreclaim, last.sunreclaim) << ",'" << time_buf << "')";
-    if (!exec(oss.str())) return false;
+    if (!exec(oss.str(), "server_mem_detail")) {
+      mysql_trace.mem_us = perf::ElapsedUs(mem_start);
+      return false;
+    }
 
     last = curr;
   }
@@ -1598,7 +1606,10 @@ bool HostManager::WriteToMysql(
         << rate(curr.avg_write_latency_ms, last.avg_write_latency_ms) << ","
         << rate(curr.util_percent, last.util_percent) << ",'" << time_buf
         << "')";
-    if (!exec(oss.str())) return false;
+    if (!exec(oss.str(), "server_disk_detail")) {
+      mysql_trace.disk_us = perf::ElapsedUs(disk_start);
+      return false;
+    }
 
     last = curr;
   }
@@ -1608,10 +1619,10 @@ bool HostManager::WriteToMysql(
   const bool committed = mysql_query(conn, "COMMIT") == 0;
   mysql_trace.commit_us = perf::ElapsedUs(commit_start);
   if (!committed) {
+    mysql_trace.failed_stage = "commit";
     const auto rollback_start = std::chrono::steady_clock::now();
     mysql_query(conn, "ROLLBACK");
     mysql_trace.rollback_us += perf::ElapsedUs(rollback_start);
-    log_mysql_failure("commit");
     return false;
   }
   persistence_history_ = std::move(next_history);

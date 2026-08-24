@@ -10,9 +10,12 @@
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
+#include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -254,8 +257,18 @@ void TestQueueFullAndShutdownDrain() {
   }
   assert(executor.Submit("host", MakeInfo(2)) ==
          monitor::DataReceiveResult::kAccepted);
-  assert(executor.Submit("host", MakeInfo(3)) ==
+  auto rejected_info = MakeInfo(3);
+  rejected_info.set_sample_session_id("session-B");
+  rejected_info.set_sample_sequence(3);
+  std::ostringstream captured;
+  auto* old_buffer = std::cerr.rdbuf(captured.rdbuf());
+  assert(executor.Submit("host", rejected_info) ==
          monitor::DataReceiveResult::kQueueFull);
+  std::cerr.rdbuf(old_buffer);
+  assert(captured.str().find("event=shard_queue_reject") !=
+         std::string::npos);
+  assert(captured.str().find("trace_id=host:session-B:3") !=
+         std::string::npos);
   {
     std::lock_guard<std::mutex> lock(mutex);
     release_first = true;
@@ -430,6 +443,12 @@ void TestQueueByteBudgetAndOversize() {
       2, 4, [](const std::string& item) { return item.size(); });
   assert(!small_queue.TryPush("12345"));
   assert(!small_queue.Push("12345"));
+
+  monitor::concurrency::BoundedQueue<std::string> rejected_input_queue(
+      1, 5, [](const std::string& item) { return item.size(); });
+  std::string rejected_input = "123456";
+  assert(!rejected_input_queue.TryPush(std::move(rejected_input)));
+  assert(rejected_input == "123456");
 }
 
 /** @brief 验证 PersistenceWorker 停止前消费已接受任务。 */
@@ -587,6 +606,8 @@ void TestPersistenceWorkerRejectsOversizeTask() {
 }  // namespace
 
 int main() {
+  setenv("MONITOR_PERF_LOG", "1", 1);
+  unsetenv("MONITOR_PERF_TRACE");
   TestSameHostOrdering();
   TestDifferentHostsRunConcurrently();
   TestQueuedTimestampPreserved();
@@ -600,5 +621,6 @@ int main() {
   TestPersistenceProducerUnblocksDuringDrain();
   TestPersistenceQueueBudgetAndHandlerSemantics();
   TestPersistenceWorkerRejectsOversizeTask();
+  unsetenv("MONITOR_PERF_LOG");
   return 0;
 }

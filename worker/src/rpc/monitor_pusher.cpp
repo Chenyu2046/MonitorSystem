@@ -453,7 +453,7 @@ bool MonitorPusher::PushOnce() {
   state_machine_.Update(anomaly);
   const auto state_machine_us = perf::ElapsedUs(state_machine_start);
   const auto state = state_machine_.state();
-  if (perf::OutputEnabled() && state != state_before) {
+  if (perf::PerfTraceEnabled() && state != state_before) {
     const auto trace_id = perf::BuildTraceId(info);
     perf::LogPerf("worker", "state_transition", trace_id, [&] {
       std::ostringstream output;
@@ -627,7 +627,7 @@ bool MonitorPusher::PushOnce() {
   const auto enqueue_start = std::chrono::steady_clock::now();
   const bool slow =
       perf::IsSlow(collect_us, perf::GetConfig().slow_worker_collect_ms);
-  const bool need_perf_identity = perf::OutputEnabled() || slow;
+  const bool need_perf_identity = perf::PerfTraceEnabled() || slow;
   const auto trace_id =
       need_perf_identity ? perf::BuildTraceId(info) : std::string{};
   const auto host_key = need_perf_identity ? CanonicalHostKey(info)
@@ -638,7 +638,7 @@ bool MonitorPusher::PushOnce() {
   const bool queued = send_queue_.Push(std::move(info), enqueue_start);
   const auto enqueue_us = perf::ElapsedUs(enqueue_start);
   const auto total_us = perf::ElapsedUs(prepare_start);
-  if (perf::OutputEnabled() || slow) {
+  if (perf::PerfTraceEnabled() || slow) {
     const auto fields = [&] {
       std::ostringstream output;
       std::size_t active_probe_count = 0;
@@ -669,7 +669,7 @@ bool MonitorPusher::PushOnce() {
              << " result=" << (queued ? "ok" : "queue_rejected");
       return output.str();
     };
-    if (perf::OutputEnabled()) {
+    if (perf::PerfTraceEnabled()) {
       perf::LogPerf("worker", "sample_prepare", trace_id, fields);
     } else {
       perf::LogSlow("worker", "sample_prepare", trace_id, fields);
@@ -686,8 +686,8 @@ void MonitorPusher::SendLoop() {
     const auto queue_wait_us = perf::ElapsedUs(sample.enqueued_at);
     const bool slow = perf::IsSlow(
         queue_wait_us,
-        perf::GetConfig().slow_manager_queue_ms);
-    if (perf::OutputEnabled() || slow) {
+        perf::GetConfig().slow_worker_queue_ms);
+    if (perf::PerfTraceEnabled() || slow) {
       const auto trace_id = perf::BuildTraceId(sample.info);
       const auto fields = [&] {
         std::ostringstream output;
@@ -696,7 +696,7 @@ void MonitorPusher::SendLoop() {
                << " queue_bytes=" << send_queue_.bytes();
         return output.str();
       };
-      if (perf::OutputEnabled()) {
+      if (perf::PerfTraceEnabled()) {
         perf::LogPerf("worker", "send_queue", trace_id, fields);
       } else {
         perf::LogSlow("worker", "send_queue", trace_id, fields);
@@ -717,7 +717,7 @@ bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
   }
   const auto total_start = std::chrono::steady_clock::now();
   std::string trace_id =
-      (perf::OutputEnabled() ? perf::BuildTraceId(info) : std::string{});
+      (perf::PerfTraceEnabled() ? perf::BuildTraceId(info) : std::string{});
   int backoff_ms = observability_config_.sender_retry_initial_ms;
   int retry_count = 0;
   grpc::StatusCode final_code = grpc::StatusCode::UNKNOWN;
@@ -725,7 +725,7 @@ bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
     const auto total_us = perf::ElapsedUs(total_start);
     const bool slow = perf::IsSlow(
         total_us, perf::GetConfig().slow_worker_rpc_ms);
-    if (!perf::OutputEnabled() && !slow) return;
+    if (!perf::PerfTraceEnabled() && !slow) return;
     if (trace_id.empty()) trace_id = perf::BuildTraceId(info);
     const auto fields = [&] {
       std::ostringstream output;
@@ -736,7 +736,7 @@ bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
              << " result=" << (success ? "success" : "failure");
       return output.str();
     };
-    if (perf::OutputEnabled()) {
+    if (perf::PerfTraceEnabled()) {
       perf::LogPerf("worker", "rpc_total", trace_id, fields);
     } else {
       perf::LogSlow("worker", "rpc_total", trace_id, fields);
@@ -759,7 +759,7 @@ bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
     const auto rpc_us = perf::ElapsedUs(attempt_start);
     const bool retryable = IsRetryable(status);
     const bool slow = perf::IsSlow(rpc_us, perf::GetConfig().slow_worker_rpc_ms);
-    if (perf::OutputEnabled() || slow) {
+    if (perf::PerfTraceEnabled() || slow) {
       if (trace_id.empty()) trace_id = perf::BuildTraceId(info);
       const auto fields = [&] {
         std::ostringstream output;
@@ -770,7 +770,7 @@ bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
                << " health_valid=" << (response.health_valid() ? 1 : 0);
         return output.str();
       };
-      if (perf::OutputEnabled()) {
+      if (perf::PerfTraceEnabled()) {
         perf::LogPerf("worker", "rpc_attempt", trace_id, fields);
       } else {
         perf::LogSlow("worker", "rpc_attempt", trace_id, fields);
@@ -803,7 +803,7 @@ bool MonitorPusher::SendWithRetry(const monitor::proto::MonitorInfo& info) {
     const auto delay =
         std::chrono::milliseconds(backoff_ms + jitter(random_engine));
     ++retry_count;
-    if (perf::OutputEnabled()) {
+    if (perf::PerfTraceEnabled()) {
       perf::LogPerf("worker", "rpc_backoff", trace_id, [&] {
         return "backoff_ms=" + std::to_string(delay.count());
       });

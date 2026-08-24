@@ -76,14 +76,14 @@ void PersistenceWorker::Run() {
     const auto queue_wait_us = perf::ElapsedUs(queued.enqueued_at);
     const bool slow = perf::IsSlow(
         queue_wait_us, perf::GetConfig().slow_persist_queue_ms);
-    if (perf::OutputEnabled() || slow) {
+    if (perf::PerfTraceEnabled() || slow) {
       const auto trace_id = perf::BuildTraceId(queued.task.host_score.info);
       const auto fields = [&] {
         return "queue_wait_us=" + std::to_string(queue_wait_us) +
                " queue_depth=" + std::to_string(queue_.Size()) +
                " queue_bytes=" + std::to_string(queue_.Bytes());
       };
-      if (perf::OutputEnabled()) {
+      if (perf::PerfTraceEnabled()) {
         perf::LogPerf("manager", "persistence_queue", trace_id, fields);
       } else {
         perf::LogSlow("manager", "persistence_queue", trace_id, fields);

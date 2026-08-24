@@ -60,7 +60,7 @@ namespace monitor {
   const auto handler_us = perf::ElapsedUs(handler_start);
   const bool slow = perf::IsSlow(
       handler_us, perf::GetConfig().slow_manager_process_ms);
-  if (perf::OutputEnabled() || slow) {
+  if (perf::PerfTraceEnabled() || slow) {
     const auto trace_id = perf::BuildTraceId(hostname, *request);
     const auto fields = [&] {
       return "request_bytes=" + std::to_string(request->ByteSizeLong()) +
@@ -70,7 +70,7 @@ namespace monitor {
              " health_valid=" +
              std::to_string(response && response->health_valid() ? 1 : 0);
     };
-    if (perf::OutputEnabled()) {
+    if (perf::PerfTraceEnabled()) {
       perf::LogPerf("manager", "grpc_handler", trace_id, fields);
     } else {
       perf::LogSlow("manager", "grpc_handler", trace_id, fields);
