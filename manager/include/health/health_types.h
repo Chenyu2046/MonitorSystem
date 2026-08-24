@@ -49,6 +49,7 @@ struct HealthResult {
   double health_score = 0.0;
   double resource_score = 0.0;
   double anomaly_score = 0.0;
+  double remote_trigger_score = 0.0;
   double anomaly_rate_5m = 0.0;
   double cpu_score = 0.0;
   double memory_score = 0.0;

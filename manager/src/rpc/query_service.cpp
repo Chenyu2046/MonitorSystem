@@ -9,6 +9,7 @@
 
 #include "rpc/query_service.h"
 #include "rpc/health_score_mapper.h"
+#include "rpc/query_rate_mapper.h"
 
 #include "rpc/softirq_detail_mapper.h"
 
@@ -94,10 +95,7 @@ void QueryServiceImpl::SetTimestamp(
     proto_rec->set_rcv_rate(rec.rcv_rate);
     proto_rec->set_score(rec.score);
     PopulateHealthScoreFields(rec, proto_rec);
-    proto_rec->set_cpu_percent_rate(rec.cpu_percent_rate);
-    proto_rec->set_mem_used_percent_rate(rec.mem_used_percent_rate);
-    proto_rec->set_disk_util_percent_rate(rec.disk_util_percent_rate);
-    proto_rec->set_load_avg_1_rate(rec.load_avg_1_rate);
+    PopulatePerformanceRateFields(rec, proto_rec);
   }
 
   response->set_total_count(total_count);
@@ -144,10 +142,7 @@ void QueryServiceImpl::SetTimestamp(
     proto_rec->set_rcv_rate(rec.rcv_rate);
     proto_rec->set_score(rec.score);
     PopulateHealthScoreFields(rec, proto_rec);
-    proto_rec->set_cpu_percent_rate(rec.cpu_percent_rate);
-    proto_rec->set_mem_used_percent_rate(rec.mem_used_percent_rate);
-    proto_rec->set_disk_util_percent_rate(rec.disk_util_percent_rate);
-    proto_rec->set_load_avg_1_rate(rec.load_avg_1_rate);
+    PopulatePerformanceRateFields(rec, proto_rec);
   }
 
   response->set_interval_seconds(request->interval_seconds());
@@ -348,6 +343,7 @@ void QueryServiceImpl::SetTimestamp(
     proto_rec->set_snd_bytes_rate(rec.snd_bytes_rate);
     proto_rec->set_rcv_packets_rate(rec.rcv_packets_rate);
     proto_rec->set_snd_packets_rate(rec.snd_packets_rate);
+    PopulateNetRateFields(rec, proto_rec);
   }
 
   response->set_total_count(total_count);
@@ -395,6 +391,7 @@ void QueryServiceImpl::SetTimestamp(
     proto_rec->set_avg_read_latency_ms(rec.avg_read_latency_ms);
     proto_rec->set_avg_write_latency_ms(rec.avg_write_latency_ms);
     proto_rec->set_util_percent(rec.util_percent);
+    PopulateDiskRateFields(rec, proto_rec);
   }
 
   response->set_total_count(total_count);
@@ -442,6 +439,7 @@ void QueryServiceImpl::SetTimestamp(
     proto_rec->set_active(rec.active);
     proto_rec->set_inactive(rec.inactive);
     proto_rec->set_dirty(rec.dirty);
+    PopulateMemRateFields(rec, proto_rec);
   }
 
   response->set_total_count(total_count);

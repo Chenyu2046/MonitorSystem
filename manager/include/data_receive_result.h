@@ -24,6 +24,7 @@ enum class DataReceiveResult {
 struct HostFeedbackResult {
   std::string host_name;
   double node_anomaly_score = 0.0;
+  double remote_trigger_score = 0.0;
   std::int64_t result_timestamp_ms = 0;
   std::uint64_t result_version = 0;
   bool health_valid = false;

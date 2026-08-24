@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <random>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -59,6 +60,17 @@ bool IsMetricsLogEnabled() {
 bool IsDiagnosticLogEnabled() {
   const char* value = std::getenv("KERNSCOPE_DIAGNOSTIC_LOG");
   return value && std::string(value) == "1";
+}
+
+std::string GenerateSampleSessionId() {
+  std::random_device device;
+  std::mt19937_64 generator(
+      static_cast<std::mt19937_64::result_type>(device()) ^
+      static_cast<std::mt19937_64::result_type>(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::ostringstream output;
+  output << std::hex << generator() << generator();
+  return output.str();
 }
 
 /**
@@ -336,6 +348,7 @@ MonitorPusher::MonitorPusher(const std::string& manager_address,
                         observability_config_.profiling_max_duration_sec),
       send_queue_(observability_config_.sender_max_queue_items,
                   observability_config_.sender_max_queue_bytes) {
+  sample_session_id_ = GenerateSampleSessionId();
   // 创建 gRPC channel 和 stub。这里使用不带 TLS 的现有部署语义；RPC
   // deadline 和重试策略在 SendWithRetry() 中统一控制。
   auto channel =
@@ -418,6 +431,7 @@ bool MonitorPusher::PushOnce() {
           .count();
   info.set_sample_sequence(next_sample_sequence_++);
   info.set_sample_timestamp_ms(sample_timestamp_ms);
+  info.set_sample_session_id(sample_session_id_);
 
   // ---------- 2. 根据基础指标计算异常程度 ----------
   // AnomalyDetector 输出逐核/逐设备 max 和整体 max 分数，不改写 info。

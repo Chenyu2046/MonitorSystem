@@ -102,6 +102,8 @@ message MonitorInfo{
   // health feedback with exactly the item processed by the host shard.
   uint64 sample_sequence = 20;
   int64 sample_timestamp_ms = 21;
+  // Stable for the Worker lifetime; sequence ordering is scoped to this id.
+  string sample_session_id = 22;
 }
 
 // Optional Manager health feedback carried by the existing unary RPC. Old
@@ -112,6 +114,9 @@ message MonitorFeedback {
   double node_anomaly_score = 3;
   int64 result_timestamp_ms = 4;
   uint64 result_version = 5;
+  // Additive trigger signal. Omitted by old Managers; clients then fall back
+  // to node_anomaly_score for compatibility.
+  optional double remote_trigger_score = 6;
 }
 
 // Worker push / Manager receive。

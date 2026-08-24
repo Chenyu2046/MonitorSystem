@@ -14,19 +14,23 @@ double Normalize(double value, double warning, double critical) {
   return std::clamp((value - warning) / (critical - warning), 0.0, 1.0);
 }
 
-double DeviationScore(double difference, double spread, double warning,
-                      double critical) {
+double DeviationScore(double difference, double spread, double baseline,
+                      double warning, double critical) {
   constexpr double kEpsilon = 1e-12;
   if (!std::isfinite(difference) || !std::isfinite(spread)) return 0.0;
-  if (spread <= kEpsilon) return difference <= kEpsilon ? 0.0 : 1.0;
-  return Normalize(difference / spread, warning, critical);
+  const double relative_floor = std::abs(baseline) * 0.01;
+  const double effective_spread = std::max(
+      spread, std::max(1e-6, relative_floor));
+  if (effective_spread <= kEpsilon) return 0.0;
+  return Normalize(difference / effective_spread, warning, critical);
 }
 
 }  // namespace
 
 DetectorResult MetricDetector::Evaluate(
     double value, std::optional<StaticThreshold> threshold,
-    const RollingWindow& history) const {
+    const RollingWindow& history,
+    RollingWindow::Clock::time_point timestamp) const {
   DetectorResult result;
   if (!std::isfinite(value)) return result;
 
@@ -46,10 +50,11 @@ DetectorResult MetricDetector::Evaluate(
   }
 
   const auto [ewma, ewma_std] = history.EwmaMeanStd(config_.ewma_alpha);
-  result.ewma_score = DeviationScore(std::abs(value - ewma), ewma_std,
+  result.ewma_score = DeviationScore(std::abs(value - ewma), ewma_std, ewma,
                                      config_.ewma_warning_sigma,
                                      config_.ewma_critical_sigma);
-  if (sample_count < config_.ready_samples) {
+  if (sample_count < config_.ready_samples ||
+      history.Age(timestamp) < config_.minimum_history_duration) {
     result.model_state = ModelState::kWarming;
     result.ewma_score *= 0.5;
     result.anomaly_votes =
@@ -67,7 +72,7 @@ DetectorResult MetricDetector::Evaluate(
   result.model_state = ModelState::kReady;
   const double mad = history.Mad();
   result.mad_score = DeviationScore(0.6745 * std::abs(value - history.Median()),
-                                    mad, config_.mad_warning_z,
+                                    mad, history.Median(), config_.mad_warning_z,
                                     config_.mad_critical_z);
   result.anomaly_votes =
                          (result.threshold_available &&

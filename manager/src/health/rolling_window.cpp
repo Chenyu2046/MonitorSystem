@@ -41,6 +41,14 @@ void RollingWindow::Prune(Clock::time_point timestamp) {
   }
 }
 
+std::chrono::seconds RollingWindow::Age(Clock::time_point timestamp) const {
+  if (samples_.empty() || timestamp < samples_.front().timestamp) {
+    return std::chrono::seconds::zero();
+  }
+  return std::chrono::duration_cast<std::chrono::seconds>(
+      timestamp - samples_.front().timestamp);
+}
+
 double RollingWindow::Median() const {
   std::vector<double> values;
   values.reserve(samples_.size());

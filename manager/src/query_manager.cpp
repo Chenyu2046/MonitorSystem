@@ -340,9 +340,10 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
          "send_rate, rcv_rate, score, health_score, resource_score, "
          "anomaly_score, anomaly_rate_5m, confidence, health_state, "
          "health_model_state, health_valid, health_top_signals, "
-         "cpu_percent_rate, "
-         "mem_used_percent_rate, "
-         "disk_util_percent_rate, load_avg_1_rate, send_rate_rate, rcv_rate_rate "
+         "cpu_percent_rate, usr_percent_rate, system_percent_rate, "
+         "io_wait_percent_rate, load_avg_1_rate, load_avg_3_rate, "
+         "load_avg_15_rate, mem_used_percent_rate, disk_util_percent_rate, "
+         "send_rate_rate, rcv_rate_rate "
          "FROM server_performance WHERE server_name='"
       << server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
       << end_time << "' ORDER BY timestamp DESC LIMIT " << page_size
@@ -387,9 +388,14 @@ std::vector<PerformanceRecord> QueryManager::QueryPerformance(
     rec.score = row[i] ? std::atof(row[i]) : 0; i++;
     ParseHealthColumns(row, &i, &rec);
     rec.cpu_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.usr_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.system_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.io_wait_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.load_avg_1_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.load_avg_3_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.load_avg_15_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.mem_used_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.disk_util_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
-    rec.load_avg_1_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.send_rate_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.rcv_rate_rate = row[i] ? std::atof(row[i]) : 0;
     records.push_back(rec);
@@ -460,9 +466,16 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
            "SUBSTRING_INDEX(GROUP_CONCAT(health_top_signals ORDER BY "
            "timestamp DESC), ',', 1) as health_top_signals, "
            "AVG(cpu_percent_rate) as cpu_percent_rate, "
+           "AVG(usr_percent_rate) as usr_percent_rate, "
+           "AVG(system_percent_rate) as system_percent_rate, "
+           "AVG(io_wait_percent_rate) as io_wait_percent_rate, "
+           "AVG(load_avg_1_rate) as load_avg_1_rate, "
+           "AVG(load_avg_3_rate) as load_avg_3_rate, "
+           "AVG(load_avg_15_rate) as load_avg_15_rate, "
            "AVG(mem_used_percent_rate) as mem_used_percent_rate, "
            "AVG(disk_util_percent_rate) as disk_util_percent_rate, "
-           "AVG(load_avg_1_rate) as load_avg_1_rate "
+           "AVG(send_rate_rate) as send_rate_rate, "
+           "AVG(rcv_rate_rate) as rcv_rate_rate "
            "FROM server_performance WHERE server_name='"
         << server_name << "' AND timestamp BETWEEN '" << start_time
         << "' AND '" << end_time
@@ -475,8 +488,10 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
            "rcv_rate, score, health_score, resource_score, anomaly_score, "
            "anomaly_rate_5m, confidence, health_state, health_model_state, "
            "health_valid, health_top_signals, cpu_percent_rate, "
-           "mem_used_percent_rate, "
-           "disk_util_percent_rate, load_avg_1_rate "
+           "usr_percent_rate, system_percent_rate, io_wait_percent_rate, "
+           "load_avg_1_rate, load_avg_3_rate, load_avg_15_rate, "
+           "mem_used_percent_rate, disk_util_percent_rate, "
+           "send_rate_rate, rcv_rate_rate "
            "FROM server_performance WHERE server_name='"
         << server_name << "' AND timestamp BETWEEN '" << start_time
         << "' AND '" << end_time << "' ORDER BY timestamp";
@@ -514,9 +529,16 @@ std::vector<PerformanceRecord> QueryManager::QueryTrend(
     rec.score = row[i] ? std::atof(row[i]) : 0; i++;
     ParseHealthColumns(row, &i, &rec);
     rec.cpu_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.usr_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.system_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.io_wait_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.load_avg_1_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.load_avg_3_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.load_avg_15_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.mem_used_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.disk_util_percent_rate = row[i] ? std::atof(row[i]) : 0; i++;
-    rec.load_avg_1_rate = row[i] ? std::atof(row[i]) : 0;
+    rec.send_rate_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.rcv_rate_rate = row[i] ? std::atof(row[i]) : 0;
     records.push_back(rec);
   }
   mysql_free_result(result);
@@ -937,7 +959,9 @@ std::vector<NetDetailRecord> QueryManager::QueryNetDetail(
   std::ostringstream sql;
   sql << "SELECT server_name, net_name, timestamp, err_in, err_out, "
          "drop_in, drop_out, rcv_bytes_rate, snd_bytes_rate, "
-         "rcv_packets_rate, snd_packets_rate "
+         "rcv_packets_rate, snd_packets_rate, rcv_bytes_rate_rate, "
+         "snd_bytes_rate_rate, err_in_rate, err_out_rate, drop_in_rate, "
+         "drop_out_rate "
          "FROM server_net_detail WHERE server_name='"
       << server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
       << end_time << "' ORDER BY timestamp DESC LIMIT " << page_size
@@ -969,7 +993,13 @@ std::vector<NetDetailRecord> QueryManager::QueryNetDetail(
     rec.rcv_bytes_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.snd_bytes_rate = row[i] ? std::atof(row[i]) : 0; i++;
     rec.rcv_packets_rate = row[i] ? std::atof(row[i]) : 0; i++;
-    rec.snd_packets_rate = row[i] ? std::atof(row[i]) : 0;
+    rec.snd_packets_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.rcv_bytes_rate_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.snd_bytes_rate_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.err_in_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.err_out_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.drop_in_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.drop_out_rate = row[i] ? std::atof(row[i]) : 0;
     records.push_back(rec);
   }
   mysql_free_result(result);
@@ -1018,7 +1048,9 @@ std::vector<DiskDetailRecord> QueryManager::QueryDiskDetail(
   std::ostringstream sql;
   sql << "SELECT server_name, disk_name, timestamp, read_bytes_per_sec, "
          "write_bytes_per_sec, read_iops, write_iops, avg_read_latency_ms, "
-         "avg_write_latency_ms, util_percent "
+         "avg_write_latency_ms, util_percent, read_bytes_per_sec_rate, "
+         "write_bytes_per_sec_rate, read_iops_rate, write_iops_rate, "
+         "util_percent_rate "
          "FROM server_disk_detail WHERE server_name='"
       << server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
       << end_time << "' ORDER BY timestamp DESC LIMIT " << page_size
@@ -1049,7 +1081,12 @@ std::vector<DiskDetailRecord> QueryManager::QueryDiskDetail(
     rec.write_iops = row[i] ? std::atof(row[i]) : 0; i++;
     rec.avg_read_latency_ms = row[i] ? std::atof(row[i]) : 0; i++;
     rec.avg_write_latency_ms = row[i] ? std::atof(row[i]) : 0; i++;
-    rec.util_percent = row[i] ? std::atof(row[i]) : 0;
+    rec.util_percent = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.read_bytes_per_sec_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.write_bytes_per_sec_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.read_iops_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.write_iops_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.util_percent_rate = row[i] ? std::atof(row[i]) : 0;
     records.push_back(rec);
   }
   mysql_free_result(result);
@@ -1097,7 +1134,8 @@ std::vector<MemDetailRecord> QueryManager::QueryMemDetail(
   int offset = (page - 1) * page_size;
   std::ostringstream sql;
   sql << "SELECT server_name, timestamp, total, free, avail, buffers, "
-         "cached, active, inactive, dirty "
+         "cached, active, inactive, dirty, total_rate, free_rate, "
+         "avail_rate, active_rate, inactive_rate "
          "FROM server_mem_detail WHERE server_name='"
       << server_name << "' AND timestamp BETWEEN '" << start_time << "' AND '"
       << end_time << "' ORDER BY timestamp DESC LIMIT " << page_size
@@ -1128,7 +1166,12 @@ std::vector<MemDetailRecord> QueryManager::QueryMemDetail(
     rec.cached = row[i] ? std::atof(row[i]) : 0; i++;
     rec.active = row[i] ? std::atof(row[i]) : 0; i++;
     rec.inactive = row[i] ? std::atof(row[i]) : 0; i++;
-    rec.dirty = row[i] ? std::atof(row[i]) : 0;
+    rec.dirty = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.total_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.free_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.avail_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.active_rate = row[i] ? std::atof(row[i]) : 0; i++;
+    rec.inactive_rate = row[i] ? std::atof(row[i]) : 0;
     records.push_back(rec);
   }
   mysql_free_result(result);

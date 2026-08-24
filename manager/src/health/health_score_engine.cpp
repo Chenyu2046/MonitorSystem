@@ -1,5 +1,7 @@
 #include "health/health_score_engine.h"
 
+#include "metric_semantics.h"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -131,7 +133,7 @@ bool HealthConfig::IsValid() const {
          disk_domain_weight >= 0.0 && network_domain_weight >= 0.0 &&
          scheduler_domain_weight >= 0.0 &&
          std::abs(weight_sum - 1.0) <= 1e-9 && nar_window.count() > 0 &&
-         max_nar_frames > 0;
+         max_nar_frames > 0 && minimum_history_duration.count() > 0;
 }
 
 bool LoadHealthConfigFromEnvironment(HealthConfig* config,
@@ -139,6 +141,8 @@ bool LoadHealthConfigFromEnvironment(HealthConfig* config,
   if (!config) return false;
   std::size_t window_seconds = config->window_age.count();
   std::size_t nar_seconds = config->nar_window.count();
+  std::size_t minimum_history_seconds =
+      config->minimum_history_duration.count();
   if (!ParseSize("HEALTH_MAX_SAMPLES", &config->max_samples, error) ||
       !ParseSize("HEALTH_WINDOW_SEC", &window_seconds, error) ||
       !ParseSize("HEALTH_MIN_SAMPLES", &config->min_samples, error) ||
@@ -155,11 +159,14 @@ bool LoadHealthConfigFromEnvironment(HealthConfig* config,
       !ParseDouble("SCHEDULER_DOMAIN_WEIGHT",
                    &config->scheduler_domain_weight, error) ||
       !ParseSize("NAR_WINDOW_SEC", &nar_seconds, error) ||
-      !ParseSize("HEALTH_NAR_MAX_FRAMES", &config->max_nar_frames, error)) {
+      !ParseSize("HEALTH_NAR_MAX_FRAMES", &config->max_nar_frames, error) ||
+      !ParseSize("HEALTH_MIN_HISTORY_SEC", &minimum_history_seconds, error)) {
     return false;
   }
   config->window_age = std::chrono::seconds(window_seconds);
   config->nar_window = std::chrono::seconds(nar_seconds);
+  config->minimum_history_duration =
+      std::chrono::seconds(minimum_history_seconds);
   if (!config->IsValid()) {
     if (error) *error = "invalid health config relationship";
     return false;
@@ -173,7 +180,8 @@ HealthScoreEngine::HealthScoreEngine(HealthConfig config)
                                config_.mad_critical_z, config_.ewma_alpha,
                                config_.ewma_warning_sigma,
                                config_.ewma_critical_sigma,
-                               config_.consensus_min_votes}) {
+                               config_.consensus_min_votes,
+                               config_.minimum_history_duration}) {
   windows_.reserve(kMetricCount);
   for (std::size_t index = 0; index < kMetricCount; ++index) {
     windows_.emplace_back(config_.max_samples, config_.window_age);
@@ -183,13 +191,26 @@ HealthScoreEngine::HealthScoreEngine(HealthConfig config)
 HealthResult HealthScoreEngine::Evaluate(
     const monitor::proto::MonitorInfo& info, Clock::time_point timestamp,
     double resource_score) {
+  return Evaluate(info, timestamp, resource_score, ActivityClock::now());
+}
+
+HealthResult HealthScoreEngine::Evaluate(
+    const monitor::proto::MonitorInfo& info, Clock::time_point timestamp,
+    double resource_score, ActivityClock::time_point activity_timestamp) {
   HealthResult result;
   result.resource_score = std::isfinite(resource_score) ? resource_score : 0.0;
   result.state = WorkerState(info);
-  if (!config_.IsValid() ||
-      (last_timestamp_ && timestamp < *last_timestamp_)) {
+  if (!config_.IsValid()) {
     return result;
   }
+
+  // Event time drives the model. A wall-clock rollback is still a new sample
+  // (ordering is enforced by Manager's session/sequence gate); retain the
+  // latest model timestamp for non-negative window/rate deltas.
+  const auto model_timestamp =
+      last_event_timestamp_ && timestamp < *last_event_timestamp_
+          ? *last_event_timestamp_
+          : timestamp;
 
   std::vector<Observation> observations;
   observations.reserve(kMetricCount);
@@ -222,26 +243,32 @@ HealthResult HealthScoreEngine::Evaluate(
   if (cpu_count > 0) {
     observations.push_back({MetricId::kCpuAverage, Domain::kCpu,
                             cpu_sum / cpu_count,
-                            StaticThreshold{70.0, 90.0}});
+                            StaticThreshold{metric_semantics::kCpuPercent.warning,
+                                            metric_semantics::kCpuPercent.critical}});
     observations.push_back(
         {MetricId::kCpuPeak, Domain::kCpu, cpu_peak,
-         StaticThreshold{70.0, 90.0}});
+         StaticThreshold{metric_semantics::kCpuPercent.warning,
+                         metric_semantics::kCpuPercent.critical}});
   }
   if (io_wait_count > 0) {
     observations.push_back(
         {MetricId::kIoWait, Domain::kScheduler, io_wait_peak,
-         StaticThreshold{10.0, 30.0}});
+         StaticThreshold{metric_semantics::kIoWaitPercent.warning,
+                         metric_semantics::kIoWaitPercent.critical}});
   }
   if (softirq_count > 0) {
     observations.push_back({MetricId::kSoftIrqPercent, Domain::kScheduler,
-                            softirq_peak, StaticThreshold{10.0, 30.0}});
+                            softirq_peak,
+                            StaticThreshold{metric_semantics::kSoftIrqPercent.warning,
+                                            metric_semantics::kSoftIrqPercent.critical}});
   }
   if (cpu_count > 0 && info.has_cpu_load() &&
       info.cpu_load().sample_valid() &&
       ValidNonnegative(info.cpu_load().load_avg_1())) {
     observations.push_back({MetricId::kLoadPerCpu, Domain::kScheduler,
                             info.cpu_load().load_avg_1() / cpu_count,
-                            StaticThreshold{1.0, 4.0}});
+                            StaticThreshold{metric_semantics::kLoadPerCpu.warning,
+                                            metric_semantics::kLoadPerCpu.critical}});
   }
 
   if (info.has_mem_info() && info.mem_info().sample_valid() &&
@@ -254,7 +281,8 @@ HealthResult HealthScoreEngine::Evaluate(
                         info.mem_info().total();
     observations.push_back(
         {MetricId::kMemoryUsed, Domain::kMemory, used,
-         StaticThreshold{80.0, 95.0}});
+         StaticThreshold{metric_semantics::kMemoryPercent.warning,
+                         metric_semantics::kMemoryPercent.critical}});
   }
 
   double disk_util = 0.0;
@@ -286,11 +314,14 @@ HealthResult HealthScoreEngine::Evaluate(
   if (disk_util_count > 0) {
     observations.push_back(
         {MetricId::kDiskUtil, Domain::kDisk, disk_util,
-         StaticThreshold{70.0, 95.0}});
+         StaticThreshold{metric_semantics::kDiskUtilPercent.warning,
+                         metric_semantics::kDiskUtilPercent.critical}});
   }
   if (disk_latency_count > 0) {
     observations.push_back({MetricId::kDiskLatency, Domain::kDisk,
-                            disk_latency, StaticThreshold{10.0, 40.0}});
+                            disk_latency,
+                            StaticThreshold{metric_semantics::kDiskLatencyMs.warning,
+                                            metric_semantics::kDiskLatencyMs.critical}});
   }
   if (disk_iops_count > 0) {
     observations.push_back(
@@ -322,7 +353,8 @@ HealthResult HealthScoreEngine::Evaluate(
   if (network_count > 0 && std::isfinite(network_pps)) {
     observations.push_back({MetricId::kNetworkPps, Domain::kNetwork,
                             network_pps,
-                            StaticThreshold{10000.0, 100000.0}});
+                            StaticThreshold{metric_semantics::kNetworkPps.warning,
+                                            metric_semantics::kNetworkPps.critical}});
     if (network_throughput_count > 0 && std::isfinite(network_rx_kib) &&
         std::isfinite(network_tx_kib)) {
       observations.push_back({MetricId::kNetworkRxThroughput,
@@ -332,11 +364,11 @@ HealthResult HealthScoreEngine::Evaluate(
     }
   }
   if (network_count > 0) {
-    if (network_counters_ && timestamp > network_counters_->timestamp &&
+    if (network_counters_ && model_timestamp > network_counters_->timestamp &&
         drops >= network_counters_->drops &&
         errors >= network_counters_->errors) {
       const double seconds = std::chrono::duration<double>(
-                                 timestamp - network_counters_->timestamp)
+                                 model_timestamp - network_counters_->timestamp)
                                  .count();
       const double drop_rate =
           static_cast<double>((drops - network_counters_->drops) / seconds);
@@ -353,8 +385,8 @@ HealthResult HealthScoreEngine::Evaluate(
                                 StaticThreshold{1.0, 100.0}});
       }
     }
-    if (!network_counters_ || timestamp > network_counters_->timestamp) {
-      network_counters_ = NetworkCounters{drops, errors, timestamp};
+    if (!network_counters_ || model_timestamp > network_counters_->timestamp) {
+      network_counters_ = NetworkCounters{drops, errors, model_timestamp};
     }
   }
 
@@ -364,14 +396,17 @@ HealthResult HealthScoreEngine::Evaluate(
     if (!softirq.sample_valid()) continue;
     if (ValidNonnegative(softirq.net_rx()) &&
         ValidNonnegative(softirq.net_tx())) {
-      network_softirq += softirq.net_rx() + softirq.net_tx();
+      network_softirq = std::max(network_softirq,
+                                 static_cast<double>(softirq.net_rx()) +
+                                     softirq.net_tx());
       ++network_softirq_count;
     }
   }
   if (network_softirq_count > 0 && std::isfinite(network_softirq)) {
     observations.push_back({MetricId::kNetworkSoftIrqPerSec,
                             Domain::kNetwork, network_softirq,
-                            StaticThreshold{10000.0, 100000.0}});
+                            StaticThreshold{metric_semantics::kNetworkSoftIrqPerSec.warning,
+                                            metric_semantics::kNetworkSoftIrqPerSec.critical}});
   }
 
   std::array<double, 5> domain_scores{};
@@ -380,10 +415,11 @@ HealthResult HealthScoreEngine::Evaluate(
   result.model_state = ModelState::kReady;
   for (const auto& observation : observations) {
     const std::size_t index = MetricIndex(observation.metric);
-    windows_[index].Prune(timestamp);
+    windows_[index].Prune(model_timestamp);
     DetectorResult detector = detector_.Evaluate(
-        observation.value, observation.threshold, windows_[index]);
-    windows_[index].Push(observation.value, timestamp);
+        observation.value, observation.threshold, windows_[index],
+        model_timestamp);
+    windows_[index].Push(observation.value, model_timestamp);
     const auto domain = static_cast<std::size_t>(observation.domain);
     domain_scores[domain] =
         std::max(domain_scores[domain], detector.anomaly_score);
@@ -423,12 +459,20 @@ HealthResult HealthScoreEngine::Evaluate(
   result.anomaly_score =
       available_weight > 0.0 ? weighted_score / available_weight : 0.0;
   result.anomaly_score = std::clamp(result.anomaly_score, 0.0, 1.0);
+  result.remote_trigger_score = 0.0;
+  for (std::size_t index = 0; index < domain_scores.size(); ++index) {
+    if (domain_valid[index]) {
+      result.remote_trigger_score =
+          std::max(result.remote_trigger_score, domain_scores[index]);
+    }
+  }
   result.health_score = 100.0 * (1.0 - result.anomaly_score);
 
   anomaly_history_.push_back(
-      {timestamp, anomalous_metrics, observations.size()});
+      {model_timestamp, anomalous_metrics, observations.size()});
   while (!anomaly_history_.empty() &&
-         timestamp - anomaly_history_.front().timestamp > config_.nar_window) {
+         model_timestamp - anomaly_history_.front().timestamp >
+             config_.nar_window) {
     anomaly_history_.pop_front();
   }
   while (anomaly_history_.size() > config_.max_nar_frames) {
@@ -455,19 +499,20 @@ HealthResult HealthScoreEngine::Evaluate(
                  std::isfinite(result.anomaly_rate_5m) &&
                  std::isfinite(result.confidence);
   if (result.valid) {
-    last_timestamp_ = timestamp;
+    last_event_timestamp_ = model_timestamp;
+    last_activity_ = activity_timestamp;
   }
   return result;
 }
 
 std::vector<std::string> PruneStaleHealthEngines(
     std::unordered_map<std::string, HealthScoreEngine>* engines,
-    HealthScoreEngine::Clock::time_point now,
-    HealthScoreEngine::Clock::duration max_idle) {
+    HealthScoreEngine::ActivityClock::time_point now,
+    HealthScoreEngine::ActivityClock::duration max_idle) {
   std::vector<std::string> removed;
   if (!engines || max_idle.count() <= 0) return removed;
   for (auto it = engines->begin(); it != engines->end();) {
-    const auto last_seen = it->second.LastTimestamp();
+    const auto last_seen = it->second.LastActivity();
     if (!last_seen || (now >= *last_seen && now - *last_seen > max_idle)) {
       removed.push_back(it->first);
       it = engines->erase(it);

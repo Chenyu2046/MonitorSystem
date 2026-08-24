@@ -10,6 +10,8 @@
 #include "diagnostics/root_cause_engine.h"
 
 #include <algorithm>
+#include <initializer_list>
+#include <string>
 #include <utility>
 
 namespace monitor::diagnostics {
@@ -35,6 +37,19 @@ const Evidence* FindHealth(const std::vector<Evidence>& evidence,
         item.severity >= minimum_severity &&
         (!strongest || item.severity > strongest->severity)) {
       strongest = &item;
+    }
+  }
+  return strongest;
+}
+
+const Evidence* FindHealthDomain(const std::vector<Evidence>& evidence,
+                                 std::initializer_list<EvidenceType> types,
+                                 double minimum_severity = 0.5) {
+  const Evidence* strongest = nullptr;
+  for (const auto type : types) {
+    const Evidence* candidate = FindHealth(evidence, type, minimum_severity);
+    if (candidate && (!strongest || candidate->severity > strongest->severity)) {
+      strongest = candidate;
     }
   }
   return strongest;
@@ -118,6 +133,8 @@ std::vector<RootCause> RootCauseEngine::Evaluate(
       FindHealth(evidence, EvidenceType::kDiskUtil);
   const Evidence* health_disk_latency =
       FindHealth(evidence, EvidenceType::kDiskLatency);
+  const Evidence* health_disk_signal =
+      FindHealth(evidence, EvidenceType::kHealthDiskSignal);
   double disk_score = 0.0;
   std::vector<std::string> disk_ids;
   AddMatch(disk_io_wait, 0.25, &disk_score, &disk_ids);
@@ -135,6 +152,11 @@ std::vector<RootCause> RootCauseEngine::Evaluate(
                                          health_disk_latency->severity)
             ? health_disk_util
             : health_disk_latency;
+    if (!health_disk ||
+        (health_disk_signal && health_disk_signal->severity >
+                                   health_disk->severity)) {
+      health_disk = health_disk_signal;
+    }
     if (health_disk) {
       causes.push_back(MakeCause(RootCauseType::kDiskIoSaturation,
                                  health_disk->severity, {health_disk->id}));
@@ -155,13 +177,33 @@ std::vector<RootCause> RootCauseEngine::Evaluate(
   if (network_ids.size() >= 3) {
     causes.push_back(MakeCause(RootCauseType::kNetworkStackPressure,
                                network_score, network_ids));
+  } else {
+    const Evidence* health_network = FindHealthDomain(
+        evidence, {EvidenceType::kHealthNetworkSignal});
+    if (health_network) {
+      // Throughput-only anomalies are useful activity evidence, but are not
+      // proof of a network fault; retain the documented confidence ceiling.
+      const bool throughput_only =
+          health_network->target.find("throughput") != std::string::npos;
+      causes.push_back(MakeCause(
+          RootCauseType::kNetworkStackPressure,
+          throughput_only ? std::min(0.5, health_network->severity)
+                          : health_network->severity,
+          {health_network->id}));
+    }
   }
 
   const Evidence* memory = Find(evidence, EvidenceType::kMemoryAvailable, 0.75);
+  const Evidence* health_memory =
+      FindHealth(evidence, EvidenceType::kHealthMemorySignal);
   const Evidence* memory_cpu = Find(evidence, EvidenceType::kCpuUsage, 0.0);
   if (memory && memory_cpu && memory_cpu->severity < 0.5) {
     causes.push_back(MakeCause(RootCauseType::kMemoryPressure, 0.8,
                                {memory->id, memory_cpu->id}));
+  } else if (health_memory) {
+    causes.push_back(MakeCause(RootCauseType::kMemoryPressure,
+                               health_memory->severity,
+                               {health_memory->id}));
   }
 
   const Evidence* any_cpu = Find(evidence, EvidenceType::kCpuUsage);

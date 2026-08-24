@@ -227,11 +227,13 @@ class HostManager {
   std::vector<std::unordered_map<std::string, health::HealthScoreEngine>>
       shard_health_engines_;
   struct FeedbackCacheEntry {
+    std::string session_id;
     std::uint64_t sequence = 0;
     std::int64_t timestamp_ms = 0;
     HostFeedbackResult result;
   };
   struct HostFeedbackCache {
+    std::string latest_session_id;
     std::uint64_t latest_sequence = 0;
     std::int64_t latest_timestamp_ms = 0;
     std::deque<FeedbackCacheEntry> entries;

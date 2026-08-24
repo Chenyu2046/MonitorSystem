@@ -545,6 +545,8 @@ DataReceiveResult HostManager::SubmitWithFeedback(
   feedback->set_health_valid(true);
   feedback->set_node_anomaly_score(
       std::clamp(work_result.node_anomaly_score, 0.0, 1.0));
+  feedback->set_remote_trigger_score(
+      std::clamp(work_result.remote_trigger_score, 0.0, 1.0));
   feedback->set_result_timestamp_ms(work_result.result_timestamp_ms);
   feedback->set_result_version(work_result.result_version);
   return result;
@@ -569,20 +571,28 @@ HostFeedbackResult HostManager::ProcessOne(
     std::chrono::system_clock::time_point received_at,
     std::chrono::steady_clock::time_point enqueued_at) {
   constexpr std::size_t kFeedbackCacheEntriesPerHost = 16;
-  const bool has_sample_identity =
-      info.sample_sequence() != 0 && info.sample_timestamp_ms() > 0;
+  const bool has_sample_identity = info.sample_sequence() != 0;
   HostFeedbackCache* feedback_cache = nullptr;
   if (has_sample_identity) {
     auto& cache = shard_feedback_caches_[shard_id][host_name];
     for (const auto& entry : cache.entries) {
       if (entry.sequence == info.sample_sequence() &&
-          entry.timestamp_ms == info.sample_timestamp_ms()) {
+          entry.session_id == info.sample_session_id() &&
+          (info.sample_session_id().empty()
+               ? entry.timestamp_ms == info.sample_timestamp_ms()
+               : true)) {
         return entry.result;
       }
     }
-    if (info.sample_timestamp_ms() < cache.latest_timestamp_ms ||
-        (info.sample_timestamp_ms() == cache.latest_timestamp_ms &&
-         info.sample_sequence() <= cache.latest_sequence)) {
+    if (!info.sample_session_id().empty()) {
+      if (cache.latest_session_id == info.sample_session_id() &&
+          info.sample_sequence() <= cache.latest_sequence) {
+        return {};
+      }
+    } else if (cache.latest_session_id.empty() &&
+               (info.sample_timestamp_ms() < cache.latest_timestamp_ms ||
+                (info.sample_timestamp_ms() == cache.latest_timestamp_ms &&
+                 info.sample_sequence() <= cache.latest_sequence))) {
       return {};
     }
     feedback_cache = &cache;
@@ -590,10 +600,12 @@ HostFeedbackResult HostManager::ProcessOne(
 
   const auto cache_result = [&](HostFeedbackResult result) {
     if (!feedback_cache) return result;
+    feedback_cache->latest_session_id = info.sample_session_id();
     feedback_cache->latest_timestamp_ms = info.sample_timestamp_ms();
     feedback_cache->latest_sequence = info.sample_sequence();
     feedback_cache->entries.push_back(
-        {info.sample_sequence(), info.sample_timestamp_ms(), result});
+        {info.sample_session_id(), info.sample_sequence(),
+         info.sample_timestamp_ms(), result});
     while (feedback_cache->entries.size() >
            kFeedbackCacheEntriesPerHost) {
       feedback_cache->entries.pop_front();
@@ -603,25 +615,37 @@ HostFeedbackResult HostManager::ProcessOne(
 
   // 一个 host 始终落到同一个 shard，因而 shard_perf_samples_[shard_id]
   // 的 previous/current 顺序成立，无需为每台主机增加独立锁。
-  const ScoreResult score_result = CalcResourceScore(info);
+  const bool monitor_valid = IsValidMonitorInfo(info);
+  const ScoreResult score_result =
+      monitor_valid ? CalcResourceScore(info) : ScoreResult{};
   const double score = score_result.score;
-  auto& health_engines = shard_health_engines_[shard_id];
-  auto [engine_it, inserted] =
-      health_engines.try_emplace(host_name, health_config_);
-  (void)inserted;
-  const health::HealthResult health_result =
-      engine_it->second.Evaluate(info, enqueued_at, score);
+  health::HealthResult health_result;
+  if (monitor_valid && score_result.valid) {
+    auto& health_engines = shard_health_engines_[shard_id];
+    auto [engine_it, inserted] =
+        health_engines.try_emplace(host_name, health_config_);
+    (void)inserted;
+    auto event_timestamp = received_at;
+    if (info.sample_timestamp_ms() > 0) {
+      event_timestamp = std::chrono::system_clock::time_point(
+          std::chrono::milliseconds(info.sample_timestamp_ms()));
+    }
+    health_result = engine_it->second.Evaluate(info, event_timestamp, score,
+                                               enqueued_at);
+  }
   HostFeedbackResult feedback_result;
   if (has_sample_identity && score_result.valid && health_result.valid &&
       std::isfinite(health_result.anomaly_score)) {
     feedback_result.host_name = host_name;
     feedback_result.node_anomaly_score =
         std::clamp(health_result.anomaly_score, 0.0, 1.0);
+    feedback_result.remote_trigger_score =
+        std::clamp(health_result.remote_trigger_score, 0.0, 1.0);
     feedback_result.result_timestamp_ms = info.sample_timestamp_ms();
     feedback_result.result_version = info.sample_sequence();
     feedback_result.health_valid = true;
   }
-  if (!score_result.valid || !IsValidMonitorInfo(info)) {
+  if (!score_result.valid || !monitor_valid) {
     std::lock_guard<std::mutex> lock(mtx_);
     host_scores_[host_name] = HostScore{info, score, false, received_at,
                                        health_result};

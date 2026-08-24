@@ -43,18 +43,24 @@ monitor::proto::MonitorInfo MakeBaseInfo() {
   cpu->set_cpu_percent(20.0);
   cpu->set_io_wait_percent(2.0);
   cpu->set_soft_irq_percent(1.0);
+  cpu->set_sample_valid(true);
   info.mutable_cpu_load()->set_load_avg_1(0.5);
+  info.mutable_cpu_load()->set_sample_valid(true);
   info.mutable_mem_info()->set_used_percent(40.0);
+  info.mutable_mem_info()->set_sample_valid(true);
   auto* disk = info.add_disk_info();
   disk->set_util_percent(15.0);
   disk->set_avg_read_latency_ms(1.0);
   disk->set_avg_write_latency_ms(1.0);
+  disk->set_sample_valid(true);
   auto* net = info.add_net_info();
   net->set_rcv_packets_rate(10.0);
   net->set_send_packets_rate(10.0);
+  net->set_sample_valid(true);
   auto* softirq = info.add_soft_irq();
   softirq->set_net_rx(10);
   softirq->set_net_tx(10);
+  softirq->set_sample_valid(true);
   return info;
 }
 
@@ -89,6 +95,7 @@ void TestAnomalyDetector() {
   hot_core->set_cpu_percent(95.0);
   hot_core->set_io_wait_percent(2.0);
   hot_core->set_soft_irq_percent(1.0);
+  hot_core->set_sample_valid(true);
   const auto hot_core_result = detector.Evaluate(hot_core_info);
   assert(hot_core_result.should_diagnose);
   assert(hot_core_result.should_profile);

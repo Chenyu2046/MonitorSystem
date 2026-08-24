@@ -9,6 +9,8 @@
 
 #include "rpc/grpc_server.h"
 
+#include "canonical_host_key.h"
+
 #include <iostream>
 
 namespace monitor {
@@ -23,11 +25,7 @@ namespace monitor {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Empty request");
   }
 
-  std::string hostname = request->name();
-  if (hostname.empty() && request->has_host_info()) {
-    hostname = request->host_info().hostname();
-  }
-
+  const std::string hostname = CanonicalHostKey(*request);
   if (hostname.empty()) {
     return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Missing hostname");
   }

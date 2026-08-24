@@ -116,11 +116,18 @@ EvidenceType HealthEvidenceType(health::MetricId metric) {
     case health::MetricId::kDiskUtil:
       return EvidenceType::kDiskUtil;
     case health::MetricId::kDiskLatency:
-      return EvidenceType::kDiskLatency;
+    case health::MetricId::kDiskIops:
+      return EvidenceType::kHealthDiskSignal;
+    case health::MetricId::kMemoryUsed:
+      return EvidenceType::kHealthMemorySignal;
+    case health::MetricId::kNetworkRxThroughput:
+    case health::MetricId::kNetworkTxThroughput:
+    case health::MetricId::kNetworkDropsPerSec:
+    case health::MetricId::kNetworkErrorsPerSec:
+    case health::MetricId::kNetworkSoftIrqPerSec:
+      return EvidenceType::kHealthNetworkSignal;
     case health::MetricId::kNetworkPps:
       return EvidenceType::kNetPps;
-    case health::MetricId::kNetworkSoftIrqPerSec:
-      return EvidenceType::kSoftirqNetRx;
     default:
       return EvidenceType::kHealthAnomalySignal;
   }
@@ -164,6 +171,16 @@ const char* EvidenceTypeName(EvidenceType type) {
       return "lock_wait_stack";
     case EvidenceType::kHealthAnomalySignal:
       return "health_anomaly_signal";
+    case EvidenceType::kHealthCpuSignal:
+      return "health_cpu_signal";
+    case EvidenceType::kHealthMemorySignal:
+      return "health_memory_signal";
+    case EvidenceType::kHealthDiskSignal:
+      return "health_disk_signal";
+    case EvidenceType::kHealthNetworkSignal:
+      return "health_network_signal";
+    case EvidenceType::kHealthSchedulerSignal:
+      return "health_scheduler_signal";
   }
   return "unknown";
 }

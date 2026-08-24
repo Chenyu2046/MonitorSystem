@@ -94,6 +94,7 @@ class MonitorPusher {
   std::mutex lifecycle_mutex_;
   std::mutex stop_mutex_;
   std::condition_variable stop_condition_;
+  std::string sample_session_id_;
   std::uint64_t next_sample_sequence_ = 1;
 };
 

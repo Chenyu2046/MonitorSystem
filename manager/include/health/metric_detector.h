@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <chrono>
 #include <optional>
 
 #include "health/health_types.h"
@@ -16,6 +17,7 @@ struct DetectorConfig {
   double ewma_warning_sigma = 2.0;
   double ewma_critical_sigma = 4.0;
   int consensus_min_votes = 2;
+  std::chrono::seconds minimum_history_duration{300};
 };
 
 struct StaticThreshold {
@@ -29,7 +31,8 @@ class MetricDetector {
 
   DetectorResult Evaluate(
       double value, std::optional<StaticThreshold> threshold,
-      const RollingWindow& history) const;
+      const RollingWindow& history,
+      RollingWindow::Clock::time_point timestamp) const;
 
  private:
   DetectorConfig config_;

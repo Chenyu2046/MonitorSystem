@@ -36,6 +36,11 @@ enum class EvidenceType {
   kOffCpuStack,
   kLockWaitStack,
   kHealthAnomalySignal,
+  kHealthCpuSignal,
+  kHealthMemorySignal,
+  kHealthDiskSignal,
+  kHealthNetworkSignal,
+  kHealthSchedulerSignal,
 };
 
 /**

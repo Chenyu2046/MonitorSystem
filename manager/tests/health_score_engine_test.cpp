@@ -11,10 +11,12 @@
 #include "health/rolling_window.h"
 #include "health/top_signal_codec.h"
 #include "rpc/health_score_mapper.h"
+#include "rpc/query_rate_mapper.h"
+#include "rpc/softirq_detail_mapper.h"
 
 namespace {
 
-using Clock = std::chrono::steady_clock;
+using Clock = std::chrono::system_clock;
 
 monitor::proto::MonitorInfo MakeInfo(double cpu_percent = 30.0,
                                      double disk_util = 10.0,
@@ -186,6 +188,101 @@ void TestHistoricalOnlyIopsAndThroughput() {
   assert(result.network_score >= 0.99);
 }
 
+void TestNetworkSoftIrqUsesPerCpuMaximum() {
+  monitor::health::HealthScoreEngine engine;
+  auto info = MakeInfo();
+  info.mutable_soft_irq(0)->set_net_rx(60000.0);
+  info.mutable_soft_irq(0)->set_net_tx(0.0);
+  auto* second_cpu = info.add_soft_irq();
+  second_cpu->set_cpu("cpu1");
+  second_cpu->set_net_rx(60000.0);
+  second_cpu->set_net_tx(0.0);
+  second_cpu->set_sample_valid(true);
+
+  const auto result = engine.Evaluate(info, Clock::time_point{}, 90.0);
+  bool found = false;
+  for (const auto& signal : result.top_signals) {
+    if (signal.metric == monitor::health::MetricId::kNetworkSoftIrqPerSec) {
+      assert(signal.value == 60000.0);
+      found = true;
+    }
+  }
+  assert(found);
+}
+
+void TestZeroVarianceUsesRelativeSpreadFloor() {
+  const auto start = Clock::time_point{};
+  monitor::health::HealthScoreEngine engine;
+  for (int index = 0; index < 31; ++index) {
+    auto info = MakeInfo();
+    info.mutable_disk_info(0)->set_read_iops(50.0);
+    info.mutable_disk_info(0)->set_write_iops(50.0);
+    assert(engine.Evaluate(info, start + std::chrono::seconds(index * 10),
+                           90.0)
+               .valid);
+  }
+  auto jitter = MakeInfo();
+  jitter.mutable_disk_info(0)->set_read_iops(50.5);
+  jitter.mutable_disk_info(0)->set_write_iops(50.5);
+  const auto small = engine.Evaluate(
+      jitter, start + std::chrono::seconds(310), 90.0);
+  double small_score = 0.0;
+  for (const auto& signal : small.top_signals) {
+    if (signal.metric == monitor::health::MetricId::kDiskIops) {
+      small_score = signal.detector.anomaly_score;
+    }
+  }
+  assert(small_score < 1.0);
+
+  auto spike = MakeInfo();
+  spike.mutable_disk_info(0)->set_read_iops(500.0);
+  spike.mutable_disk_info(0)->set_write_iops(500.0);
+  const auto large = engine.Evaluate(
+      spike, start + std::chrono::seconds(320), 90.0);
+  assert(large.disk_score >= 0.5);
+}
+
+void TestMinimumHistoryDuration() {
+  const auto start = Clock::time_point{};
+  monitor::health::HealthScoreEngine fast_engine;
+  auto fast = FeedStable(&fast_engine, 30, start);
+  (void)fast;
+  // 30 one-second samples satisfy count but not the configured 5-minute
+  // history duration, so the model must remain warming.
+  monitor::health::HealthScoreEngine one_second_engine;
+  monitor::health::HealthResult result;
+  for (int index = 0; index < 30; ++index) {
+    result = one_second_engine.Evaluate(
+        MakeInfo(), start + std::chrono::seconds(index), 90.0);
+  }
+  assert(result.model_state == monitor::health::ModelState::kWarming);
+}
+
+void TestEventTimeControlsCounterRate() {
+  const auto start = Clock::time_point{};
+  monitor::health::HealthScoreEngine engine;
+  auto first = MakeInfo();
+  first.mutable_net_info(0)->set_drop_in(100);
+  first.mutable_net_info(0)->set_err_in(50);
+  engine.Evaluate(first, start, 90.0);
+  auto delayed = MakeInfo();
+  delayed.mutable_net_info(0)->set_drop_in(200);
+  delayed.mutable_net_info(0)->set_err_in(70);
+  const auto result = engine.Evaluate(
+      delayed, start + std::chrono::seconds(10), 90.0);
+  bool saw_drop_rate = false;
+  bool saw_error_rate = false;
+  for (const auto& signal : result.top_signals) {
+    if (signal.metric == monitor::health::MetricId::kNetworkDropsPerSec) {
+      saw_drop_rate = signal.value == 10.0;
+    }
+    if (signal.metric == monitor::health::MetricId::kNetworkErrorsPerSec) {
+      saw_error_rate = signal.value == 2.0;
+    }
+  }
+  assert(saw_drop_rate && saw_error_rate);
+}
+
 void TestMissingDiffersFromZeroAndNonFiniteIsSafe() {
   const auto timestamp = Clock::time_point{};
   monitor::health::HealthScoreEngine zero_engine;
@@ -221,7 +318,7 @@ void TestMissingDiffersFromZeroAndNonFiniteIsSafe() {
   assert(std::isfinite(finite.health_score));
   const auto out_of_order = finite_engine.Evaluate(
       invalid, timestamp - std::chrono::seconds(1), 90.0);
-  assert(!out_of_order.valid);
+  assert(out_of_order.valid);
   assert(std::isfinite(out_of_order.health_score));
 }
 
@@ -299,6 +396,100 @@ void TestQueryProtoMapping() {
   assert(!summary_output.health_valid());
   assert(summary_output.resource_score() == 60.0F);
   assert(summary_output.health_score() == 0.0F);
+
+  input.cpu_percent_rate = 0.11F;
+  input.usr_percent_rate = 0.22F;
+  input.system_percent_rate = 0.33F;
+  input.io_wait_percent_rate = 0.44F;
+  input.load_avg_1_rate = 0.55F;
+  input.load_avg_3_rate = 0.66F;
+  input.load_avg_15_rate = 0.77F;
+  input.mem_used_percent_rate = 0.88F;
+  input.disk_util_percent_rate = 0.99F;
+  input.send_rate_rate = 1.11F;
+  input.rcv_rate_rate = 1.22F;
+  monitor::proto::PerformanceRecord rate_output;
+  monitor::PopulatePerformanceRateFields(input, &rate_output);
+  assert(rate_output.cpu_percent_rate() == 0.11F);
+  assert(rate_output.usr_percent_rate() == 0.22F);
+  assert(rate_output.system_percent_rate() == 0.33F);
+  assert(rate_output.io_wait_percent_rate() == 0.44F);
+  assert(rate_output.load_avg_1_rate() == 0.55F);
+  assert(rate_output.load_avg_3_rate() == 0.66F);
+  assert(rate_output.load_avg_15_rate() == 0.77F);
+  assert(rate_output.mem_used_percent_rate() == 0.88F);
+  assert(rate_output.disk_util_percent_rate() == 0.99F);
+  assert(rate_output.send_rate_rate() == 1.11F);
+  assert(rate_output.rcv_rate_rate() == 1.22F);
+
+  monitor::NetDetailRecord net;
+  net.rcv_bytes_rate_rate = 0.11F;
+  net.snd_bytes_rate_rate = 0.22F;
+  net.err_in_rate = 0.33F;
+  net.err_out_rate = 0.44F;
+  net.drop_in_rate = 0.55F;
+  net.drop_out_rate = 0.66F;
+  monitor::proto::NetDetailRecord net_output;
+  monitor::PopulateNetRateFields(net, &net_output);
+  assert(net_output.rcv_bytes_rate_rate() == 0.11F);
+  assert(net_output.snd_bytes_rate_rate() == 0.22F);
+  assert(net_output.err_in_rate() == 0.33F);
+  assert(net_output.err_out_rate() == 0.44F);
+  assert(net_output.drop_in_rate() == 0.55F);
+  assert(net_output.drop_out_rate() == 0.66F);
+
+  monitor::DiskDetailRecord disk;
+  disk.read_bytes_per_sec_rate = 0.11F;
+  disk.write_bytes_per_sec_rate = 0.22F;
+  disk.read_iops_rate = 0.33F;
+  disk.write_iops_rate = 0.44F;
+  disk.util_percent_rate = 0.55F;
+  monitor::proto::DiskDetailRecord disk_output;
+  monitor::PopulateDiskRateFields(disk, &disk_output);
+  assert(disk_output.read_bytes_per_sec_rate() == 0.11F);
+  assert(disk_output.write_bytes_per_sec_rate() == 0.22F);
+  assert(disk_output.read_iops_rate() == 0.33F);
+  assert(disk_output.write_iops_rate() == 0.44F);
+  assert(disk_output.util_percent_rate() == 0.55F);
+
+  monitor::MemDetailRecord memory;
+  memory.total_rate = 0.11F;
+  memory.free_rate = 0.22F;
+  memory.avail_rate = 0.33F;
+  memory.active_rate = 0.44F;
+  memory.inactive_rate = 0.55F;
+  monitor::proto::MemDetailRecord memory_output;
+  monitor::PopulateMemRateFields(memory, &memory_output);
+  assert(memory_output.total_rate() == 0.11F);
+  assert(memory_output.free_rate() == 0.22F);
+  assert(memory_output.avail_rate() == 0.33F);
+  assert(memory_output.active_rate() == 0.44F);
+  assert(memory_output.inactive_rate() == 0.55F);
+
+  monitor::SoftIrqDetailRecord softirq;
+  softirq.hi = 0.11F;
+  softirq.timer = 0.22F;
+  softirq.net_tx = 0.33F;
+  softirq.net_rx = 0.44F;
+  softirq.block = 0.55F;
+  softirq.irq_poll = 0.66F;
+  softirq.tasklet = 0.77F;
+  softirq.sched = 0.88F;
+  softirq.hrtimer = 0.99F;
+  softirq.rcu = 1.11F;
+  monitor::proto::SoftIrqDetailRecord softirq_output;
+  monitor::PopulateSoftIrqRateFields(softirq, &softirq_output);
+  assert(softirq_output.hi_per_sec() == 0.11F);
+  assert(softirq_output.timer_per_sec() == 0.22F);
+  assert(softirq_output.net_tx_per_sec() == 0.33F);
+  assert(softirq_output.net_rx_per_sec() == 0.44F);
+  assert(softirq_output.block_per_sec() == 0.55F);
+  assert(softirq_output.irq_poll_per_sec() == 0.66F);
+  assert(softirq_output.tasklet_per_sec() == 0.77F);
+  assert(softirq_output.sched_per_sec() == 0.88F);
+  assert(softirq_output.hrtimer_per_sec() == 0.99F);
+  assert(softirq_output.rcu_per_sec() == 1.11F);
+  assert(softirq_output.hi() == 0);
 }
 
 void TestLowTrafficStaleStateCleanup() {
@@ -306,9 +497,12 @@ void TestLowTrafficStaleStateCleanup() {
   auto [it, inserted] = engines.try_emplace("stale-host");
   assert(inserted);
   const auto start = Clock::time_point{};
-  assert(it->second.Evaluate(MakeInfo(), start, 90.0).valid);
+  const auto activity_start =
+      monitor::health::HealthScoreEngine::ActivityClock::now();
+  assert(it->second.Evaluate(MakeInfo(), start, 90.0, activity_start).valid);
   const auto removed = monitor::health::PruneStaleHealthEngines(
-      &engines, start + std::chrono::minutes(6), std::chrono::minutes(5));
+      &engines, activity_start + std::chrono::minutes(6),
+      std::chrono::minutes(5));
   assert(removed.size() == 1 && removed.front() == "stale-host");
   assert(engines.empty());
 }
@@ -321,6 +515,10 @@ int main() {
   TestInstantSpikeAndRelativeHistoryAnomaly();
   TestSustainedAndDiskSaturation();
   TestHistoricalOnlyIopsAndThroughput();
+  TestNetworkSoftIrqUsesPerCpuMaximum();
+  TestZeroVarianceUsesRelativeSpreadFloor();
+  TestMinimumHistoryDuration();
+  TestEventTimeControlsCounterRate();
   TestMissingDiffersFromZeroAndNonFiniteIsSafe();
   TestNarWindowAndConfigurationValidation();
   TestQueryProtoMapping();

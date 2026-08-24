@@ -33,7 +33,8 @@ class RemoteHealthFeedback {
   std::string host_name_;
   std::uint64_t version_ = 0;
   std::int64_t result_timestamp_ms_ = 0;
-  double anomaly_score_ = 0.0;
+  double health_anomaly_score_ = 0.0;
+  double remote_trigger_score_ = 0.0;
   Clock::time_point received_at_ = Clock::time_point::min();
   bool valid_ = false;
 };

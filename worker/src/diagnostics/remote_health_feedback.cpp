@@ -19,6 +19,10 @@ bool RemoteHealthFeedback::Accept(
       !std::isfinite(feedback.node_anomaly_score()) ||
       feedback.node_anomaly_score() < 0.0 ||
       feedback.node_anomaly_score() > 1.0 || max_age_.count() <= 0 ||
+      (feedback.has_remote_trigger_score() &&
+       (!std::isfinite(feedback.remote_trigger_score()) ||
+        feedback.remote_trigger_score() < 0.0 ||
+        feedback.remote_trigger_score() > 1.0)) ||
       feedback.result_timestamp_ms() >
           now_unix_ms + kFutureSkewAllowanceMs ||
       now_unix_ms - feedback.result_timestamp_ms() > max_age_.count()) {
@@ -33,7 +37,10 @@ bool RemoteHealthFeedback::Accept(
   host_name_ = feedback.host_name();
   version_ = feedback.result_version();
   result_timestamp_ms_ = feedback.result_timestamp_ms();
-  anomaly_score_ = feedback.node_anomaly_score();
+  health_anomaly_score_ = feedback.node_anomaly_score();
+  remote_trigger_score_ = feedback.has_remote_trigger_score()
+                              ? feedback.remote_trigger_score()
+                              : health_anomaly_score_;
   received_at_ = received_at;
   valid_ = true;
   return true;
@@ -53,7 +60,7 @@ AnomalyResult RemoteHealthFeedback::Merge(
   if (valid_ && host_name_ == expected_host && now >= received_at_ &&
       now - received_at_ <= max_age_) {
     // Remote absence or staleness can never lower a Worker-local anomaly.
-    merged.overall_score = std::max(local_score, anomaly_score_);
+    merged.overall_score = std::max(local_score, remote_trigger_score_);
   }
   merged.overall_score = std::clamp(merged.overall_score, 0.0, 1.0);
   merged.should_diagnose =

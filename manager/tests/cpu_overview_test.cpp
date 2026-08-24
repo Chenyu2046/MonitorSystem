@@ -64,9 +64,11 @@ std::int64_t NowUnixMs() {
 }
 
 void SetSampleIdentity(monitor::proto::MonitorInfo* info,
-                       std::uint64_t sequence) {
+                       std::uint64_t sequence,
+                       const char* session = "test-session") {
   info->set_sample_sequence(sequence);
   info->set_sample_timestamp_ms(NowUnixMs());
+  info->set_sample_session_id(session);
 }
 
 monitor::HostScore WaitForScore(monitor::HostManager* manager,
@@ -341,8 +343,10 @@ void TestSoftIrqQueryUsesOnlyPerSecondFields() {
 void TestHostManagerSpikeRecovery() {
   monitor::HostManager manager;
   assert(manager.Start());
-  for (int index = 0; index < 31; ++index) {
+  const auto base_timestamp = NowUnixMs() - 400000;
+  for (int index = 0; index < 32; ++index) {
     auto stable = MakeInfo("spike-recovery-host", 4, 30.0F, 1.0F);
+    stable.set_sample_timestamp_ms(base_timestamp + index * 10000);
     stable.mutable_diagnostic()->set_state(
         monitor::proto::OBSERVABILITY_NORMAL);
     assert(manager.Submit(stable) == monitor::DataReceiveResult::kAccepted);
@@ -352,6 +356,7 @@ void TestHostManagerSpikeRecovery() {
   });
 
   auto spike = MakeInfo("spike-recovery-host", 4, 95.0F, 1.0F);
+  spike.set_sample_timestamp_ms(base_timestamp + 320000);
   spike.mutable_diagnostic()->set_state(
       monitor::proto::OBSERVABILITY_SUSPECT);
   assert(manager.Submit(spike) == monitor::DataReceiveResult::kAccepted);
@@ -360,6 +365,7 @@ void TestHostManagerSpikeRecovery() {
       [](const auto& score) { return score.health.health_score < 80.0; });
 
   auto recovery = MakeInfo("spike-recovery-host", 4, 30.0F, 1.0F);
+  recovery.set_sample_timestamp_ms(base_timestamp + 330000);
   recovery.mutable_diagnostic()->set_state(
       monitor::proto::OBSERVABILITY_NORMAL);
   assert(manager.Submit(recovery) == monitor::DataReceiveResult::kAccepted);
@@ -374,8 +380,10 @@ void TestHostManagerSpikeRecovery() {
 void TestDiskIncidentIncludesHealthTopSignals() {
   monitor::HostManager manager;
   assert(manager.Start());
-  for (int index = 0; index < 31; ++index) {
+  const auto base_timestamp = NowUnixMs();
+  for (int index = 0; index < 32; ++index) {
     auto stable = MakeInfo("disk-incident-host", 4, 30.0F, 1.0F);
+    stable.set_sample_timestamp_ms(base_timestamp + index * 10000);
     stable.mutable_diagnostic()->set_state(
         monitor::proto::OBSERVABILITY_NORMAL);
     assert(manager.Submit(stable) == monitor::DataReceiveResult::kAccepted);
@@ -385,6 +393,7 @@ void TestDiskIncidentIncludesHealthTopSignals() {
   });
 
   auto saturated = MakeInfo("disk-incident-host", 4, 30.0F, 1.0F);
+  saturated.set_sample_timestamp_ms(base_timestamp + 320000);
   for (auto& cpu : *saturated.mutable_cpu_stat()) {
     cpu.set_io_wait_percent(9.0F);
   }
@@ -480,6 +489,7 @@ void TestManagerFeedbackDrivesRelativeAnomalyState() {
   assert(manager.Start());
   constexpr char kHost[] = "relative-feedback-host";
   constexpr char kKey[] = "relative-feedback-host_192.0.2.10";
+  const auto base_timestamp = NowUnixMs() - 400000;
   std::uint64_t sequence = 1;
   for (int index = 0; index < 31; ++index) {
     auto stable = MakeInfo(kHost, 4, 30.0F, 0.1F);
@@ -487,6 +497,7 @@ void TestManagerFeedbackDrivesRelativeAnomalyState() {
     stable.mutable_host_info()->set_ip_address("192.0.2.10");
     assert(monitor::CanonicalHostKey(stable) == kKey);
     SetSampleIdentity(&stable, sequence++);
+    stable.set_sample_timestamp_ms(base_timestamp + sequence * 10000);
     monitor::proto::MonitorFeedback feedback;
     assert(manager.SubmitWithFeedback(
                stable, std::chrono::system_clock::now() +
@@ -501,12 +512,13 @@ void TestManagerFeedbackDrivesRelativeAnomalyState() {
   monitor::diagnostics::AnomalyDetector detector(config);
   monitor::diagnostics::ObservabilityStateMachine state_machine(config);
   monitor::diagnostics::RemoteHealthFeedback remote(
-      std::chrono::seconds(5));
+      std::chrono::seconds(600));
   for (int index = 0; index < 2; ++index) {
     auto relative = MakeRelativeAnomalyInfo(kHost, index != 0);
     relative.mutable_host_info()->set_hostname(kHost);
     relative.mutable_host_info()->set_ip_address("192.0.2.10");
     SetSampleIdentity(&relative, sequence++);
+    relative.set_sample_timestamp_ms(base_timestamp + sequence * 10000);
     const auto local = detector.Evaluate(relative);
     assert(local.overall_score == 0.0);
 
@@ -516,7 +528,9 @@ void TestManagerFeedbackDrivesRelativeAnomalyState() {
                              std::chrono::seconds(2),
                &feedback) == monitor::DataReceiveResult::kAccepted);
     assert(feedback.health_valid());
-    assert(feedback.node_anomaly_score() >= config.suspect_enter_score);
+    assert(feedback.remote_trigger_score() >= config.suspect_enter_score);
+    assert(feedback.node_anomaly_score() <=
+           feedback.remote_trigger_score() + 1e-9);
     assert(remote.Accept(feedback, kKey, NowUnixMs()));
     const auto merged = remote.Merge(local, kKey, config);
     assert(merged.overall_score >= local.overall_score);
@@ -561,6 +575,80 @@ void TestTrackedFeedbackIsPerWorkItemAndDeduplicated() {
   assert(feedback[0].node_anomaly_score() ==
          feedback[1].node_anomaly_score());
   assert(manager.ProcessedCount() == 1);
+  manager.Stop();
+}
+
+void TestSessionSequenceSurvivesClockRollback() {
+  monitor::HostManager manager;
+  assert(manager.Start());
+  auto first = MakeInfo("rollback-host", 4, 30.0F, 0.1F);
+  SetSampleIdentity(&first, 100, "session-a");
+  const auto now = first.sample_timestamp_ms();
+  first.set_sample_timestamp_ms(now + 1000);
+  monitor::proto::MonitorFeedback first_feedback;
+  assert(manager.SubmitWithFeedback(
+             first, std::chrono::system_clock::now() + std::chrono::seconds(2),
+             &first_feedback) == monitor::DataReceiveResult::kAccepted);
+
+  auto rollback = first;
+  rollback.set_sample_sequence(101);
+  rollback.set_sample_timestamp_ms(now - 1000);
+  monitor::proto::MonitorFeedback rollback_feedback;
+  assert(manager.SubmitWithFeedback(
+             rollback,
+             std::chrono::system_clock::now() + std::chrono::seconds(2),
+             &rollback_feedback) == monitor::DataReceiveResult::kAccepted);
+  assert(rollback_feedback.health_valid());
+  assert(rollback_feedback.result_version() == 101);
+
+  auto restarted = rollback;
+  restarted.set_sample_session_id("session-b");
+  restarted.set_sample_sequence(1);
+  monitor::proto::MonitorFeedback restarted_feedback;
+  assert(manager.SubmitWithFeedback(
+             restarted,
+             std::chrono::system_clock::now() + std::chrono::seconds(2),
+             &restarted_feedback) == monitor::DataReceiveResult::kAccepted);
+  assert(restarted_feedback.health_valid());
+  assert(restarted_feedback.result_version() == 1);
+  assert(manager.ProcessedCount() == 3);
+  manager.Stop();
+}
+
+void TestInvalidFrameDoesNotTrainHealthHistory() {
+  monitor::HostManager manager;
+  assert(manager.Start());
+  std::uint64_t sequence = 1;
+  for (int index = 0; index < 30; ++index) {
+    auto stable = MakeInfo("invalid-history-host", 4, 30.0F, 0.1F);
+    SetSampleIdentity(&stable, sequence++);
+    monitor::proto::MonitorFeedback feedback;
+    assert(manager.SubmitWithFeedback(
+               stable, std::chrono::system_clock::now() +
+                           std::chrono::seconds(2),
+               &feedback) == monitor::DataReceiveResult::kAccepted);
+  }
+
+  auto invalid = MakeInfo("invalid-history-host", 4, 95.0F, 0.1F);
+  SetSampleIdentity(&invalid, sequence++);
+  invalid.mutable_disk_info(0)->set_util_percent(
+      std::numeric_limits<float>::quiet_NaN());
+  monitor::proto::MonitorFeedback invalid_feedback;
+  assert(manager.SubmitWithFeedback(
+             invalid, std::chrono::system_clock::now() +
+                          std::chrono::seconds(2),
+             &invalid_feedback) == monitor::DataReceiveResult::kAccepted);
+  assert(!invalid_feedback.health_valid());
+
+  auto normal = MakeInfo("invalid-history-host", 4, 30.0F, 0.1F);
+  SetSampleIdentity(&normal, sequence++);
+  monitor::proto::MonitorFeedback normal_feedback;
+  assert(manager.SubmitWithFeedback(
+             normal, std::chrono::system_clock::now() +
+                         std::chrono::seconds(2),
+             &normal_feedback) == monitor::DataReceiveResult::kAccepted);
+  assert(normal_feedback.health_valid());
+  assert(normal_feedback.remote_trigger_score() < 0.6);
   manager.Stop();
 }
 
@@ -623,10 +711,10 @@ void TestSameHostnameDifferentIpIsIsolated() {
   assert(second_retry.host_name() == kSecondKey);
   assert(manager.ProcessedCount() == 2);
 
-  for (std::uint64_t sequence = 2; sequence <= 31; ++sequence) {
+  for (std::uint64_t sequence = 2; sequence <= 32; ++sequence) {
     auto stable = first;
     stable.set_sample_sequence(sequence);
-    stable.set_sample_timestamp_ms(timestamp_ms + sequence);
+    stable.set_sample_timestamp_ms(timestamp_ms + sequence * 10000);
     monitor::proto::MonitorFeedback feedback;
     assert(manager.SubmitWithFeedback(
                stable, std::chrono::system_clock::now() +
@@ -642,8 +730,8 @@ void TestSameHostnameDifferentIpIsIsolated() {
          monitor::health::ModelState::kCold);
 
   auto incident_sample = first;
-  incident_sample.set_sample_sequence(32);
-  incident_sample.set_sample_timestamp_ms(timestamp_ms + 32);
+  incident_sample.set_sample_sequence(33);
+  incident_sample.set_sample_timestamp_ms(timestamp_ms + 33 * 10000);
   for (auto& cpu : *incident_sample.mutable_cpu_stat()) {
     cpu.set_cpu_percent(95.0F);
   }
@@ -657,7 +745,7 @@ void TestSameHostnameDifferentIpIsIsolated() {
   assert(incident_feedback.host_name() == kFirstKey);
   assert(manager.GetActiveIncidents(kFirstKey).size() == 1);
   assert(manager.GetActiveIncidents(kSecondKey).empty());
-  assert(manager.ProcessedCount() == 33);
+  assert(manager.ProcessedCount() == 34);
   manager.Stop();
 }
 
@@ -693,12 +781,13 @@ void TestTimedOutFeedbackRetryUsesCachedWorkResult() {
              stale, std::chrono::system_clock::now() +
                         std::chrono::seconds(2),
              &stale_feedback) == monitor::DataReceiveResult::kAccepted);
-  assert(!stale_feedback.health_valid());
-  assert(manager.ProcessedCount() == 1);
+  assert(stale_feedback.health_valid());
+  assert(manager.ProcessedCount() == 2);
 
   auto restarted = info;
   restarted.set_sample_sequence(1);
   restarted.set_sample_timestamp_ms(info.sample_timestamp_ms() + 1);
+  restarted.set_sample_session_id("restarted-session");
   monitor::proto::MonitorFeedback restarted_feedback;
   assert(manager.SubmitWithFeedback(
              restarted, std::chrono::system_clock::now() +
@@ -706,7 +795,7 @@ void TestTimedOutFeedbackRetryUsesCachedWorkResult() {
              &restarted_feedback) == monitor::DataReceiveResult::kAccepted);
   assert(restarted_feedback.health_valid());
   assert(restarted_feedback.result_version() == 1);
-  assert(manager.ProcessedCount() == 2);
+  assert(manager.ProcessedCount() == 3);
   manager.Stop();
 }
 
@@ -716,12 +805,12 @@ void TestRelativeCpuTopSignalDrivesRca() {
   for (int index = 0; index < 31; ++index) {
     const auto stable = MakeInfo("relative-rca-host", 4, 30.0F, 0.1F);
     assert(engine
-               .Evaluate(stable, start + std::chrono::seconds(index), 90.0)
+               .Evaluate(stable, start + std::chrono::seconds(index * 10), 90.0)
                .valid);
   }
   auto relative = MakeInfo("relative-rca-host", 4, 60.0F, 0.1F);
   const auto health =
-      engine.Evaluate(relative, start + std::chrono::seconds(32), 90.0);
+      engine.Evaluate(relative, start + std::chrono::seconds(320), 90.0);
   bool saw_consensus = false;
   for (const auto& signal : health.top_signals) {
     if ((signal.metric == monitor::health::MetricId::kCpuAverage ||
@@ -799,6 +888,8 @@ int main() {
   TestDiskIncidentIncludesHealthTopSignals();
   TestManagerFeedbackDrivesRelativeAnomalyState();
   TestTrackedFeedbackIsPerWorkItemAndDeduplicated();
+  TestSessionSequenceSurvivesClockRollback();
+  TestInvalidFrameDoesNotTrainHealthHistory();
   TestSameHostnameDifferentIpIsIsolated();
   TestTimedOutFeedbackRetryUsesCachedWorkResult();
   TestRelativeCpuTopSignalDrivesRca();

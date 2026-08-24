@@ -92,9 +92,14 @@ struct PerformanceRecord {
   std::vector<health::TopSignal> top_signals;
   // 变化率
   float cpu_percent_rate = 0;
+  float usr_percent_rate = 0;
+  float system_percent_rate = 0;
+  float io_wait_percent_rate = 0;
   float mem_used_percent_rate = 0;
   float disk_util_percent_rate = 0;
   float load_avg_1_rate = 0;
+  float load_avg_3_rate = 0;
+  float load_avg_15_rate = 0;
   float send_rate_rate = 0;
   float rcv_rate_rate = 0;
 };
@@ -161,6 +166,12 @@ struct NetDetailRecord {
   float snd_bytes_rate = 0;
   float rcv_packets_rate = 0;
   float snd_packets_rate = 0;
+  float rcv_bytes_rate_rate = 0;
+  float snd_bytes_rate_rate = 0;
+  float err_in_rate = 0;
+  float err_out_rate = 0;
+  float drop_in_rate = 0;
+  float drop_out_rate = 0;
 };
 
 /** @brief 单磁盘吞吐、IOPS、延迟和 util 详细记录。 */
@@ -175,6 +186,11 @@ struct DiskDetailRecord {
   float avg_read_latency_ms = 0;
   float avg_write_latency_ms = 0;
   float util_percent = 0;
+  float read_bytes_per_sec_rate = 0;
+  float write_bytes_per_sec_rate = 0;
+  float read_iops_rate = 0;
+  float write_iops_rate = 0;
+  float util_percent_rate = 0;
 };
 
 /** @brief 主机内存分类详细记录，单位沿用查询表语义。 */
@@ -189,6 +205,11 @@ struct MemDetailRecord {
   float active = 0;
   float inactive = 0;
   float dirty = 0;
+  float total_rate = 0;
+  float free_rate = 0;
+  float avail_rate = 0;
+  float active_rate = 0;
+  float inactive_rate = 0;
 };
 
 /** @brief 单 CPU 核各类 SoftIRQ 计数详细记录。 */
@@ -206,6 +227,16 @@ struct SoftIrqDetailRecord {
   float sched = 0;
   float hrtimer = 0;
   float rcu = 0;
+  float hi_rate = 0;
+  float timer_rate = 0;
+  float net_tx_rate = 0;
+  float net_rx_rate = 0;
+  float block_rate = 0;
+  float irq_poll_rate = 0;
+  float tasklet_rate = 0;
+  float sched_rate = 0;
+  float hrtimer_rate = 0;
+  float rcu_rate = 0;
 };
 
 /**

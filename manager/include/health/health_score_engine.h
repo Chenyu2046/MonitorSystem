@@ -33,6 +33,7 @@ struct HealthConfig {
   double scheduler_domain_weight = 0.10;
   std::chrono::seconds nar_window{300};
   std::size_t max_nar_frames = 600;
+  std::chrono::seconds minimum_history_duration{300};
 
   bool IsValid() const;
 };
@@ -42,14 +43,18 @@ bool LoadHealthConfigFromEnvironment(HealthConfig* config,
 
 class HealthScoreEngine {
  public:
-  using Clock = std::chrono::steady_clock;
+  using Clock = std::chrono::system_clock;
+  using ActivityClock = std::chrono::steady_clock;
 
   explicit HealthScoreEngine(HealthConfig config = {});
 
   HealthResult Evaluate(const monitor::proto::MonitorInfo& info,
                         Clock::time_point timestamp, double resource_score);
-  std::optional<Clock::time_point> LastTimestamp() const {
-    return last_timestamp_;
+  HealthResult Evaluate(const monitor::proto::MonitorInfo& info,
+                        Clock::time_point timestamp, double resource_score,
+                        ActivityClock::time_point activity_timestamp);
+  std::optional<ActivityClock::time_point> LastActivity() const {
+    return last_activity_;
   }
 
  private:
@@ -70,12 +75,13 @@ class HealthScoreEngine {
   std::vector<RollingWindow> windows_;
   std::deque<AnomalyFrame> anomaly_history_;
   std::optional<NetworkCounters> network_counters_;
-  std::optional<Clock::time_point> last_timestamp_;
+  std::optional<Clock::time_point> last_event_timestamp_;
+  std::optional<ActivityClock::time_point> last_activity_;
 };
 
 std::vector<std::string> PruneStaleHealthEngines(
     std::unordered_map<std::string, HealthScoreEngine>* engines,
-    HealthScoreEngine::Clock::time_point now,
-    HealthScoreEngine::Clock::duration max_idle);
+    HealthScoreEngine::ActivityClock::time_point now,
+    HealthScoreEngine::ActivityClock::duration max_idle);
 
 }  // namespace monitor::health
