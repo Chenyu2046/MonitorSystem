@@ -1,0 +1,14 @@
+date=2026-08-25T21:36:34.5629337+08:00
+host=Chenyu
+windows_iperf3=C:\Users\26561\AppData\Local\Microsoft\WinGet\Packages\ar51an.iPerf3_Microsoft.Winget.Source_8wekyb3d8bbwe\iperf3.exe
+windows_iperf3_version=3.21
+remote=127.0.0.1:2222
+guest_interface=enp0s3
+guest_ifindex=2
+warmup_seconds=5
+duration_seconds=5
+bandwidth_mbps_per_stream=10
+matrix=payload(64,512,1500) x streams(1,8) x cpu(1,2,4) x rounds(5) x variants(global,percpu)
+traffic_client_affinity=not_pinned_windows_host
+guest_server_affinity=taskset_cpu_sets_0;0,1;0-3
+cpu_binding_limit=best_effort_server_process_only; irq_and_virtualbox_vcpu_not_isolated

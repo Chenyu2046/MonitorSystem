@@ -1,0 +1,10 @@
+cd ~/MonitorSystem
+bash benchmark/ebpf/map-update-ab/build.sh
+sudo sysctl kernel.bpf_stats_enabled=1
+pwsh -NoProfile -File benchmark/ebpf/map-update-ab/run_matrix.ps1
+ssh -p 2222 127.0.0.1
+bpftool prog show -j (before/after measured window)
+Windows iperf3 3.21: -u -b 10M -l PAYLOAD -P STREAMS -t DURATION -J
+guest: taskset -c AFFINITY iperf3 -s -1 -p 5201 -J
+sudo tc qdisc del dev enp0s3 clsact
+restart production Worker; verify tc filter show dev enp0s3 ingress/egress
