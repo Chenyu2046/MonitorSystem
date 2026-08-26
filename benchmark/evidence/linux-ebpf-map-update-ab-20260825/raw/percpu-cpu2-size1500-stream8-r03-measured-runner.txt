@@ -1,0 +1,1 @@
+READY prog_id=4267 map_type=5 cpus=4
