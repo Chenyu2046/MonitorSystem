@@ -42,7 +42,7 @@ Root Cause
 * **Root Cause Analysis**：关联 CPU、Load、I/O、SoftIRQ、网络及 Profiling 证据生成诊断 Incident
 * **Manager 并发处理**：按 Host 哈希分片并行消费，并通过独立持久化线程解耦 MySQL I/O
 * **可靠发送**：支持有界队列、RPC Deadline、有限重试、指数退避和优雅退出
-* **运行时降级**：eBPF 不可用时自动回退到 procfs 基础采集
+* **网络采集降级**：通过编译选项关闭 eBPF 时，使用 `/proc/net/dev` 作为网络采集实现
 
 ---
 ## Architecture
@@ -55,52 +55,13 @@ Root Cause
 
 ## Diagnostic Result
 
-下面展示 KernScope 诊断链路的实际测试结果。系统关联 **IOWait、磁盘利用率、磁盘延迟及 eBPF Block I/O 延迟**等证据，最终识别为 `DISK_IO_SATURATION`。
+下面展示仓库诊断测试报告中的结果摘要。测试将 **IOWait、磁盘利用率、磁盘延迟及 eBPF Block I/O 延迟**等证据关联起来，识别为 `DISK_IO_SATURATION`；该图用于说明诊断数据结构和展示形式，不代表所有环境都能直接复现相同结果。
 
 <p align="center">
   <img src="docs/assets/kernscope-diagnostic-result.svg" alt="KernScope Diagnostic Result" width="100%" />
 </p>
 
 
-
-## Architecture
-
-```text id="05sfse"
-┌──────────────────────── Worker-Agent ────────────────────────┐
-│                                                             │
-│  procfs    Kernel Module    TC eBPF    perf_event / eBPF    │
-│     │            │             │               │             │
-│     └────────────┴─────────────┴───────────────┘             │
-│                            │                                │
-│                     MetricCollector                         │
-│                            │                                │
-│                       MonitorInfo                           │
-│                            │                                │
-│                      Bounded Queue                          │
-│                            │                                │
-│                      gRPC Push                              │
-└────────────────────────────┼────────────────────────────────┘
-                             │
-                             ▼
-┌────────────────────────── Manager ───────────────────────────┐
-│                                                             │
-│                       gRPC Receiver                          │
-│                            │                                │
-│                    Host Hash Sharding                       │
-│                            │                                │
-│                Anomaly / Score Engine                       │
-│                            │                                │
-│                 Evidence Builder + RCA                      │
-│                            │                                │
-│                  Persistence Queue                          │
-│                            │                                │
-│                MySQL / Incident Store                       │
-│                            │                                │
-│                      QueryService                           │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
 
 ## Adaptive Diagnostics
 
@@ -113,7 +74,7 @@ SUSPECT
   ↓
 DIAGNOSTIC
   ↓
-DEEP_DIAGNOSTIC
+PROFILING
   ↓
 COOLDOWN
 ```
@@ -177,7 +138,7 @@ BPF_MAP_TYPE_PERCPU_HASH
 
 让不同 CPU 独立更新统计值，用户态统一聚合，降低高 PPS 下共享热点计数竞争。
 
-eBPF 初始化或运行时读取失败时自动回退：
+关闭网络 eBPF 编译选项时，使用以下基础采集实现：
 
 ```text id="jju25q"
 /proc/net/dev
@@ -247,7 +208,7 @@ Root Cause:
 Disk I/O Saturation
 
 Confidence:
-0.87
+1.00
 
 Evidence:
 nvme0n1 util = 98%
@@ -255,20 +216,22 @@ read latency = 47ms
 iowait = 31%
 ```
 
+这里的 `Confidence` 是基于规则匹配证据计算出的诊断置信度，不是统计学概率或模型准确率。
+
 ---
 
 ## Performance
 
 ### TC eBPF
 
-受控 veth 高吞吐测试中最高覆盖：
+在 WSL2 受控 veth 环境、4 路 iperf3 TCP 流量下，最高测得：
 
 ```text id="sf8l1f"
 87.11 Gb/s
 24.82 万 packets/s
 ```
 
-3 轮测试中，eBPF 聚合结果与 `/proc/net/dev` 的 RX/TX 字节增量保持一致。
+3 轮测试中，eBPF 聚合结果与 `/proc/net/dev` 的 RX/TX 字节增量保持一致；该结果用于验证采集准确性，不代表物理网卡或生产环境吞吐上限。
 
 ### Manager
 
@@ -292,7 +255,9 @@ Total Time       ↓ 11.7%
 Persistence Rate ↑ 1.13×
 ```
 
-75 Host、1 秒上报周期、10 分钟稳定性测试：
+以上结果来自特定压测模型，不等同于系统的通用容量上限或 exactly-once 保证。
+
+75 Host、1 秒上报周期、10 分钟稳定性测试（共 45,000 次上报）：
 
 ```text id="rm8u21"
 Accepted   45,000
@@ -381,23 +346,53 @@ MonitorSystem/
 git clone https://github.com/Chenyu2046/MonitorSystem.git
 cd MonitorSystem
 
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+cmake -S . -B build -DBUILD_BENCHMARK=OFF -DENABLE_MYSQL=OFF -DENABLE_EBPF=OFF
+cmake --build build -j$(nproc)
 ```
 
-基础监控模式：
+上面的命令构建不依赖 MySQL 和 eBPF 的基础监控模式。默认配置会构建 Manager，并启用 MySQL；如果要使用完整能力，需要先安装 `mysqlclient`、libbpf、libelf、libz、Clang、bpftool 和 Linux Kernel Headers，再执行：
 
 ```bash id="ms7knv"
-cmake .. -DENABLE_EBPF=OFF
-make -j$(nproc)
+cmake -S . -B build
+cmake --build build -j$(nproc)
 ```
+
+内核模块和 eBPF Probe 需要单独准备：
+
+```bash
+sudo cmake --build build --target kernel_modules
+make -C worker/src/ebpf
+```
+
+如果构建系统未提供 `kernel_modules` 目标，也可以直接执行 `make -C worker/src/kmod`。加载模块和启用 profiling 通常需要 root、TC/eBPF 及 `perf_event` 相关权限，具体能力取决于当前内核配置。
 
 ---
 
 ## Quick Start
 
 ### Manager
+
+最小启动路径（不依赖 MySQL）：
+
+```bash
+cmake -S . -B build -DBUILD_BENCHMARK=OFF -DENABLE_MYSQL=OFF -DENABLE_EBPF=OFF
+cmake --build build -j$(nproc)
+```
+
+终端 1 启动 Manager（保持运行）：
+
+```bash
+./build/manager/manager
+```
+
+然后在终端 2 加载内核模块、启动 Worker：
+
+```bash
+sudo bash worker/scripts/load_modules.sh
+sudo ./build/worker/worker <manager_ip>:50051
+```
+
+完整模式默认启用 MySQL。启动前需要确保 MySQL 服务已运行，配置下方环境变量，并先完成数据库初始化。
 
 ```bash id="du775b"
 ./build/manager/manager
@@ -412,8 +407,7 @@ make -j$(nproc)
 ### Kernel Module
 
 ```bash id="eu8dl3"
-sudo insmod worker/src/kmod/cpu_stat_collector.ko
-sudo insmod worker/src/kmod/softirq_collector.ko
+sudo bash worker/scripts/load_modules.sh
 ```
 
 ### Worker
@@ -440,7 +434,7 @@ mysql -u monitor -p monitor_db \
   < manager/sql/init_server_performance.sql
 ```
 
-未启用 MySQL 时，Manager 使用内存存储提供部分回退查询能力。
+使用 `-DENABLE_MYSQL=OFF` 构建时，Manager 使用内存存储提供部分回退查询能力；这不是运行时自动降级。启用 MySQL 时，需要先完成数据库初始化并配置上述环境变量。
 
 ---
 
@@ -464,5 +458,3 @@ mysql -u monitor -p monitor_db \
 ---
 
 ## License
-
-[MIT License](LICENSE)
