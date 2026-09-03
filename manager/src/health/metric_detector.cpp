@@ -7,6 +7,7 @@ namespace monitor::health {
 namespace {
 
 double Normalize(double value, double warning, double critical) {
+  // 将告警区间线性映射到 [0, 1]，并截断区间外的结果。
   if (!std::isfinite(value) || !std::isfinite(warning) ||
       !std::isfinite(critical) || critical <= warning) {
     return 0.0;
@@ -16,6 +17,7 @@ double Normalize(double value, double warning, double critical) {
 
 double DeviationScore(double difference, double spread, double baseline,
                       double warning, double critical) {
+  // 用相对基线的有效波动范围归一化偏差，避免低方差时分母失真。
   constexpr double kEpsilon = 1e-12;
   if (!std::isfinite(difference) || !std::isfinite(spread)) return 0.0;
   const double relative_floor = std::abs(baseline) * 0.01;
@@ -31,6 +33,7 @@ DetectorResult MetricDetector::Evaluate(
     double value, std::optional<StaticThreshold> threshold,
     const RollingWindow& history,
     RollingWindow::Clock::time_point timestamp) const {
+  // 综合静态阈值、EWMA 和成熟窗口上的 MAD 结果，使用投票确认异常。
   DetectorResult result;
   if (!std::isfinite(value)) return result;
 

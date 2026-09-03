@@ -11,6 +11,7 @@ namespace monitor::health {
 namespace {
 
 bool ParseDouble(const std::string& text, double* output) {
+  // 严格解析有限浮点数，拒绝空字段、溢出和尾随字符。
   if (!output || text.empty()) return false;
   errno = 0;
   char* end = nullptr;
@@ -24,6 +25,7 @@ bool ParseDouble(const std::string& text, double* output) {
 }
 
 bool ParseMetric(const std::string& name, MetricId* metric) {
+  // 在受支持的指标集合中反向查找持久化文本对应的枚举值。
   constexpr std::array<MetricId, 15> kMetrics = {
       MetricId::kCpuAverage,
       MetricId::kCpuPeak,
@@ -51,6 +53,7 @@ bool ParseMetric(const std::string& name, MetricId* metric) {
 }
 
 ModelState ParseModelState(const std::string& name) {
+  // 解析模型状态；未知文本按最保守的冷启动状态处理。
   if (name == "READY") return ModelState::kReady;
   if (name == "WARMING") return ModelState::kWarming;
   return ModelState::kCold;
@@ -59,6 +62,7 @@ ModelState ParseModelState(const std::string& name) {
 }  // namespace
 
 std::string EncodeTopSignals(const std::vector<TopSignal>& signals) {
+  // 将候选信号按稳定字段顺序编码为数据库可存储文本。
   std::ostringstream output;
   output << std::setprecision(17);
   for (std::size_t index = 0; index < signals.size(); ++index) {
@@ -77,6 +81,7 @@ std::string EncodeTopSignals(const std::vector<TopSignal>& signals) {
 }
 
 std::vector<TopSignal> DecodeTopSignals(const std::string& encoded) {
+  // 解析信号文本；跳过格式错误记录，并限制最多恢复三个信号。
   std::vector<TopSignal> signals;
   std::istringstream records(encoded);
   std::string record;

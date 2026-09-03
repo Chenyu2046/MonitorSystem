@@ -135,7 +135,7 @@ message HealthTopSignal {
 message PerformanceRecord {
     string server_name = 1;
     google.protobuf.Timestamp timestamp = 2;
-    // CPU指标
+    // CPU 主机概览：有效 CPU 核对应字段的平均值，单位 percent。
     float cpu_percent = 10;
     float usr_percent = 11;
     float system_percent = 12;
@@ -144,23 +144,23 @@ message PerformanceRecord {
     float io_wait_percent = 15;
     float irq_percent = 16;
     float soft_irq_percent = 17;
-    // 负载指标
+    // Load Average：1/5/15 分钟窗口；load_avg_3 是历史字段名，实际为 5 分钟。
     float load_avg_1 = 20;
     float load_avg_3 = 21;
     float load_avg_15 = 22;
-    // 内存指标
+    // 内存主机概览：使用率单位 percent，容量单位 GiB。
     float mem_used_percent = 30;
     float mem_total = 31;
     float mem_free = 32;
     float mem_avail = 33;
-    // 磁盘指标
+    // 磁盘主机概览：当前有效磁盘中的最大 util，单位 percent。
     float disk_util_percent = 40;
-    // 网络指标
+    // 网络主机概览：所有有效网卡速率之和，单位 KiB/s。
     float send_rate = 50;
     float rcv_rate = 51;
-    // 评分
+    // 兼容字段，继续表示资源余量分数，不是健康分数，范围通常为 0~100。
     float score = 60;
-    // 变化率
+    // 相对变化率：(当前值 - 上一值) / 上一值；无上一有效样本时通常为 0。
     float cpu_percent_rate = 70;
     float usr_percent_rate = 71;
     float system_percent_rate = 72;
@@ -198,10 +198,11 @@ message AnomalyRecord {
 // 单服务器最新评分和关键主机指标摘要。
 message ServerScoreSummary {
     string server_name = 1;
+    // 兼容字段，表示资源余量分数。
     float score = 2;
     google.protobuf.Timestamp last_update = 3;
     ServerStatus status = 4;
-    // 关键指标快照
+    // 关键主机指标快照：CPU、内存和磁盘利用率为 percent，Load 为任务负载值。
     float cpu_percent = 10;
     float mem_used_percent = 11;
     float disk_util_percent = 12;
@@ -280,17 +281,17 @@ message NetDetailRecord {
     string server_name = 1;
     string net_name = 2;
     google.protobuf.Timestamp timestamp = 3;
-    // 错误和丢弃统计
+    // 以下错误/丢弃值为单网卡累计计数。
     uint64 err_in = 10;
     uint64 err_out = 11;
     uint64 drop_in = 12;
     uint64 drop_out = 13;
-    // 速率指标
+    // 单网卡速率指标；字节速率单位 KiB/s，包速率单位 packets/s。
     float rcv_bytes_rate = 20;
     float snd_bytes_rate = 21;
     float rcv_packets_rate = 22;
     float snd_packets_rate = 23;
-    // 变化率
+    // 单网卡指标的相对变化率；错误/丢弃速率由 Manager 对累计计数做差分得到。
     float rcv_bytes_rate_rate = 30;
     float snd_bytes_rate_rate = 31;
     float err_in_rate = 32;
@@ -304,7 +305,7 @@ message DiskDetailRecord {
     string server_name = 1;
     string disk_name = 2;
     google.protobuf.Timestamp timestamp = 3;
-    // 性能指标
+    // 单磁盘性能指标：吞吐 bytes/s，IOPS requests/s，延迟 ms/request，util percent。
     float read_bytes_per_sec = 10;
     float write_bytes_per_sec = 11;
     float read_iops = 12;
@@ -312,7 +313,7 @@ message DiskDetailRecord {
     float avg_read_latency_ms = 14;
     float avg_write_latency_ms = 15;
     float util_percent = 16;
-    // 变化率
+    // 单磁盘派生指标的相对变化率。
     float read_bytes_per_sec_rate = 20;
     float write_bytes_per_sec_rate = 21;
     float read_iops_rate = 22;
@@ -324,7 +325,7 @@ message DiskDetailRecord {
 message MemDetailRecord {
     string server_name = 1;
     google.protobuf.Timestamp timestamp = 2;
-    // 内存指标 (单位: GiB)
+    // 主机内存分类指标，容量单位 GiB；used_percent 不在该 detail 消息中。
     float total = 10;
     float free = 11;
     float avail = 12;
@@ -341,7 +342,7 @@ message MemDetailRecord {
     float writeback = 23;
     float anon_pages = 24;
     float mapped = 25;
-    // 变化率
+    // 内存分类容量的相对变化率。
     float total_rate = 30;
     float free_rate = 31;
     float avail_rate = 32;
@@ -365,7 +366,7 @@ message SoftIrqDetailRecord {
     int64 sched = 17 [deprecated = true];
     int64 hrtimer = 18 [deprecated = true];
     int64 rcu = 19 [deprecated = true];
-    // 变化率
+    // SoftIRQ 速率的相对变化率；当前 worker 输出的单位是 events/s。
     float hi_rate = 20;
     float timer_rate = 21;
     float net_tx_rate = 22;

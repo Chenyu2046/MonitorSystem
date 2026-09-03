@@ -3,16 +3,26 @@ package monitor.proto;
 
 // 单网卡普通网络监控样本；速率来自累计值前后采样，错误/丢弃是累计计数。
 message NetInfo {
+    // 网卡名称，例如 eth0、ens33；该消息保持逐网卡粒度。
     string name = 1;
-    float send_rate = 2;           // 发送速率，单位：KiB/s
-    float rcv_rate = 3;            // 接收速率，单位：KiB/s
-    float send_packets_rate = 4;   // 发送包数速率，单位：个/s
-    float rcv_packets_rate = 5;    // 接收包数速率，单位：个/s
+    // 发送字节速率，单位 KiB/s；由累计字节数前后两次采样差分得到。
+    float send_rate = 2;
+    // 接收字节速率，单位 KiB/s；由累计字节数前后两次采样差分得到。
+    float rcv_rate = 3;
+    // 发送包速率，单位 packets/s；由累计发送包数差分得到。
+    float send_packets_rate = 4;
+    // 接收包速率，单位 packets/s；由累计接收包数差分得到。
+    float rcv_packets_rate = 5;
     
     // 错误和丢弃统计
-    uint64 err_in = 6;             // 接收错误数
-    uint64 err_out = 7;            // 发送错误数
-    uint64 drop_in = 8;            // 接收丢弃数
-    uint64 drop_out = 9;           // 发送丢弃数
+    // 接收错误累计数，不是本轮错误速率。
+    uint64 err_in = 6;
+    // 发送错误累计数，不是本轮错误速率。
+    uint64 err_out = 7;
+    // 接收丢弃累计数，不是本轮丢弃速率。
+    uint64 drop_in = 8;
+    // 发送丢弃累计数，不是本轮丢弃速率。
+    uint64 drop_out = 9;
+    // 本轮该网卡数据是否读取和计算成功。
     bool sample_valid = 20;
 }

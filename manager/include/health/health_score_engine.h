@@ -35,9 +35,11 @@ struct HealthConfig {
   std::size_t max_nar_frames = 600;
   std::chrono::seconds minimum_history_duration{300};
 
+  // 检查健康评分参数的范围和相互关系。
   bool IsValid() const;
 };
 
+// 从环境变量加载健康评分配置，并在失败时写入错误原因。
 bool LoadHealthConfigFromEnvironment(HealthConfig* config,
                                      std::string* error);
 
@@ -46,13 +48,17 @@ class HealthScoreEngine {
   using Clock = std::chrono::system_clock;
   using ActivityClock = std::chrono::steady_clock;
 
+  // 创建评分引擎，并为每个指标初始化独立的历史窗口。
   explicit HealthScoreEngine(HealthConfig config = {});
 
+  // 使用当前 Manager 活动时间计算一次健康评分。
   HealthResult Evaluate(const monitor::proto::MonitorInfo& info,
                         Clock::time_point timestamp, double resource_score);
+  // 使用调用方提供的活动时间计算评分，便于低流量引擎过期清理。
   HealthResult Evaluate(const monitor::proto::MonitorInfo& info,
                         Clock::time_point timestamp, double resource_score,
                         ActivityClock::time_point activity_timestamp);
+  // 返回最近一次有效评分对应的 Manager 活动时间。
   std::optional<ActivityClock::time_point> LastActivity() const {
     return last_activity_;
   }
@@ -79,6 +85,7 @@ class HealthScoreEngine {
   std::optional<ActivityClock::time_point> last_activity_;
 };
 
+// 移除超过 max_idle 未活动的主机引擎，并返回被移除的主机名。
 std::vector<std::string> PruneStaleHealthEngines(
     std::unordered_map<std::string, HealthScoreEngine>* engines,
     HealthScoreEngine::ActivityClock::time_point now,

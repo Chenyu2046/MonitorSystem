@@ -3,24 +3,42 @@ package monitor.proto;
 
 // 主机磁盘累计计数及由前后采样计算的吞吐/IOPS/延迟/util。
 message DiskInfo {
+  // 块设备名称，例如 sda、nvme0n1；该消息保持逐磁盘粒度。
   string name = 1;
+  // 累计完成的读请求数，来源于 /proc/diskstats。
   uint64 reads = 2;
+  // 累计完成的写请求数，来源于 /proc/diskstats。
   uint64 writes = 3;
+  // 累计读取扇区数；通常按 512 bytes/sector 换算吞吐。
   uint64 sectors_read = 4;
+  // 累计写入扇区数；通常按 512 bytes/sector 换算吞吐。
   uint64 sectors_written = 5;
+  // 累计读请求耗时，单位 ms。
   uint64 read_time_ms = 6;
+  // 累计写请求耗时，单位 ms。
   uint64 write_time_ms = 7;
+  // 当前正在处理的 IO 请求数。
   uint64 io_in_progress = 8;
+  // 设备处于 IO 忙碌状态的累计时间，单位 ms。
   uint64 io_time_ms = 9;
+  // 按并发请求数加权的累计 IO 时间，单位 ms。
   uint64 weighted_io_time_ms = 10;
 
-  // 速率/变化率字段
+  // 以下字段由 Worker 根据相邻两次累计值计算，不是内核原始计数。
+  // 读取吞吐，单位 bytes/s。
   double read_bytes_per_sec = 20;
+  // 写入吞吐，单位 bytes/s。
   double write_bytes_per_sec = 21;
+  // 读取 IOPS，单位 requests/s。
   double read_iops = 22;
+  // 写入 IOPS，单位 requests/s。
   double write_iops = 23;
+  // 本采样窗口内的平均读请求延迟，单位 ms/request。
   double avg_read_latency_ms = 24;
+  // 本采样窗口内的平均写请求延迟，单位 ms/request。
   double avg_write_latency_ms = 25;
+  // 本采样窗口内设备忙碌时间占比，单位 percent，范围 0~100。
   double util_percent = 26;
+  // 本轮该设备数据是否读取和派生计算成功。
   bool sample_valid = 30;
 }

@@ -3,6 +3,7 @@
 namespace monitor::health {
 
 const char* MetricName(MetricId metric) {
+  // 将内部指标枚举转换为日志、持久化和 RPC 使用的稳定名称。
   switch (metric) {
     case MetricId::kCpuAverage:
       return "cpu_average_percent";
@@ -39,6 +40,7 @@ const char* MetricName(MetricId metric) {
 }
 
 const char* ModelStateName(ModelState state) {
+  // 将模型生命周期状态转换为对外展示的固定大写文本。
   switch (state) {
     case ModelState::kCold:
       return "COLD";

@@ -4,15 +4,24 @@ package monitor.proto;
 // Worker 逐核 CPU 百分比样本。Manager 普通概览会对有效核求平均，
 // 异常路径仍可使用逐核最大值。
 message CpuStat{
+    // CPU 核标识，例如 cpu0；该消息保持逐核粒度。
     string cpu_name = 1;
+    // 忙碌时间百分比，包含 user、nice、system、irq、softirq 和 steal。
     float cpu_percent = 2;
+    // 用户态任务占用百分比。
     float usr_percent = 3;
+    // 内核态任务占用百分比，不包括硬中断和软中断时间。
     float system_percent = 4;
+    // 被 nice 调度任务占用的百分比。
     float nice_percent = 5;
+    // CPU 空闲百分比。
     float idle_percent = 6;
+    // CPU 等待块设备或其他 IO 完成的百分比。
     float io_wait_percent = 7;
+    // 硬中断处理占用百分比。
     float irq_percent = 8;
+    // 软中断处理占用百分比。
     float soft_irq_percent = 9;
-    // Additive presence marker: true only when this complete sample was read.
+    // 本轮逐核 CPU 样本是否完整读取成功；false 时该核不参与 Manager 聚合。
     bool sample_valid = 20;
   }

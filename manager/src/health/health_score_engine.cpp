@@ -26,18 +26,22 @@ struct Observation {
 };
 
 std::size_t MetricIndex(MetricId metric) {
+  // 利用枚举值与窗口数组下标的一一对应关系定位历史窗口。
   return static_cast<std::size_t>(metric);
 }
 
 bool ValidPercent(double value) {
+  // 校验百分比指标，过滤 NaN、无穷大和超出物理范围的输入。
   return std::isfinite(value) && value >= 0.0 && value <= 100.0;
 }
 
 bool ValidNonnegative(double value) {
+  // 校验只能为非负数的计数、速率和容量指标。
   return std::isfinite(value) && value >= 0.0;
 }
 
 const char* WorkerState(const monitor::proto::MonitorInfo& info) {
+  // 将 Worker 的诊断枚举映射为健康结果中的状态文本。
   if (!info.has_diagnostic()) return "UNKNOWN";
   switch (info.diagnostic().state()) {
     case monitor::proto::OBSERVABILITY_NORMAL:
@@ -55,6 +59,7 @@ const char* WorkerState(const monitor::proto::MonitorInfo& info) {
 }
 
 const char* DomainName(Domain domain) {
+  // 将评分域枚举转换为性能日志使用的短名称。
   switch (domain) {
     case Domain::kCpu:
       return "cpu";
@@ -71,6 +76,7 @@ const char* DomainName(Domain domain) {
 }
 
 bool ParseSize(const char* name, std::size_t* output, std::string* error) {
+  // 从环境变量解析无符号整数配置；未设置时保留默认值。
   const char* value = std::getenv(name);
   if (!value) return true;
   const std::string_view text(value);
@@ -86,6 +92,7 @@ bool ParseSize(const char* name, std::size_t* output, std::string* error) {
 }
 
 bool ParseInt(const char* name, int* output, std::string* error) {
+  // 从环境变量解析整数配置，并拒绝不完整或越界的文本。
   const char* value = std::getenv(name);
   if (!value) return true;
   const std::string_view text(value);
@@ -101,6 +108,7 @@ bool ParseInt(const char* name, int* output, std::string* error) {
 }
 
 bool ParseDouble(const char* name, double* output, std::string* error) {
+  // 从环境变量解析有限浮点配置，并统一报告配置项名称。
   const char* value = std::getenv(name);
   if (!value) return true;
   if (*value == '\0') {
@@ -120,6 +128,7 @@ bool ParseDouble(const char* name, double* output, std::string* error) {
 }
 
 double DomainWeight(const HealthConfig& config, Domain domain) {
+  // 返回评分域对应的权重，未知域不参与加权。
   switch (domain) {
     case Domain::kCpu:
       return config.cpu_domain_weight;
@@ -138,6 +147,7 @@ double DomainWeight(const HealthConfig& config, Domain domain) {
 }  // namespace
 
 bool HealthConfig::IsValid() const {
+  // 校验采样窗口、检测阈值、投票规则和各评分域权重之间的关系。
   const double weight_sum = cpu_domain_weight + memory_domain_weight +
                             disk_domain_weight + network_domain_weight +
                             scheduler_domain_weight;
@@ -156,6 +166,7 @@ bool HealthConfig::IsValid() const {
 
 bool LoadHealthConfigFromEnvironment(HealthConfig* config,
                                      std::string* error) {
+  // 用环境变量覆盖默认配置，完成时长转换并执行整体一致性校验。
   if (!config) return false;
   std::size_t window_seconds = config->window_age.count();
   std::size_t nar_seconds = config->nar_window.count();
@@ -200,6 +211,7 @@ HealthScoreEngine::HealthScoreEngine(HealthConfig config)
                                config_.ewma_critical_sigma,
                                config_.consensus_min_votes,
                                config_.minimum_history_duration}) {
+  // 为每个指标预先建立独立历史窗口，并让检测器使用同一套配置。
   windows_.reserve(kMetricCount);
   for (std::size_t index = 0; index < kMetricCount; ++index) {
     windows_.emplace_back(config_.max_samples, config_.window_age);
@@ -209,12 +221,14 @@ HealthScoreEngine::HealthScoreEngine(HealthConfig config)
 HealthResult HealthScoreEngine::Evaluate(
     const monitor::proto::MonitorInfo& info, Clock::time_point timestamp,
     double resource_score) {
+  // 默认用当前 Manager 活动时间记录引擎最近一次有效计算。
   return Evaluate(info, timestamp, resource_score, ActivityClock::now());
 }
 
 HealthResult HealthScoreEngine::Evaluate(
     const monitor::proto::MonitorInfo& info, Clock::time_point timestamp,
     double resource_score, ActivityClock::time_point activity_timestamp) {
+  // 按事件时间更新各指标历史，聚合域级异常分数并生成健康结果。
   const auto health_start = ActivityClock::now();
   std::int64_t health_compute_us = 0;
   struct MetricTrace {
@@ -229,6 +243,7 @@ HealthResult HealthScoreEngine::Evaluate(
   HealthResult result;
   result.resource_score = std::isfinite(resource_score) ? resource_score : 0.0;
   result.state = WorkerState(info);
+  // 按需输出整体健康计算耗时、域分数和 Top Signals，避免默认日志开销。
   const auto log_health = [&](const HealthResult& health,
                               std::size_t observation_count,
                               std::size_t anomalous_metric_count) {
@@ -612,6 +627,7 @@ std::vector<std::string> PruneStaleHealthEngines(
     std::unordered_map<std::string, HealthScoreEngine>* engines,
     HealthScoreEngine::ActivityClock::time_point now,
     HealthScoreEngine::ActivityClock::duration max_idle) {
+  // 按 Manager 活动时钟移除长期无有效样本的引擎，释放低流量主机状态。
   std::vector<std::string> removed;
   if (!engines || max_idle.count() <= 0) return removed;
   for (auto it = engines->begin(); it != engines->end();) {

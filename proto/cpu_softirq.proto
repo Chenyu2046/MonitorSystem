@@ -4,16 +4,28 @@ package monitor.proto;
 // Worker 按 CPU 核上报的 SoftIRQ 速率视图；所有字段单位为 events/s，
 // cpu 标识保留逐核维度。
 message SoftIrq {
+    // CPU 核标识；以下各字段均为该 CPU 核上的事件速率。
     string cpu = 1;
+    // HI_SOFTIRQ，高优先级 tasklet 相关软中断速率，单位 events/s。
     float hi = 2;
+    // TIMER_SOFTIRQ，定时器软中断速率，单位 events/s。
     float timer = 3;
+    // NET_TX_SOFTIRQ，网络发送软中断速率，单位 events/s。
     float net_tx = 4;
+    // NET_RX_SOFTIRQ，网络接收软中断速率，单位 events/s。
     float net_rx = 5;
+    // BLOCK_SOFTIRQ，块设备 IO 软中断速率，单位 events/s。
     float block = 6;
+    // IRQ_POLL_SOFTIRQ，IRQ 轮询软中断速率，单位 events/s。
     float irq_poll = 7;
+    // TASKLET_SOFTIRQ，tasklet 软中断速率，单位 events/s。
     float tasklet = 8;
+    // SCHED_SOFTIRQ，调度相关软中断速率，单位 events/s。
     float sched = 9;
+    // HRTIMER_SOFTIRQ，高精度定时器软中断速率，单位 events/s。
     float hrtimer = 10;
+    // RCU_SOFTIRQ，RCU 回调软中断速率，单位 events/s。
     float rcu = 11;
+    // 本轮该 CPU 的 SoftIRQ 样本是否成功读取；速率由前后累计计数差分得到。
     bool sample_valid = 20;
   }

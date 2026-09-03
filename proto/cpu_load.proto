@@ -4,8 +4,12 @@ package monitor.proto;
 // Worker 主机级 load average；Linux /proc/loadavg 的窗口实际为 1/5/15 分钟。
 // load_avg_3 保留历史字段名，但实际对应 5 分钟窗口；它不等同于逐核 CPU busy 百分比。
 message CpuLoad {
+    // 最近 1 分钟的系统平均负载，来源于 /proc/loadavg；不是 CPU 百分比。
     float load_avg_1 = 1;
+    // 最近 5 分钟的系统平均负载；字段名 load_avg_3 为历史兼容命名。
     float load_avg_3 = 2;
+    // 最近 15 分钟的系统平均负载；不是 CPU 百分比。
     float load_avg_15 = 3;
+    // 本轮 load average 是否成功读取并通过基本校验。
     bool sample_valid = 10;
   }

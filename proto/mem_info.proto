@@ -3,25 +3,47 @@ package monitor.proto;
 
 // 主机级 /proc/meminfo 分类快照；当前协议不表达进程级内存归因。
 message MemInfo {
-    float total = 1;               // GiB
-    float free = 2;                // GiB
-    float avail= 3;                // GiB
+    // 以下容量字段单位均为 GiB，来源于 /proc/meminfo。
+    // MemTotal，主机物理内存总量。
+    float total = 1;
+    // MemFree，当前完全未使用的内存，不包含可回收缓存。
+    float free = 2;
+    // MemAvailable，内核估算的无需交换即可提供给应用的可用内存。
+    float avail = 3;
+    // Buffers，块设备元数据等内核缓冲区。
     float buffers = 4;
+    // Cached，文件页缓存。
     float cached = 5;
+    // SwapCached，曾经换出但当前仍保留在内存中的页。
     float swap_cached = 6;
+    // Active，近期活跃、通常不容易被回收的内存总量。
     float active = 7;
+    // Inactive，近期不活跃、相对更容易被回收的内存总量。
     float inactive = 8;
+    // Active(anon)，活跃匿名页，例如堆、栈和匿名映射。
     float active_anon = 9;
+    // Inactive(anon)，非活跃匿名页。
     float inactive_anon = 10;
+    // Active(file)，活跃文件页缓存。
     float active_file = 11;
+    // Inactive(file)，非活跃文件页缓存。
     float inactive_file = 12;
+    // Dirty，已经被修改但尚未写回存储设备的页。
     float dirty = 13;
+    // Writeback，正在写回存储设备的页。
     float writeback = 14;
+    // AnonPages，驻留在内存中的匿名页。
     float anon_pages = 15;
+    // Mapped，被 mmap 等方式映射到进程地址空间的页。
     float mapped = 16;
+    // KReclaimable，内核可回收内存。
     float kReclaimable = 17;
+    // SReclaimable，可回收 slab 内存。
     float sReclaimable = 18;
+    // SUnreclaim，不可回收 slab 内存。
     float sUnreclaim = 19;
-    float used_percent = 31;       // percent
+    // 内存使用率：(MemTotal - MemAvailable) / MemTotal * 100，单位 percent。
+    float used_percent = 31;
+    // 本轮 /proc/meminfo 是否读取成功并通过基本校验。
     bool sample_valid = 40;
   }

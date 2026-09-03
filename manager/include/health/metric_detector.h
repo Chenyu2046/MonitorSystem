@@ -27,8 +27,10 @@ struct StaticThreshold {
 
 class MetricDetector {
  public:
+  // 保存静态阈值、EWMA、MAD 和共识投票所需的检测参数。
   explicit MetricDetector(DetectorConfig config) : config_(config) {}
 
+  // 基于当前值、静态阈值和历史窗口计算单指标异常结果。
   DetectorResult Evaluate(
       double value, std::optional<StaticThreshold> threshold,
       const RollingWindow& history,

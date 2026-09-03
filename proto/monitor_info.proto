@@ -89,20 +89,31 @@ message HostInfo {
 
 // 一轮 Worker 采集结果：基础资源字段与可选 DiagnosticSnapshot 同时上报。
 message MonitorInfo{
-  string name = 1;           // 主机名（保留兼容）
-  HostInfo host_info = 2;    // 主机标识信息
+  // 主机名，保留用于兼容旧版本；新代码优先使用 host_info.hostname。
+  string name = 1;
+  // 主机身份信息，不属于资源指标。
+  HostInfo host_info = 2;
+  // 逐 CPU 核 SoftIRQ 事件速率，单位 events/s。
   repeated SoftIrq soft_irq = 4;
+  // 主机级 1/5/15 分钟 Load Average。
   CpuLoad cpu_load = 5;
+  // 逐 CPU 核 CPU 使用率和时间分解，单位 percent。
   repeated CpuStat cpu_stat = 6;
+  // 主机级 /proc/meminfo 分类快照，容量单位 GiB，使用率单位 percent。
   MemInfo mem_info = 7;
+  // 逐网卡网络吞吐、包速率以及错误/丢弃累计值。
   repeated NetInfo net_info = 8;
+  // 逐磁盘累计 IO 计数和 Worker 计算的吞吐/IOPS/延迟/util。
   repeated DiskInfo disk_info = 9;
+  // Worker 本地异常判断、观测状态、诊断探针状态和 profiling 快照。
   DiagnosticSnapshot diagnostic = 10;
   // New Workers identify a sample so the asynchronous Manager can correlate
   // health feedback with exactly the item processed by the host shard.
+  // Worker 单调递增的采样序号，用于 Manager 去重和检测过期样本。
   uint64 sample_sequence = 20;
+  // 本轮采样时间，Unix epoch milliseconds。
   int64 sample_timestamp_ms = 21;
-  // Stable for the Worker lifetime; sequence ordering is scoped to this id.
+  // Worker 生命周期内稳定的采样会话 ID；序号只在该会话内有序。
   string sample_session_id = 22;
 }
 

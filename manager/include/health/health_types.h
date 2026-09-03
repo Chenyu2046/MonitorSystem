@@ -63,7 +63,9 @@ struct HealthResult {
   bool valid = false;
 };
 
+// 返回指标的稳定文本名称，用于日志、RPC 和持久化。
 const char* MetricName(MetricId metric);
+// 返回模型状态的稳定文本名称。
 const char* ModelStateName(ModelState state);
 
 }  // namespace monitor::health
