@@ -46,7 +46,6 @@ KernScope 解决的是一条完整的主机观测链路，而不是单独的指�
 
 > GitHub README 使用上面的 SVG 作为静态预览。需要点击节点、查看消息字段和进入下一级流程时，请打开 [交互式架构入口](docs/ai/monitor-system.index.html)。
 
-> 发布时请将本文档引用的 `docs/ai/` 交互式页面、JSON 数据和 SVG 静态资源，以及 `PRODUCT.md` 一并纳入发布内容；只复制 README 文件会使这些入口不可用。
 
 ### 三条核心数据工作流
 
