@@ -1,0 +1,284 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="660" data-theme="dark" viewBox="0 0 1320 660" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+<style><![CDATA[
+:root, svg {
+  --bg: #020617; --grid: #1e293b; --text: #ffffff; --text-muted: #94a3b8;
+  --text-dim: #475569; --lane-fill: rgba(15, 23, 42, .22); --lane-stroke: #334155;
+  --arrow: #64748b; --arrow-emphasis: #34d399; --mask: #0f172a;
+  --frontend-fill: rgba(8, 51, 68, .4); --frontend-stroke: #22d3ee;
+  --backend-fill: rgba(6, 78, 59, .4); --backend-stroke: #34d399;
+  --database-fill: rgba(76, 29, 149, .4); --database-stroke: #a78bfa;
+  --cloud-stroke: #fbbf24; --messagebus-fill: rgba(251, 146, 60, .3);
+  --messagebus-stroke: #fb923c; --external-fill: rgba(30, 41, 59, .5);
+  --external-stroke: #94a3b8;
+}
+svg { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'Microsoft YaHei', monospace; }
+.c-grid { stroke: var(--grid); fill: none; }
+.c-mask { fill: var(--mask); stroke: none; }
+.c-backend { fill: var(--backend-fill); stroke: var(--backend-stroke); }
+.c-database { fill: var(--database-fill); stroke: var(--database-stroke); }
+.c-external { fill: var(--external-fill); stroke: var(--external-stroke); }
+.c-messagebus { fill: var(--messagebus-fill); stroke: var(--messagebus-stroke); }
+.c-region { fill: rgba(251, 191, 36, .05); stroke: var(--cloud-stroke); stroke-dasharray: 8,4; }
+.t-primary { fill: var(--text); } .t-muted { fill: var(--text-muted); }
+.t-backend { fill: var(--backend-stroke); } .t-database { fill: var(--database-stroke); }
+.t-messagebus { fill: var(--messagebus-stroke); }
+.semantic-sigil { fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; opacity: .76; pointer-events: none; }
+.semantic-sigil > * { vector-effect: non-scaling-stroke; }
+.semantic-sigil .sigil-fill { fill: currentColor; stroke: none; }
+.s-backend { color: var(--backend-stroke); } .s-database { color: var(--database-stroke); }
+.s-messagebus { color: var(--messagebus-stroke); } .s-external { color: var(--external-stroke); }
+.a-default { stroke: var(--arrow); fill: none; } .a-emphasis { stroke: var(--arrow-emphasis); fill: none; }
+.a-dashed { stroke: var(--database-stroke); fill: none; stroke-dasharray: 4,4; }
+.m-default { fill: var(--arrow); } .m-emphasis { fill: var(--arrow-emphasis); }
+.m-security { fill: #fb7185; } .m-dashed { fill: var(--database-stroke); }
+rect.c-bg-rect { fill: var(--bg); }
+]]></style>
+        <title id="archify-diagram-title">MonitorSystem 真实运行时架构</title>
+        <desc id="archify-diagram-description">由 Archify 生成的架构图。</desc>
+        <!-- Definitions -->
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default" />
+          </marker>
+          <marker id="arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis" />
+          </marker>
+          <marker id="arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security" />
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <!-- Background Grid -->
+        <rect width="100%" height="100%" fill="url(#grid)" />
+
+        <!-- Boundaries (behind everything) -->
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="Worker process" x="186" y="226" width="738" height="116" rx="12" class="c-region" stroke-width="1"/>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="Manager process" x="906" y="26" width="378" height="496" rx="12" class="c-region" stroke-width="1"/>
+
+        <!-- Connection paths (before components for correct z-order) -->
+        <path data-edge-from="linux-runtime" data-edge-to="worker-agent" data-edge-label="1. 采集系统状态" data-edge-key="0" data-edge-id="runtime-to-worker" data-composition-points="180,286;210,286" d="M 180 286 L 210 286" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="worker-agent" data-edge-to="metric-collector" data-edge-label="2. 周期调用 CollectAll" data-edge-key="1" data-edge-id="worker-to-collector" data-composition-points="360,286;390,286" d="M 360 286 L 390 286" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="metric-collector" data-edge-to="diag-control" data-edge-label="3. MonitorInfo 基础样本" data-edge-key="2" data-edge-id="collector-to-diagnostics" data-composition-points="540,286;570,286" d="M 540 286 L 570 286" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="diag-control" data-edge-to="send-queue" data-edge-label="4. DiagnosticSnapshot（状态驱动）" data-edge-key="3" data-edge-id="diagnostics-to-send-queue" data-composition-points="720,286;750,286" d="M 720 286 L 750 286" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="send-queue" data-edge-to="manager-rpc" data-edge-label="5. MonitorInfo 单向 gRPC 上传" data-edge-key="4" data-edge-id="send-queue-to-manager-rpc" data-composition-points="900,286;930,286" d="M 900 286 L 930 286" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="manager-rpc" data-edge-to="host-manager" data-edge-label="6. 分片提交 → MonitorFeedback" data-edge-key="5" data-edge-id="manager-rpc-to-host-manager" data-composition-points="1080,286;1110,286" d="M 1080 286 L 1110 286" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="host-manager" data-edge-to="diag-state" data-edge-label="评分与诊断状态" data-edge-key="6" data-edge-id="host-manager-to-diagnostics" data-composition-points="1260,286;1290,286;1290,390;1005,390;1005,430" d="M 1260 286 L 1282 286 Q 1290 286 1290 294 L 1290 382 Q 1290 390 1282 390 L 1013 390 Q 1005 390 1005 398 L 1005 430" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="host-manager" data-edge-to="persistence-queue" data-edge-label="异步 PersistenceTask" data-edge-key="7" data-edge-id="host-manager-to-persistence" data-composition-points="1185,322;1185,430" d="M 1185 322 L 1185 430" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="persistence-queue" data-edge-to="mysql" data-edge-label="串行 SQL 写入" data-edge-key="8" data-edge-id="persistence-to-mysql" data-composition-points="1185,502;1185,570" d="M 1185 502 L 1185 570" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="query-client" data-edge-to="query-service" data-edge-label="QueryService gRPC：查询请求" data-edge-key="9" data-edge-id="query-client-to-service" data-composition-points="1080,86;1110,86" d="M 1080 86 L 1110 86" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="query-service" data-edge-to="host-manager" data-edge-label="Incident 实时状态（内存回退）" data-edge-key="10" data-edge-id="query-service-to-memory" data-composition-points="1185,122;1185,250" d="M 1185 122 L 1185 250" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="query-service" data-edge-to="mysql" data-edge-label="历史性能/详情查询（SQL）" data-edge-key="11" data-edge-id="query-service-to-mysql" data-composition-points="1185,50;1185,20;1305,20;1305,550;1185,550;1185,570" d="M 1185 50 L 1185 28 Q 1185 20 1193 20 L 1297 20 Q 1305 20 1305 28 L 1305 542 Q 1305 550 1297 550 L 1193 550 Q 1185 550 1185 558 L 1185 570" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+        <!-- Components -->
+        <g id="node-linux-runtime" data-node-id="linux-runtime" data-node-label="Linux 运行时" tabindex="0" role="button" aria-label="聚焦Linux 运行时，内核数据源, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="内核数据源" data-node-context="架构组件">
+          <title>Linux 运行时 · 内核数据源 · 架构组件</title>
+          <rect x="30" y="250" width="150" height="72" rx="6" class="c-mask"/>
+          <rect x="30" y="250" width="150" height="72" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(36 256) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="105" y="284" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Linux 运行时</text>
+        <text data-detail="context" x="105" y="300" class="t-muted" font-size="9" text-anchor="middle">内核数据源</text>
+        </g>
+
+        <g id="node-worker-agent" data-node-id="worker-agent" data-node-label="Worker Agent" tabindex="0" role="button" aria-label="聚焦Worker Agent，采集代理 · 启动、调度、发送, Worker process" aria-pressed="false" data-node-kind="backend" data-node-sublabel="采集代理 · 启动、调度、发送" data-node-context="Worker process">
+          <title>Worker Agent · 采集代理 · 启动、调度、发送 · Worker process</title>
+          <rect x="210" y="250" width="150" height="72" rx="6" class="c-mask"/>
+          <rect x="210" y="250" width="150" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(216 256) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="285" y="284" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Worker Agent</text>
+        <text data-detail="context" x="285" y="300" class="t-muted" font-size="8.7" text-anchor="middle">采集代理 · 启动、调度、发送</text>
+        </g>
+
+        <g id="node-metric-collector" data-node-id="metric-collector" data-node-label="MetricCollector" tabindex="0" role="button" aria-label="聚焦MetricCollector，采样并组装 MonitorInfo, Worker process" aria-pressed="false" data-node-kind="backend" data-node-sublabel="采样并组装 MonitorInfo" data-node-context="Worker process">
+          <title>MetricCollector · 采样并组装 MonitorInfo · Worker process</title>
+          <rect x="390" y="250" width="150" height="72" rx="6" class="c-mask"/>
+          <rect x="390" y="250" width="150" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(396 256) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="465" y="284" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">MetricCollector</text>
+        <text data-detail="context" x="465" y="300" class="t-muted" font-size="9" text-anchor="middle">采样并组装 MonitorInfo</text>
+        </g>
+
+        <g id="node-diag-control" data-node-id="diag-control" data-node-label="诊断控制（自适应观测）" tabindex="0" role="button" aria-label="聚焦诊断控制（自适应观测），异常评估、状态机、Probe, Worker process" aria-pressed="false" data-node-kind="backend" data-node-sublabel="异常评估、状态机、Probe" data-node-context="Worker process">
+          <title>诊断控制（自适应观测） · 异常评估、状态机、Probe · Worker process</title>
+          <rect x="570" y="250" width="150" height="72" rx="6" class="c-mask"/>
+          <rect x="570" y="250" width="150" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(576 256) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="645" y="284" class="t-primary" font-size="10.7" font-weight="600" text-anchor="middle">诊断控制（自适应观测）</text>
+        <text data-detail="context" x="645" y="300" class="t-muted" font-size="9" text-anchor="middle">异常评估、状态机、Probe</text>
+        </g>
+
+        <g id="node-send-queue" data-node-id="send-queue" data-node-label="MonitorSendQueue" tabindex="0" role="button" aria-label="聚焦MonitorSendQueue，有界 item/byte 队列, Worker process" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="有界 item/byte 队列" data-node-context="Worker process">
+          <title>MonitorSendQueue · 有界 item/byte 队列 · Worker process</title>
+          <rect x="750" y="250" width="150" height="72" rx="6" class="c-mask"/>
+          <rect x="750" y="250" width="150" height="72" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(756 256) scale(0.6875)">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="825" y="284" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">MonitorSendQueue</text>
+        <text data-detail="context" x="825" y="300" class="t-muted" font-size="9" text-anchor="middle">有界 item/byte 队列</text>
+        </g>
+
+        <g id="node-manager-rpc" data-node-id="manager-rpc" data-node-label="Manager 接收 RPC" tabindex="0" role="button" aria-label="聚焦Manager 接收 RPC，SetMonitorInfo · 接收消息, Manager process" aria-pressed="false" data-node-kind="backend" data-node-sublabel="SetMonitorInfo · 接收消息" data-node-context="Manager process">
+          <title>Manager 接收 RPC · SetMonitorInfo · 接收消息 · Manager process</title>
+          <rect x="930" y="250" width="150" height="72" rx="6" class="c-mask"/>
+          <rect x="930" y="250" width="150" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(936 256) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1005" y="284" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Manager 接收 RPC</text>
+        <text data-detail="context" x="1005" y="300" class="t-muted" font-size="9" text-anchor="middle">SetMonitorInfo · 接收消息</text>
+        </g>
+
+        <g id="node-host-manager" data-node-id="host-manager" data-node-label="HostManager（主机处理）" tabindex="0" role="button" aria-label="聚焦HostManager（主机处理），按 host 分片、评分、反馈, Manager process" aria-pressed="false" data-node-kind="backend" data-node-sublabel="按 host 分片、评分、反馈" data-node-context="Manager process">
+          <title>HostManager（主机处理） · 按 host 分片、评分、反馈 · Manager process</title>
+          <rect x="1110" y="250" width="150" height="72" rx="6" class="c-mask"/>
+          <rect x="1110" y="250" width="150" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1116 256) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1185" y="284" class="t-primary" font-size="10.2" font-weight="600" text-anchor="middle">HostManager（主机处理）</text>
+        <text data-detail="context" x="1185" y="300" class="t-muted" font-size="9" text-anchor="middle">按 host 分片、评分、反馈</text>
+        </g>
+
+        <g id="node-persistence-queue" data-node-id="persistence-queue" data-node-label="PersistenceWorker" tabindex="0" role="button" aria-label="聚焦PersistenceWorker，持久化 · 单消费者队列, Manager process" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="持久化 · 单消费者队列" data-node-context="Manager process">
+          <title>PersistenceWorker · 持久化 · 单消费者队列 · Manager process</title>
+          <rect x="1110" y="430" width="150" height="72" rx="6" class="c-mask"/>
+          <rect x="1110" y="430" width="150" height="72" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(1116 436) scale(0.6875)">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1185" y="464" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">PersistenceWorker</text>
+        <text data-detail="context" x="1185" y="480" class="t-muted" font-size="9" text-anchor="middle">持久化 · 单消费者队列</text>
+        </g>
+
+        <g id="node-diag-state" data-node-id="diag-state" data-node-label="诊断状态" tabindex="0" role="button" aria-label="聚焦诊断状态，证据与 Incident, Manager process" aria-pressed="false" data-node-kind="backend" data-node-sublabel="证据与 Incident" data-node-context="Manager process">
+          <title>诊断状态 · 证据与 Incident · Manager process</title>
+          <rect x="930" y="430" width="150" height="72" rx="6" class="c-mask"/>
+          <rect x="930" y="430" width="150" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(936 436) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1005" y="464" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">诊断状态</text>
+        <text data-detail="context" x="1005" y="480" class="t-muted" font-size="9" text-anchor="middle">证据与 Incident</text>
+        </g>
+
+        <g id="node-mysql" data-node-id="mysql" data-node-label="MySQL（历史与诊断存储）" tabindex="0" role="button" aria-label="聚焦MySQL（历史与诊断存储），性能、详情、Incident, 架构组件" aria-pressed="false" data-node-kind="database" data-node-sublabel="性能、详情、Incident" data-node-context="架构组件">
+          <title>MySQL（历史与诊断存储） · 性能、详情、Incident · 架构组件</title>
+          <rect x="1110" y="570" width="150" height="72" rx="6" class="c-mask"/>
+          <rect x="1110" y="570" width="150" height="72" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(1116 576) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1185" y="604" class="t-primary" font-size="10.2" font-weight="600" text-anchor="middle">MySQL（历史与诊断存储）</text>
+        <text data-detail="context" x="1185" y="620" class="t-muted" font-size="9" text-anchor="middle">性能、详情、Incident</text>
+        </g>
+
+        <g id="node-query-client" data-node-id="query-client" data-node-label="外部查询客户端" tabindex="0" role="button" aria-label="聚焦外部查询客户端，发起 Query*Request, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="发起 Query*Request" data-node-context="架构组件">
+          <title>外部查询客户端 · 发起 Query*Request · 架构组件</title>
+          <rect x="930" y="50" width="150" height="72" rx="6" class="c-mask"/>
+          <rect x="930" y="50" width="150" height="72" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(936 56) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1005" y="84" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">外部查询客户端</text>
+        <text data-detail="context" x="1005" y="100" class="t-muted" font-size="9" text-anchor="middle">发起 Query*Request</text>
+        </g>
+
+        <g id="node-query-service" data-node-id="query-service" data-node-label="QueryService" tabindex="0" role="button" aria-label="聚焦QueryService，查询 · Incident 内存回退, Manager process" aria-pressed="false" data-node-kind="backend" data-node-sublabel="查询 · Incident 内存回退" data-node-context="Manager process">
+          <title>QueryService · 查询 · Incident 内存回退 · Manager process</title>
+          <rect x="1110" y="50" width="150" height="72" rx="6" class="c-mask"/>
+          <rect x="1110" y="50" width="150" height="72" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1116 56) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1185" y="84" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">QueryService</text>
+        <text data-detail="context" x="1185" y="100" class="t-muted" font-size="9" text-anchor="middle">查询 · Incident 内存回退</text>
+        </g>
+
+        <!-- Connection labels -->
+        <g data-detail="context" data-edge-from="linux-runtime" data-edge-to="worker-agent" data-edge-label="1. 采集系统状态" data-edge-key="0" data-edge-id="runtime-to-worker">
+          <rect x="159" y="210" width="82" height="14" rx="3" class="c-mask"/>
+          <text x="200" y="220" class="t-backend" font-size="8" text-anchor="middle">1. 采集系统状态</text>
+        </g>
+        <g data-detail="context" data-edge-from="worker-agent" data-edge-to="metric-collector" data-edge-label="2. 周期调用 CollectAll" data-edge-key="1" data-edge-id="worker-to-collector">
+          <rect x="317.2" y="234" width="115.6" height="14" rx="3" class="c-mask"/>
+          <text x="375" y="244" class="t-muted" font-size="8" text-anchor="middle">2. 周期调用 CollectAll</text>
+        </g>
+        <g data-detail="context" data-edge-from="metric-collector" data-edge-to="diag-control" data-edge-label="3. MonitorInfo 基础样本" data-edge-key="2" data-edge-id="collector-to-diagnostics">
+          <rect x="494.8" y="234" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="555" y="244" class="t-muted" font-size="8" text-anchor="middle">3. MonitorInfo 基础样本</text>
+        </g>
+        <g data-detail="context" data-edge-from="diag-control" data-edge-to="send-queue" data-edge-label="4. DiagnosticSnapshot（状态驱动）" data-edge-key="3" data-edge-id="diagnostics-to-send-queue">
+          <rect x="650.8" y="234" width="168.4" height="14" rx="3" class="c-mask"/>
+          <text x="735" y="244" class="t-messagebus" font-size="8" text-anchor="middle">4. DiagnosticSnapshot（状态驱动）</text>
+        </g>
+        <g data-detail="context" data-edge-from="send-queue" data-edge-to="manager-rpc" data-edge-label="5. MonitorInfo 单向 gRPC 上传" data-edge-key="4" data-edge-id="send-queue-to-manager-rpc">
+          <rect x="840.4" y="234" width="149.2" height="14" rx="3" class="c-mask"/>
+          <text x="915" y="244" class="t-backend" font-size="8" text-anchor="middle">5. MonitorInfo 单向 gRPC 上传</text>
+        </g>
+        <g data-detail="context" data-edge-from="manager-rpc" data-edge-to="host-manager" data-edge-label="6. 分片提交 → MonitorFeedback" data-edge-key="5" data-edge-id="manager-rpc-to-host-manager">
+          <rect x="1020.4" y="234" width="149.2" height="14" rx="3" class="c-mask"/>
+          <text x="1095" y="244" class="t-backend" font-size="8" text-anchor="middle">6. 分片提交 → MonitorFeedback</text>
+        </g>
+        <g data-detail="context" data-edge-from="host-manager" data-edge-to="diag-state" data-edge-label="评分与诊断状态" data-edge-key="6" data-edge-id="host-manager-to-diagnostics">
+          <rect x="1208.9" y="370" width="77.2" height="14" rx="3" class="c-mask"/>
+          <text x="1247.5" y="380" class="t-muted" font-size="8" text-anchor="middle">评分与诊断状态</text>
+        </g>
+        <g data-detail="context" data-edge-from="host-manager" data-edge-to="persistence-queue" data-edge-label="异步 PersistenceTask" data-edge-key="7" data-edge-id="host-manager-to-persistence">
+          <rect x="1132" y="326" width="106" height="14" rx="3" class="c-mask"/>
+          <text x="1185" y="336" class="t-messagebus" font-size="8" text-anchor="middle">异步 PersistenceTask</text>
+        </g>
+        <g data-detail="context" data-edge-from="persistence-queue" data-edge-to="mysql" data-edge-label="串行 SQL 写入" data-edge-key="8" data-edge-id="persistence-to-mysql">
+          <rect x="1148.8" y="506" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="1185" y="516" class="t-muted" font-size="8" text-anchor="middle">串行 SQL 写入</text>
+        </g>
+        <g data-detail="context" data-edge-from="query-client" data-edge-to="query-service" data-edge-label="QueryService gRPC：查询请求" data-edge-key="9" data-edge-id="query-client-to-service">
+          <rect x="1025.2" y="34" width="139.6" height="14" rx="3" class="c-mask"/>
+          <text x="1095" y="44" class="t-backend" font-size="8" text-anchor="middle">QueryService gRPC：查询请求</text>
+        </g>
+        <g data-detail="context" data-edge-from="query-service" data-edge-to="host-manager" data-edge-label="Incident 实时状态（内存回退）" data-edge-key="10" data-edge-id="query-service-to-memory">
+          <rect x="1110.4" y="126" width="149.2" height="14" rx="3" class="c-mask"/>
+          <text x="1185" y="136" class="t-messagebus" font-size="8" text-anchor="middle">Incident 实时状态（内存回退）</text>
+        </g>
+        <g data-detail="context" data-edge-from="query-service" data-edge-to="mysql" data-edge-label="历史性能/详情查询（SQL）" data-edge-key="11" data-edge-id="query-service-to-mysql">
+          <rect x="1242.4" y="236" width="125.19999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="1305" y="246" class="t-muted" font-size="8" text-anchor="middle">历史性能/详情查询（SQL）</text>
+        </g>
+
+        <!-- Boundary labels (foreground masks keep routes out of titles) -->
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="Worker process">
+          <rect data-graph-role="structural-frame-label-mask" x="190" y="230" width="85.6" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="194" y="243" class="t-cloud" font-size="9" font-weight="600">Worker process</text>
+        </g>
+
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="region" data-composition-frame-label="Manager process">
+          <rect data-graph-role="structural-frame-label-mask" x="910" y="30" width="91" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="914" y="43" class="t-cloud" font-size="9" font-weight="600">Manager process</text>
+        </g>
+
+        <!-- Legend -->
+
+      </svg>

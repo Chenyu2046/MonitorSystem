@@ -1,0 +1,127 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MonitorSystem Workflow 01 · Worker 采集与上报",
+    "subtitle": "从 Linux/内核数据源构造 MonitorInfo，经自适应诊断和有界队列发送到 Manager",
+    "locale": "zh-CN",
+    "animation": "trace",
+    "visual_preset": "signal-flow",
+    "quality_profile": "standard",
+    "views": [
+      {
+        "id": "collection-fields",
+        "label": "采集字段",
+        "focus": ["linux-proc", "linux-kernel", "metric-collector", "monitor-info"],
+        "note": "查看各类 Linux/内核数据如何写入同一个 MonitorInfo。"
+      },
+      {
+        "id": "adaptive-diagnostic",
+        "label": "自适应诊断",
+        "focus": ["anomaly-detector", "state-machine", "probe-controller", "diagnostic-proto"],
+        "note": "查看异常分数、连续样本状态机、Probe 快照和 diagnostic protobuf 的装配。"
+      },
+      {
+        "id": "upload-boundary",
+        "label": "队列与上报",
+        "focus": ["send-queue", "send-loop", "send-retry", "grpc-contract", "manager-handler", "manager-submit"],
+        "note": "查看 Worker 采集线程与发送线程之间的边界，以及 Manager 入队结果如何反馈。"
+      }
+    ],
+    "output": "docs/ai/monitor-system.workflow.collection-upload.html"
+  },
+  "lanes": [
+    { "id": "runtime", "label": "Linux / kernel data sources" },
+    { "id": "worker", "label": "Worker process" },
+    { "id": "diagnostics", "label": "Worker adaptive diagnostics" },
+    { "id": "transport", "label": "Queue and gRPC transport" },
+    { "id": "manager", "label": "Manager ingress" }
+  ],
+  "phases": [
+    { "id": "sample", "label": "采样与字段填充", "fromCol": 0, "toCol": 2, "variant": "default" },
+    { "id": "diagnose", "label": "异常评估与诊断快照", "fromCol": 3, "toCol": 4, "variant": "emphasis" },
+    { "id": "upload", "label": "队列、重试与 Manager 接收", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+  ],
+  "groups": [
+    { "id": "metric-readers", "label": "MetricCollector 管理的监控器", "lane": "runtime", "fromCol": 1, "toCol": 2, "variant": "dashed" },
+    { "id": "diagnostic-control", "label": "PushOnce 内诊断控制段", "lane": "diagnostics", "fromCol": 3, "toCol": 4, "variant": "emphasis" },
+    { "id": "sender-boundary", "label": "采集 / 发送线程解耦", "lane": "transport", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": [
+    "worker-main",
+    "pusher-start",
+    "push-loop",
+    "metric-collector",
+    "monitor-info",
+    "diagnostic-proto"
+  ],
+  "nodes": [
+    { "id": "linux-proc", "lane": "runtime", "col": 0, "type": "external", "label": "Linux procfs", "sublabel": "/proc/loadavg · meminfo · net/dev · diskstats", "tag": "cpu_load:29 · mem:35 · net:58 · disk:61", "width": 172 },
+    { "id": "linux-kernel", "lane": "runtime", "col": 1, "type": "external", "label": "内核数据接口", "sublabel": "mmap 设备 · TC eBPF map", "tag": "cpu_stat:57 · softirq:46 · net_ebpf:327", "width": 172 },
+    { "id": "worker-main", "lane": "worker", "col": 0, "type": "backend", "label": "worker main", "sublabel": "argv · signal · lifecycle", "tag": "worker/src/main.cpp:46-90", "width": 156 },
+    { "id": "pusher-start", "lane": "worker", "col": 1, "type": "backend", "label": "MonitorPusher::Start", "sublabel": "Init + Open + 2 threads", "tag": "monitor_pusher.cpp:366-390", "width": 168 },
+    { "id": "push-loop", "lane": "worker", "col": 2, "type": "backend", "label": "MonitorPusher::PushLoop", "sublabel": "周期 PushOnce + adaptive interval", "tag": "monitor_pusher.cpp:410-419", "width": 168 },
+    { "id": "worker-metric-readers", "lane": "runtime", "col": 2, "type": "backend", "label": "MetricCollector::monitors_", "sublabel": "CPU/load · cpu_stat · softirq · mem · net · disk · host", "tag": "metric_collector.cpp:31-50", "width": 230 },
+    { "id": "metric-collector", "lane": "worker", "col": 3, "type": "backend", "label": "MetricCollector::CollectAll", "sublabel": "顺序调用 monitors_ 写同一消息", "tag": "metric_collector.cpp:73-91", "width": 180 },
+    { "id": "monitor-info", "lane": "worker", "col": 4, "type": "messagebus", "label": "MonitorInfo", "sublabel": "host + CPU + mem + net + disk + SoftIRQ + sample identity", "tag": "proto/monitor_info.proto:91-117 · pusher:432-438", "width": 220 },
+    { "id": "anomaly-detector", "lane": "diagnostics", "col": 3, "type": "backend", "label": "AnomalyDetector::Evaluate", "sublabel": "CPU/mem/disk/net/load → overall max", "tag": "anomaly_detector.cpp:52-159", "width": 188 },
+    { "id": "state-machine", "lane": "diagnostics", "col": 4, "type": "backend", "label": "ObservabilityStateMachine", "sublabel": "NORMAL → SUSPECT → DIAGNOSTIC → PROFILING", "tag": "observability_state.cpp:20-159", "width": 192 },
+    { "id": "probe-controller", "lane": "diagnostics", "col": 5, "type": "backend", "label": "ProbeController", "sublabel": "Apply + CollectSnapshot · failure degrade", "tag": "probe_controller.cpp:491-607", "width": 190 },
+    { "id": "diagnostic-proto", "lane": "worker", "col": 5, "type": "messagebus", "label": "DiagnosticSnapshot", "sublabel": "signals + probe_status + profile stacks", "tag": "monitor_pusher.cpp:491-500", "width": 184 },
+    { "id": "send-queue", "lane": "transport", "col": 3, "type": "messagebus", "label": "MonitorSendQueue::Push", "sublabel": "bounded items/bytes · diagnostic priority", "tag": "monitor_send_queue.cpp:27-64 · monitor_pusher.cpp:638", "width": 210 },
+    { "id": "send-loop", "lane": "transport", "col": 4, "type": "messagebus", "label": "MonitorPusher::SendLoop", "sublabel": "Pop · queue wait · ordered sender", "tag": "monitor_pusher.cpp:681-710", "width": 184 },
+    { "id": "send-retry", "lane": "transport", "col": 5, "type": "messagebus", "label": "SendWithRetry", "sublabel": "deadline · retryable code · backoff+jitter", "tag": "monitor_pusher.cpp:712-817", "width": 188 },
+    { "id": "grpc-contract", "lane": "manager", "col": 3, "type": "backend", "label": "GrpcManager.SetMonitorInfo", "sublabel": "MonitorInfo → MonitorFeedback", "tag": "proto/monitor_info.proto:133-137", "width": 188 },
+    { "id": "manager-handler", "lane": "manager", "col": 4, "type": "backend", "label": "GrpcServerImpl::SetMonitorInfo", "sublabel": "validate host · callback · Status", "tag": "manager/src/rpc/grpc_server.cpp:19-84", "width": 212 },
+    { "id": "manager-submit", "lane": "manager", "col": 5, "type": "backend", "label": "HostManager::SubmitWithFeedback", "sublabel": "SubmitTracked · wait deadline · feedback", "tag": "host_manager.cpp:508-554", "width": 220 }
+  ],
+  "edges": [
+    { "id": "proc-to-readers", "from": "linux-proc", "to": "worker-metric-readers", "label": "procfs", "variant": "default", "role": "main" },
+    { "id": "kernel-to-readers", "from": "linux-kernel", "to": "worker-metric-readers", "label": "mmap / eBPF", "variant": "dashed", "role": "branch" },
+    { "id": "main-to-start", "from": "worker-main", "to": "pusher-start", "label": "start", "variant": "emphasis", "role": "main" },
+    { "id": "start-to-loop", "from": "pusher-start", "to": "push-loop", "label": "thread", "variant": "default", "role": "main" },
+    { "id": "loop-to-collector", "from": "push-loop", "to": "metric-collector", "label": "PushOnce", "variant": "emphasis", "role": "main" },
+    { "id": "readers-to-collector", "from": "worker-metric-readers", "to": "metric-collector", "label": "UpdateOnce", "variant": "default", "role": "branch" },
+    { "id": "collector-to-info", "from": "metric-collector", "to": "monitor-info", "label": "CollectStatus::kOk", "variant": "emphasis", "role": "main" },
+    { "id": "info-to-anomaly", "from": "monitor-info", "to": "anomaly-detector", "label": "Evaluate(info)", "variant": "emphasis", "role": "branch" },
+    { "id": "anomaly-to-state", "from": "anomaly-detector", "to": "state-machine", "label": "overall_score", "variant": "emphasis", "role": "main" },
+    { "id": "state-to-probe", "from": "state-machine", "to": "probe-controller", "label": "state + profile", "variant": "emphasis", "role": "main" },
+    { "id": "info-to-proto", "from": "monitor-info", "to": "diagnostic-proto", "label": "mutable_diagnostic", "variant": "dashed", "role": "branch" },
+    { "id": "probe-to-proto", "from": "probe-controller", "to": "diagnostic-proto", "label": "snapshot", "variant": "emphasis", "role": "main" },
+    { "id": "proto-to-queue", "from": "diagnostic-proto", "to": "send-queue", "label": "Push(std::move(info))", "variant": "emphasis", "role": "main" },
+    { "id": "queue-to-loop", "from": "send-queue", "to": "send-loop", "label": "Pop", "variant": "default", "role": "main" },
+    { "id": "loop-to-retry", "from": "send-loop", "to": "send-retry", "label": "SendWithRetry", "variant": "emphasis", "role": "main" },
+    { "id": "retry-to-contract", "from": "send-retry", "to": "grpc-contract", "label": "unary RPC", "variant": "emphasis", "role": "main" },
+    { "id": "contract-to-handler", "from": "grpc-contract", "to": "manager-handler", "label": "SetMonitorInfo", "variant": "emphasis", "role": "main" },
+    { "id": "handler-to-submit", "from": "manager-handler", "to": "manager-submit", "label": "callback(info, deadline)", "variant": "emphasis", "role": "main" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "采集结果的真实字段边界",
+      "items": [
+        "MetricCollector::CollectAll 先写 hostname，再按固定 monitors_ 顺序写 CPU/load、CPU stat、SoftIRQ、内存、网络、磁盘和 HostInfo。",
+        "DiskMonitor 在 Worker 侧由累计计数计算 bytes/s、IOPS、平均延迟和 util；NetMonitor/NetEbpfMonitor 写入网卡速率、包速率、错误和丢弃。",
+        "同一轮数据最终聚合为 proto::MonitorInfo，sample_sequence、sample_timestamp_ms、sample_session_id 在 PushOnce 中补全。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "诊断快照不是另一条上传协议",
+      "items": [
+        "AnomalyDetector 只读取本轮 MonitorInfo：CPU/IOWait/SoftIRQ/磁盘取 max，网络包速率按接口求和，并将信号归一化后取 overall_score。",
+        "状态机要求连续异常/恢复样本；ProbeController 按状态增量 attach/detach，Probe 不可用时保留状态并不阻塞基础 MonitorInfo 上报。",
+        "FillDiagnosticProto 把 anomaly、state、probe_status 和 profiling 快照写回 MonitorInfo.diagnostic，再进入同一个 MonitorSendQueue。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "上传边界与失败语义",
+      "items": [
+        "采集线程不直接做网络 RPC；MonitorSendQueue 同时限制 item/byte，队满时优先删除旧普通样本，尽量保留诊断样本。",
+        "SendWithRetry 为每次调用设置 deadline，仅对 UNAVAILABLE、DEADLINE_EXCEEDED、RESOURCE_EXHAUSTED 重试，并使用指数退避+jitter。",
+        "Manager handler 返回 RESOURCE_EXHAUSTED/UNAVAILABLE/INVALID_ARGUMENT 或 OK；带采样身份的新 Worker 可等待 HostManager 生成 MonitorFeedback。"
+      ]
+    }
+  ]
+}

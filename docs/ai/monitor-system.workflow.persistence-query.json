@@ -1,0 +1,136 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MonitorSystem Workflow 03 · 持久化与对外查询",
+    "subtitle": "Manager 将计算结果异步写入普通性能表、详情表和诊断表，并通过 QueryService 提供历史/实时视图",
+    "locale": "zh-CN",
+    "animation": "trace",
+    "visual_preset": "signal-flow",
+    "quality_profile": "standard",
+    "views": [
+      {
+        "id": "ordinary-persistence",
+        "label": "普通数据入库",
+        "focus": ["persistence-enqueue", "persistence-run", "persist-task", "mysql-main", "mysql-detail"],
+        "note": "查看 PersistenceTask 如何隔离 SQL 阻塞，并写入主表与网络/磁盘/内存/SoftIRQ 详情表。"
+      },
+      {
+        "id": "diagnostic-persistence",
+        "label": "诊断持久化",
+        "focus": ["persist-task", "diagnostic-save", "mysql-diagnostic", "transaction", "commit"],
+        "note": "查看 Incident、RootCause、Evidence 的事务边界和 durable copy。"
+      },
+      {
+        "id": "query-and-fallback",
+        "label": "查询与回退",
+        "focus": ["query-client", "query-contract", "query-handler", "query-manager", "record-map", "incident-switch", "memory-incidents", "incident-map"],
+        "note": "查看性能/评分/详情/Incident API 的响应映射，以及诊断持久化不可用时的内存回退。"
+      }
+    ],
+    "output": "docs/ai/monitor-system.workflow.persistence-query.html"
+  },
+  "lanes": [
+    { "id": "persistence", "label": "Manager async persistence" },
+    { "id": "mysql", "label": "MySQL tables and transaction" },
+    { "id": "client", "label": "External query client" },
+    { "id": "query", "label": "QueryService / QueryManager" },
+    { "id": "fallback", "label": "Manager memory fallback" }
+  ],
+  "phases": [
+    { "id": "write", "label": "异步写入入口", "fromCol": 0, "toCol": 2, "variant": "default" },
+    { "id": "store", "label": "普通表 / 诊断表落库", "fromCol": 3, "toCol": 4, "variant": "emphasis" },
+    { "id": "serve", "label": "QueryService 对外提供", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+  ],
+  "groups": [
+    { "id": "ordinary-write", "label": "普通性能写入", "lane": "mysql", "fromCol": 3, "toCol": 4, "variant": "dashed" },
+    { "id": "diagnostic-write", "label": "Incident 原子 durable copy", "lane": "mysql", "fromCol": 3, "toCol": 5, "variant": "security" },
+    { "id": "query-families", "label": "查询 API families", "lane": "query", "fromCol": 2, "toCol": 4, "variant": "emphasis" }
+  ],
+  "mainPath": [
+    "persistence-enqueue",
+    "persistence-run",
+    "persist-task",
+    "mysql-main",
+    "commit"
+  ],
+  "nodes": [
+    { "id": "persistence-enqueue", "lane": "persistence", "col": 0, "type": "messagebus", "label": "PersistenceWorker::Enqueue", "sublabel": "bounded item/byte queue", "tag": "persistence_worker.cpp:37-44", "width": 190 },
+    { "id": "persistence-run", "lane": "persistence", "col": 1, "type": "backend", "label": "PersistenceWorker::Run", "sublabel": "single consumer · queue drain", "tag": "persistence_worker.cpp:71-94", "width": 184 },
+    { "id": "persist-task", "lane": "persistence", "col": 2, "type": "backend", "label": "HostManager::PersistTask", "sublabel": "incident Save + WriteToMysql", "tag": "host_manager.cpp:999-1033", "width": 184 },
+    { "id": "diagnostic-save", "lane": "persistence", "col": 3, "type": "backend", "label": "DiagnosticPersistence::Save", "sublabel": "incident + root causes + evidence", "tag": "diagnostic_persistence.cpp:93-165", "width": 196 },
+    { "id": "transaction", "lane": "mysql", "col": 3, "type": "database", "label": "START TRANSACTION", "sublabel": "all diagnostic rows atomic", "tag": "diagnostic_persistence.cpp:102-108", "width": 178 },
+    { "id": "mysql-main", "lane": "mysql", "col": 4, "type": "database", "label": "server_performance", "sublabel": "current metrics + score + health + rates", "tag": "host_manager.cpp:1283-1382", "width": 202, "yOffset": -90 },
+    { "id": "mysql-detail", "lane": "mysql", "col": 4, "type": "database", "label": "resource detail tables", "sublabel": "net · softirq · mem · disk", "tag": "init_server_performance.sql:74-220", "width": 190, "yOffset": 0 },
+    { "id": "mysql-diagnostic", "lane": "mysql", "col": 4, "type": "database", "label": "diagnostic_* tables", "sublabel": "incident · evidence · root_cause", "tag": "init_server_performance.sql:223-263", "width": 190, "yOffset": 90 },
+    { "id": "commit", "lane": "mysql", "col": 5, "type": "database", "label": "COMMIT / rollback", "sublabel": "failure keeps memory incident", "tag": "diagnostic_persistence.cpp:160-168", "width": 184 },
+    { "id": "query-client", "lane": "client", "col": 0, "type": "external", "label": "Query client", "sublabel": "performance · score · detail · incident", "tag": "proto/query_api.proto:44-117", "width": 188 },
+    { "id": "query-contract", "lane": "client", "col": 1, "type": "backend", "label": "QueryService contract", "sublabel": "12 RPCs · request/response protobuf", "tag": "proto/query_api.proto:419-446", "width": 190 },
+    { "id": "query-handler", "lane": "query", "col": 2, "type": "backend", "label": "QueryServiceImpl", "sublabel": "validate · call · map protobuf", "tag": "query_service.cpp:21-105", "width": 184, "yOffset": -45 },
+    { "id": "time-pagination", "lane": "query", "col": 2, "type": "backend", "label": "TimeRange + Pagination", "sublabel": "seconds → clock · defaults page/page_size", "tag": "query_service.cpp:25-72", "width": 194, "yOffset": 45 },
+    { "id": "query-manager", "lane": "query", "col": 3, "type": "backend", "label": "QueryManager", "sublabel": "mutex · MySQL connection · SQL", "tag": "query_manager.cpp:139-174", "width": 184, "yOffset": -135 },
+    { "id": "performance-query", "lane": "query", "col": 3, "type": "backend", "label": "QueryPerformance / Trend", "sublabel": "time range + pagination + aggregates", "tag": "query_manager.cpp:270-472", "width": 198, "yOffset": -45 },
+    { "id": "score-query", "lane": "query", "col": 3, "type": "backend", "label": "Score rank / latest", "sublabel": "resource vs HEALTH_SCORE + ClusterStats", "tag": "query_service.cpp:211-301", "width": 198, "yOffset": 45 },
+    { "id": "detail-query", "lane": "query", "col": 3, "type": "backend", "label": "Detail query family", "sublabel": "Net · Disk · Mem · SoftIrq", "tag": "query_service.cpp:307-477", "width": 184, "yOffset": 135 },
+    { "id": "main-select", "lane": "mysql", "col": 4, "type": "database", "label": "SELECT server_performance", "sublabel": "values + health fields + change rates", "tag": "query_manager.cpp:295-321", "width": 202, "yOffset": 180 },
+    { "id": "record-map", "lane": "query", "col": 5, "type": "backend", "label": "PerformanceRecord response", "sublabel": "records + total_count + page", "tag": "query_service.cpp:74-103", "width": 194 },
+    { "id": "incident-switch", "lane": "query", "col": 3, "type": "backend", "label": "persisted? decision", "sublabel": "MySQL ready && not degraded", "tag": "query_service.cpp:560-571", "width": 190, "yOffset": 225 },
+    { "id": "mysql-incidents", "lane": "mysql", "col": 4, "type": "database", "label": "diagnostic incident query", "sublabel": "filters + root/evidence detail load", "tag": "query_manager.cpp:1264-1451", "width": 202, "yOffset": 270 },
+    { "id": "memory-incidents", "lane": "fallback", "col": 4, "type": "backend", "label": "HostManager IncidentStore", "sublabel": "in-memory List/Get/Active", "tag": "query_service.cpp:569-570", "width": 188 },
+    { "id": "incident-map", "lane": "query", "col": 5, "type": "backend", "label": "Incident protobuf", "sublabel": "root_causes[] + evidence[] + active", "tag": "query_service.cpp:493-535", "width": 194, "yOffset": 270 }
+  ],
+  "edges": [
+    { "id": "enqueue-to-run", "from": "persistence-enqueue", "to": "persistence-run", "label": "Pop", "variant": "emphasis", "role": "main" },
+    { "id": "run-to-task", "from": "persistence-run", "to": "persist-task", "label": "handler(task)", "variant": "emphasis", "role": "main" },
+    { "id": "task-to-main", "from": "persist-task", "to": "mysql-main", "label": "WriteToMysql", "variant": "emphasis", "role": "main" },
+    { "id": "task-to-detail", "from": "persist-task", "to": "mysql-detail", "label": "detail INSERTs", "variant": "dashed", "role": "async" },
+    { "id": "task-to-diagnostic", "from": "persist-task", "to": "diagnostic-save", "label": "if incident", "variant": "security", "role": "async" },
+    { "id": "save-to-tx", "from": "diagnostic-save", "to": "transaction", "label": "START TRANSACTION", "variant": "security", "role": "async" },
+    { "id": "tx-to-diagnostic", "from": "transaction", "to": "mysql-diagnostic", "label": "incident/root/evidence", "variant": "security", "role": "async" },
+    { "id": "main-to-commit", "from": "mysql-main", "to": "commit", "label": "success", "variant": "default", "role": "main" },
+    { "id": "diagnostic-to-commit", "from": "mysql-diagnostic", "to": "commit", "label": "COMMIT", "variant": "security", "role": "async" },
+    { "id": "client-to-contract", "from": "query-client", "to": "query-contract", "label": "RPC request", "variant": "emphasis", "role": "main" },
+    { "id": "contract-to-handler", "from": "query-contract", "to": "query-handler", "label": "generated service", "variant": "emphasis", "role": "main" },
+    { "id": "handler-to-time", "from": "query-handler", "to": "time-pagination", "label": "normalize args", "variant": "default", "role": "main" },
+    { "id": "time-to-performance", "from": "time-pagination", "to": "performance-query", "label": "QueryPerformance", "variant": "emphasis", "role": "main" },
+    { "id": "performance-to-manager", "from": "performance-query", "to": "query-manager", "label": "QueryPerformance", "variant": "emphasis", "role": "main" },
+    { "id": "manager-to-select", "from": "query-manager", "to": "main-select", "label": "SELECT + COUNT", "variant": "emphasis", "role": "main" },
+    { "id": "select-to-record", "from": "main-select", "to": "record-map", "label": "row → record → proto", "variant": "emphasis", "role": "main" },
+    { "id": "handler-to-score", "from": "query-handler", "to": "score-query", "label": "rank/latest RPC", "variant": "dashed", "role": "branch" },
+    { "id": "handler-to-detail", "from": "query-handler", "to": "detail-query", "label": "detail RPCs", "variant": "dashed", "role": "branch" },
+    { "id": "handler-to-switch", "from": "query-handler", "to": "incident-switch", "label": "Incident RPCs", "variant": "security", "role": "branch" },
+    { "id": "switch-to-mysql", "from": "incident-switch", "to": "mysql-incidents", "label": "persisted path", "variant": "security", "role": "branch" },
+    { "id": "switch-to-memory", "from": "incident-switch", "to": "memory-incidents", "label": "degraded fallback", "variant": "dashed", "role": "branch" },
+    { "id": "mysql-incident-to-map", "from": "mysql-incidents", "to": "incident-map", "label": "LoadIncidentDetails", "variant": "security", "role": "branch" },
+    { "id": "memory-incident-to-map", "from": "memory-incidents", "to": "incident-map", "label": "SetIncident", "variant": "dashed", "role": "branch" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "普通性能数据的落库内容",
+      "items": [
+        "HostManager::PersistTask 由单独 PersistenceWorker 消费；WriteToMysql 在 ENABLE_MYSQL 下启动事务并先写 server_performance。",
+        "主表同时保存 CPU/load/memory/disk/network 当前值、兼容 resource score、health_score/anomaly/confidence/top_signals，以及多类变化率。",
+        "同一写入函数继续写 server_net_detail、server_softirq_detail、server_mem_detail、server_disk_detail；这些表的字段和单位由 init_server_performance.sql 定义。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "诊断 durable copy 的原子边界",
+      "items": [
+        "只有 task.incident 存在时调用 DiagnosticPersistence::Save；先 upsert diagnostic_incident，再重写 diagnostic_root_cause 和 diagnostic_evidence。",
+        "主表、根因和 evidence 的诊断保存共享 START TRANSACTION；任意 Execute/查询失败都会 rollback，避免半条诊断链。",
+        "保存失败时 Incident 仍留在 Manager 内存；QueryService 通过 IsDiagnosticPersistenceDegraded 选择 MySQL 或 IncidentStore。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "对外真正提供的 response",
+      "items": [
+        "QueryPerformance 返回 PerformanceRecord：当前资源值、resource/health/anomaly 字段、top_signals 和变化率，并带 total_count/page/page_size。",
+        "QueryScoreRank/QueryLatestScore 返回 ServerScoreSummary；最新查询额外计算 ClusterStats，包括 avg/max/min score 与 health_score 以及 healthiest/least healthy server。",
+        "QueryNetDetail、QueryDiskDetail、QueryMemDetail、QuerySoftIrqDetail 提供详情；Incident API 返回 active、severity、root_causes[] 和 evidence[]，持久化异常时回退内存。"
+      ]
+    }
+  ]
+}

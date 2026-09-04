@@ -1,0 +1,481 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "MonitorSystem 真实运行时架构",
+    "output": "docs/ai/monitor-system.architecture.html",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1320, 660],
+    "repository": {
+      "url": "https://github.com/yu20120707/MonitorSystem",
+      "revision": "eecc6c5d0f8d388e23e554d99b36a780b02929d4"
+    },
+    "views": [
+      {
+        "id": "push-path",
+        "label": "① Worker 采集与上报",
+        "focus": [
+          "linux-runtime",
+          "worker-agent",
+          "metric-collector",
+          "diag-control",
+          "send-queue",
+          "manager-rpc",
+          "host-manager"
+        ],
+        "note": "从 Linux 运行时采集指标，经 Worker 有界队列和 gRPC Push 进入 Manager；按从左到右顺序阅读。"
+      },
+      {
+        "id": "diagnostic-persistence",
+        "label": "② Manager 计算与诊断",
+        "focus": [
+          "metric-collector",
+          "diag-control",
+          "host-manager",
+          "diag-state",
+          "persistence-queue",
+          "mysql"
+        ],
+        "note": "有效 MonitorInfo 进入 Manager 后计算健康评分；包含 diagnostic 时构造诊断证据、规则型根因和 Incident，再进入异步写入。"
+      },
+      {
+        "id": "query-path",
+        "label": "③ 存储与查询回读",
+        "focus": [
+          "query-client",
+          "query-service",
+          "host-manager",
+          "diag-state",
+          "mysql"
+        ],
+        "note": "QueryService 将历史查询交给 QueryManager；Incident 查询在需要时读取 Manager 内存状态。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "linux-runtime",
+      "type": "external",
+      "label": "Linux 运行时",
+      "sublabel": "内核数据源",
+      "pos": [30, 250],
+      "size": [150, 72],
+      "sources": [
+        {
+          "path": "worker/src/monitor/cpu_load_monitor.cpp",
+          "line": 1,
+          "label": "CPU/load runtime source"
+        },
+        {
+          "path": "worker/src/ebpf/net_stats.bpf.c",
+          "line": 16,
+          "label": "TC eBPF network source"
+        }
+      ]
+    },
+    {
+      "id": "worker-agent",
+      "type": "backend",
+      "label": "Worker Agent",
+      "sublabel": "采集代理 · 启动、调度、发送",
+      "pos": [210, 250],
+      "size": [150, 72],
+      "sources": [
+        {
+          "path": "worker/src/main.cpp",
+          "line": 46,
+          "label": "Worker entrypoint"
+        },
+        {
+          "path": "worker/src/rpc/monitor_pusher.cpp",
+          "line": 366,
+          "label": "start collection and sender threads"
+        },
+        {
+          "path": "worker/src/rpc/monitor_pusher.cpp",
+          "line": 712,
+          "label": "unary Push retry path"
+        }
+      ]
+    },
+    {
+      "id": "metric-collector",
+      "type": "backend",
+      "label": "MetricCollector",
+      "sublabel": "采样并组装 MonitorInfo",
+      "pos": [390, 250],
+      "size": [150, 72],
+      "sources": [
+        {
+          "path": "worker/src/monitor/metric_collector.cpp",
+          "line": 39,
+          "label": "monitor set construction"
+        },
+        {
+          "path": "worker/src/monitor/metric_collector.cpp",
+          "line": 73,
+          "label": "CollectAll entrypoint"
+        }
+      ]
+    },
+    {
+      "id": "diag-control",
+      "type": "backend",
+      "label": "诊断控制（自适应观测）",
+      "sublabel": "异常评估、状态机、Probe",
+      "pos": [570, 250],
+      "size": [150, 72],
+      "sources": [
+        {
+          "path": "worker/src/diagnostics/anomaly_detector.cpp",
+          "line": 1,
+          "label": "anomaly evaluation"
+        },
+        {
+          "path": "worker/src/diagnostics/observability_state.cpp",
+          "line": 1,
+          "label": "observability state machine"
+        },
+        {
+          "path": "worker/src/diagnostics/probe_controller.cpp",
+          "line": 1,
+          "label": "probe and snapshot control"
+        }
+      ]
+    },
+    {
+      "id": "send-queue",
+      "type": "messagebus",
+      "label": "MonitorSendQueue",
+      "sublabel": "有界 item/byte 队列",
+      "pos": [750, 250],
+      "size": [150, 72],
+      "sources": [
+        {
+          "path": "worker/src/rpc/monitor_send_queue.cpp",
+          "line": 22,
+          "label": "bounded push/pop queue"
+        },
+        {
+          "path": "worker/src/rpc/monitor_pusher.cpp",
+          "line": 638,
+          "label": "enqueue MonitorInfo"
+        }
+      ]
+    },
+    {
+      "id": "manager-rpc",
+      "type": "backend",
+      "label": "Manager 接收 RPC",
+      "sublabel": "SetMonitorInfo · 接收消息",
+      "pos": [930, 250],
+      "size": [150, 72],
+      "sources": [
+        {
+          "path": "proto/monitor_info.proto",
+          "line": 134,
+          "label": "GrpcManager service"
+        },
+        {
+          "path": "manager/src/rpc/grpc_server.cpp",
+          "line": 19,
+          "label": "push RPC handler"
+        },
+        {
+          "path": "manager/src/main.cpp",
+          "line": 99,
+          "label": "register push service"
+        }
+      ]
+    },
+    {
+      "id": "host-manager",
+      "type": "backend",
+      "label": "HostManager（主机处理）",
+      "sublabel": "按 host 分片、评分、反馈",
+      "pos": [1110, 250],
+      "size": [150, 72],
+      "sources": [
+        {
+          "path": "manager/src/host_manager.cpp",
+          "line": 310,
+          "label": "start manager data path"
+        },
+        {
+          "path": "manager/src/host_manager.cpp",
+          "line": 508,
+          "label": "submit with feedback"
+        },
+        {
+          "path": "manager/src/host_shard_executor.cpp",
+          "line": 163,
+          "label": "per-shard processing loop"
+        }
+      ]
+    },
+    {
+      "id": "persistence-queue",
+      "type": "messagebus",
+      "label": "PersistenceWorker",
+      "sublabel": "持久化 · 单消费者队列",
+      "pos": [1110, 430],
+      "size": [150, 72],
+      "sources": [
+        {
+          "path": "manager/src/host_manager.cpp",
+          "line": 383,
+          "label": "create persistence worker"
+        },
+        {
+          "path": "manager/src/persistence_worker.cpp",
+          "line": 27,
+          "label": "start consumer thread"
+        },
+        {
+          "path": "manager/src/persistence_worker.cpp",
+          "line": 71,
+          "label": "consume persistence tasks"
+        }
+      ]
+    },
+    {
+      "id": "diag-state",
+      "type": "backend",
+      "label": "诊断状态",
+      "sublabel": "证据与 Incident",
+      "pos": [930, 430],
+      "size": [150, 72],
+      "sources": [
+        {
+          "path": "manager/src/diagnostics/evidence_builder.cpp",
+          "line": 195,
+          "label": "build traceable evidence"
+        },
+        {
+          "path": "manager/src/diagnostics/root_cause_engine.cpp",
+          "line": 96,
+          "label": "rule-based root cause"
+        },
+        {
+          "path": "manager/src/diagnostics/incident_store.cpp",
+          "line": 20,
+          "label": "active/history incident state"
+        }
+      ]
+    },
+    {
+      "id": "mysql",
+      "type": "database",
+      "label": "MySQL（历史与诊断存储）",
+      "sublabel": "性能、详情、Incident",
+      "pos": [1110, 570],
+      "size": [150, 72],
+      "sources": [
+        {
+          "path": "manager/src/query_manager.cpp",
+          "line": 139,
+          "label": "MySQL initialization"
+        },
+        {
+          "path": "manager/src/host_manager.cpp",
+          "line": 1165,
+          "label": "performance persistence"
+        },
+        {
+          "path": "manager/sql/init_server_performance.sql",
+          "line": 1,
+          "label": "schema definition"
+        }
+      ]
+    },
+    {
+      "id": "query-client",
+      "type": "external",
+      "label": "外部查询客户端",
+      "sublabel": "发起 Query*Request",
+      "pos": [930, 50],
+      "size": [150, 72],
+      "sources": [
+        {
+          "path": "proto/query_api.proto",
+          "line": 422,
+          "label": "public query contract"
+        }
+      ]
+    },
+    {
+      "id": "query-service",
+      "type": "backend",
+      "label": "QueryService",
+      "sublabel": "查询 · Incident 内存回退",
+      "pos": [1110, 50],
+      "size": [150, 72],
+      "sources": [
+        {
+          "path": "manager/src/rpc/query_service.cpp",
+          "line": 47,
+          "label": "performance query handler"
+        },
+        {
+          "path": "manager/src/query_manager.cpp",
+          "line": 270,
+          "label": "historical query path"
+        },
+        {
+          "path": "manager/src/main.cpp",
+          "line": 100,
+          "label": "register query service"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Worker process",
+      "wraps": ["worker-agent", "metric-collector", "diag-control", "send-queue"],
+      "pad": 24
+    },
+    {
+      "kind": "region",
+      "label": "Manager process",
+      "wraps": ["manager-rpc", "host-manager", "persistence-queue", "diag-state", "query-service"],
+      "pad": 24
+    }
+  ],
+  "connections": [
+    {
+      "id": "runtime-to-worker",
+      "from": "linux-runtime",
+      "to": "worker-agent",
+      "label": "1. 采集系统状态",
+      "variant": "emphasis",
+      "labelAt": [200, 220]
+    },
+    {
+      "id": "worker-to-collector",
+      "from": "worker-agent",
+      "to": "metric-collector",
+      "label": "2. 周期调用 CollectAll",
+      "labelDy": -32
+    },
+    {
+      "id": "collector-to-diagnostics",
+      "from": "metric-collector",
+      "to": "diag-control",
+      "label": "3. MonitorInfo 基础样本",
+      "labelDy": -32
+    },
+    {
+      "id": "diagnostics-to-send-queue",
+      "from": "diag-control",
+      "to": "send-queue",
+      "label": "4. DiagnosticSnapshot（状态驱动）",
+      "variant": "dashed",
+      "labelDy": -32
+    },
+    {
+      "id": "send-queue-to-manager-rpc",
+      "from": "send-queue",
+      "to": "manager-rpc",
+      "label": "5. MonitorInfo 单向 gRPC 上传",
+      "variant": "emphasis"
+      ,"labelDy": -32
+    },
+    {
+      "id": "manager-rpc-to-host-manager",
+      "from": "manager-rpc",
+      "to": "host-manager",
+      "label": "6. 分片提交 → MonitorFeedback",
+      "variant": "emphasis",
+      "labelDy": -32
+    },
+    {
+      "id": "host-manager-to-diagnostics",
+      "from": "host-manager",
+      "to": "diag-state",
+      "label": "评分与诊断状态",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [[1290, 286], [1290, 390], [1005, 390]],
+      "labelSegment": 2,
+      "labelDx": 100
+    },
+    {
+      "id": "host-manager-to-persistence",
+      "from": "host-manager",
+      "to": "persistence-queue",
+      "label": "异步 PersistenceTask",
+      "variant": "dashed",
+      "labelAt": [1185, 336]
+    },
+    {
+      "id": "persistence-to-mysql",
+      "from": "persistence-queue",
+      "to": "mysql",
+      "label": "串行 SQL 写入",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "query-client-to-service",
+      "from": "query-client",
+      "to": "query-service",
+      "label": "QueryService gRPC：查询请求",
+      "variant": "emphasis",
+      "labelDy": -32
+    },
+    {
+      "id": "query-service-to-memory",
+      "from": "query-service",
+      "to": "host-manager",
+      "label": "Incident 实时状态（内存回退）",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "id": "query-service-to-mysql",
+      "from": "query-service",
+      "to": "mysql",
+      "label": "历史性能/详情查询（SQL）",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [[1185, 20], [1305, 20], [1305, 550], [1185, 550]],
+      "labelSegment": 2,
+      "labelAt": [1305, 246]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "① Worker 采集与上报",
+      "items": [
+        "阅读顺序：从左到右看 Linux 运行时 → Worker → Manager。",
+        "Worker 把 CPU/load、内存、磁盘、网络、SoftIRQ 和主机身份装进 MonitorInfo。",
+        "MonitorSendQueue 同时按 item 数和序列化字节数限流，采集线程与发送线程解耦。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "② Manager 计算与诊断",
+      "items": [
+        "Manager 收到有效 MonitorInfo 后按 host 分片，保证同一主机样本按顺序进入 ProcessOne。",
+        "健康评分产生 HealthResult；仅在样本包含 diagnostic 时构造 Evidence、RootCause 和 Incident；条件满足时返回 MonitorFeedback。",
+        "虚线表示可选诊断或异步路径，实线表示主数据流。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "③ 存储与查询回读",
+      "items": [
+        "PersistenceTask 携带快照、变化率、HealthResult 和可选 Incident，送入 PersistenceWorker。",
+        "ENABLE_MYSQL 开启且初始化成功时，普通历史指标和诊断链写入 MySQL，写入在独立线程中执行。",
+        "QueryService 将 Query*Request 转为历史查询；只有 Incident 相关查询可读取 Manager 内存状态。"
+      ]
+    }
+  ]
+}

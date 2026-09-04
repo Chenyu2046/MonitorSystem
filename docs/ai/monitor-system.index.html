@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MonitorSystem Architecture Explorer</title>
+  <style>
+    :root { color-scheme: dark; --bg:#060b17; --panel:#0d1526; --line:#243653; --text:#f4f7fb; --muted:#9db0ca; --cyan:#26d9f0; --rose:#ff6d92; --green:#42e3a4; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:radial-gradient(circle at 15% 0%,#122b45 0,transparent 36rem),var(--bg); color:var(--text); font:15px/1.6 Inter,"Segoe UI","Microsoft YaHei",sans-serif; }
+    .shell { width:min(1500px,calc(100% - 40px)); margin:0 auto; padding:28px 0 48px; }
+    header { display:flex; align-items:end; justify-content:space-between; gap:24px; margin-bottom:20px; }
+    .eyebrow { color:var(--cyan); font:700 12px/1.2 ui-monospace,SFMono-Regular,Consolas,monospace; letter-spacing:.14em; text-transform:uppercase; }
+    h1 { margin:8px 0 4px; font-size:clamp(28px,4vw,48px); line-height:1.05; letter-spacing:-.04em; }
+    .lede { margin:0; color:var(--muted); max-width:780px; }
+    .badge { border:1px solid #315071; border-radius:999px; padding:7px 12px; color:#c5d6ed; white-space:nowrap; font:12px ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .overview { border:1px solid var(--line); border-radius:18px; overflow:hidden; background:rgba(13,21,38,.82); box-shadow:0 20px 70px rgba(0,0,0,.25); }
+    .section-head { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:16px 18px; border-bottom:1px solid var(--line); }
+    h2 { margin:0; font-size:18px; }
+    .section-head span { color:var(--muted); font-size:13px; }
+    iframe { display:block; width:100%; height:min(72vh,900px); min-height:620px; border:0; background:#060b17; }
+    .workflows { margin-top:28px; }
+    .workflow-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; margin-top:14px; }
+    .workflow { display:flex; flex-direction:column; min-height:230px; padding:20px; border:1px solid var(--line); border-radius:16px; background:linear-gradient(145deg,rgba(17,31,53,.9),rgba(10,17,31,.94)); transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease; }
+    .workflow:hover,.workflow:focus-within { transform:translateY(-3px); border-color:#4b779c; box-shadow:0 14px 40px rgba(0,0,0,.22); }
+    .workflow:nth-child(1) .kicker { color:var(--cyan); } .workflow:nth-child(2) .kicker { color:var(--rose); } .workflow:nth-child(3) .kicker { color:var(--green); }
+    .kicker { font:700 12px ui-monospace,SFMono-Regular,Consolas,monospace; letter-spacing:.12em; text-transform:uppercase; }
+    .workflow h3 { margin:10px 0 7px; font-size:20px; }
+    .workflow p { margin:0; color:var(--muted); }
+    .workflow .chain { margin:16px 0; color:#d9e6f6; font-size:13px; }
+    .workflow a { margin-top:auto; align-self:flex-start; color:#06101c; background:var(--cyan); padding:8px 13px; border-radius:8px; font-weight:750; text-decoration:none; }
+    .workflow:nth-child(2) a { background:var(--rose); } .workflow:nth-child(3) a { background:var(--green); }
+    footer { margin-top:18px; color:#7186a3; font:12px ui-monospace,SFMono-Regular,Consolas,monospace; }
+    @media (max-width:900px) { .shell{width:min(100% - 20px,700px);padding-top:18px} header{display:block}.badge{display:inline-block;margin-top:14px}.workflow-grid{grid-template-columns:1fr} iframe{min-height:600px;height:700px} }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <div>
+        <div class="eyebrow">Architecture Explorer / source-grounded</div>
+        <h1>MonitorSystem 真实运行时架构</h1>
+      <p class="lede">先按全局图的 ①采集上报、②Manager 计算诊断、③存储查询建立边界，再点击进入每条完整链路。</p>
+      </div>
+      <div class="badge">HEAD eecc6c5d · 31 source refs</div>
+    </header>
+
+    <section class="overview" aria-labelledby="overview-title">
+      <div class="section-head"><h2 id="overview-title">全局 Workflow · 总体架构</h2><span>按 ①→②→③ 读取主链；点击节点只看数据形状</span></div>
+      <iframe src="monitor-system.architecture.html" title="MonitorSystem overall architecture"></iframe>
+    </section>
+
+    <section class="workflows" aria-labelledby="workflow-title">
+      <div class="section-head"><h2 id="workflow-title">核心 Workflow 入口</h2><span>每张图都按真实消息、计算结果、队列和表结构展开</span></div>
+      <div class="workflow-grid">
+        <article class="workflow">
+          <div class="kicker">Workflow 01 · Upload</div>
+          <h3>Worker 采集与上报</h3>
+          <p>Linux/procfs、mmap 设备和 TC eBPF 数据进入 MetricCollector，PushOnce 每轮填充 MonitorInfo，诊断内容按状态和能力出现。</p>
+          <div class="chain">CollectAll → PushOnce → MonitorInfo → state/probe → SendQueue → Manager</div>
+          <a href="monitor-system.workflow.collection-upload.html">进入采集上报图 →</a>
+        </article>
+        <article class="workflow">
+          <div class="kicker">Workflow 02 · Scoring</div>
+          <h3>Manager 计算与健康评分</h3>
+          <p>同一 host 固定进入一个 shard；有效样本计算 resource score 与 health_score，条件满足时返回反馈并产生诊断状态。</p>
+          <div class="chain">SubmitTracked → shard FIFO → resource score + health model → Evidence/RCA/Incident</div>
+          <a href="monitor-system.workflow.health-scoring.html">进入评分诊断图 →</a>
+        </article>
+        <article class="workflow">
+          <div class="kicker">Workflow 03 · Serve</div>
+          <h3>持久化与对外查询</h3>
+          <p>ENABLE_MYSQL 开启且初始化成功时，PersistenceWorker 串行写入普通性能表、详情表和诊断表；QueryService 提供历史、评分、详情和 Incident 视图。</p>
+          <div class="chain">PersistenceTask → MySQL transaction → QueryService → response / Incident memory fallback</div>
+          <a href="monitor-system.workflow.persistence-query.html">进入持久化查询图 →</a>
+        </article>
+      </div>
+    </section>
+    <footer>Evidence pin: https://github.com/yu20120707/MonitorSystem @ eecc6c5d0f8d388e23e554d99b36a780b02929d4 · uncommitted source changes are not represented.</footer>
+  </main>
+</body>
+</html>

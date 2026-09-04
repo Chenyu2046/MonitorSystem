@@ -1,0 +1,145 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MonitorSystem Workflow 02 · Manager 计算与健康评分",
+    "subtitle": "SetMonitorInfo 入队后按 host 分片串行处理：资源评分、历史模型健康评分、诊断证据和反馈并行汇合",
+    "locale": "zh-CN",
+    "animation": "trace",
+    "visual_preset": "signal-flow",
+    "quality_profile": "standard",
+    "views": [
+      {
+        "id": "routing-and-order",
+        "label": "分片与顺序",
+        "focus": ["rpc-handler", "host-key", "submit-tracked", "shard-select", "shard-queue", "run-shard"],
+        "note": "查看 RPC 线程只做校验和有界入队，以及同一 host 的 shard FIFO 边界。"
+      },
+      {
+        "id": "score-model",
+        "label": "双评分模型",
+        "focus": ["resource-overview", "resource-score", "health-engine", "rolling-windows", "metric-detector", "domain-aggregate", "health-result"],
+        "note": "对照资源余量 score 与历史/模型健康 health_score 的不同计算路径。"
+      },
+      {
+        "id": "diagnostic-output",
+        "label": "诊断与反馈",
+        "focus": ["evidence-builder", "root-cause", "incident-store", "persistence-task", "feedback", "host-cache"],
+        "note": "查看 Evidence/RCA/Incident 和 unary MonitorFeedback 如何从同一轮处理结果产生。"
+      }
+    ],
+    "output": "docs/ai/monitor-system.workflow.health-scoring.html"
+  },
+  "lanes": [
+    { "id": "ingress", "label": "gRPC ingress" },
+    { "id": "routing", "label": "Host shard execution" },
+    { "id": "score", "label": "Resource score and rate derivation" },
+    { "id": "health", "label": "Adaptive health model" },
+    { "id": "diagnostic", "label": "Evidence / RCA / Incident" },
+    { "id": "output", "label": "Feedback and Manager state" }
+  ],
+  "phases": [
+    { "id": "accept", "label": "接收与路由", "fromCol": 0, "toCol": 2, "variant": "default" },
+    { "id": "compute", "label": "资源计算与健康模型", "fromCol": 3, "toCol": 4, "variant": "emphasis" },
+    { "id": "result", "label": "状态、诊断与反馈", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+  ],
+  "groups": [
+    { "id": "host-affinity", "label": "一个 host 一个 shard 顺序", "lane": "routing", "fromCol": 1, "toCol": 2, "variant": "emphasis" },
+    { "id": "score-branches", "label": "同一 MonitorInfo 的两套分数", "lane": "score", "fromCol": 3, "toCol": 4, "variant": "dashed" },
+    { "id": "diagnostic-branch", "label": "有 diagnostic 时才构建证据", "lane": "diagnostic", "fromCol": 4, "toCol": 5, "variant": "security" }
+  ],
+  "mainPath": [
+    "rpc-handler",
+    "host-key",
+    "submit-tracked",
+    "shard-select",
+    "shard-queue",
+    "run-shard",
+    "validate-monitor",
+    "resource-overview",
+    "resource-score",
+    "health-engine",
+    "rolling-windows",
+    "metric-detector",
+    "domain-aggregate",
+    "health-result",
+    "feedback"
+  ],
+  "nodes": [
+    { "id": "rpc-handler", "lane": "ingress", "col": 0, "type": "backend", "label": "GrpcServerImpl::SetMonitorInfo", "sublabel": "protobuf validate · callback", "tag": "grpc_server.cpp:19-84", "width": 212, "yOffset": -45 },
+    { "id": "host-key", "lane": "ingress", "col": 0, "type": "backend", "label": "CanonicalHostKey", "sublabel": "hostname / host_info identity", "tag": "host_manager.cpp:491-495", "width": 170, "yOffset": 45 },
+    { "id": "submit-tracked", "lane": "routing", "col": 1, "type": "messagebus", "label": "SubmitWithFeedback", "sublabel": "promise/future · deadline wait", "tag": "host_manager.cpp:508-554", "width": 180, "yOffset": -90 },
+    { "id": "shard-select", "lane": "routing", "col": 1, "type": "backend", "label": "ShardFor(host)", "sublabel": "stable hash % shards_.size()", "tag": "host_shard_executor.cpp:108-110", "width": 174, "yOffset": 0 },
+    { "id": "shard-queue", "lane": "routing", "col": 2, "type": "messagebus", "label": "Host shard queue", "sublabel": "bounded TryPush · accepted/full/stopping", "tag": "host_shard_executor.cpp:94-139", "width": 194, "yOffset": -45 },
+    { "id": "run-shard", "lane": "routing", "col": 2, "type": "backend", "label": "RunShard", "sublabel": "one consumer per shard · FIFO host", "tag": "host_shard_executor.cpp:163-217", "width": 188, "yOffset": 45 },
+    { "id": "validate-monitor", "lane": "routing", "col": 2, "type": "backend", "label": "IsValidMonitorInfo", "sublabel": "sample validity gate", "tag": "host_manager.cpp:575-579", "width": 174, "yOffset": 135 },
+    { "id": "resource-overview", "lane": "score", "col": 3, "type": "backend", "label": "Build *Overview", "sublabel": "CPU avg/peak · net sum/peak · disk max", "tag": "host_manager.cpp:175-226", "width": 194, "yOffset": -45 },
+    { "id": "resource-score", "lane": "score", "col": 3, "type": "backend", "label": "CalcResourceScore", "sublabel": "CPU35 · mem30 · load15 · disk15 · net5", "tag": "host_manager.cpp:1109-1162", "width": 194, "yOffset": 45 },
+    { "id": "perf-sample", "lane": "score", "col": 4, "type": "backend", "label": "PerfSample + rate", "sublabel": "current snapshot vs previous host", "tag": "host_manager.cpp:737-797", "width": 184 },
+    { "id": "health-engine", "lane": "health", "col": 3, "type": "backend", "label": "HealthScoreEngine::Evaluate", "sublabel": "event-time observations → HealthResult", "tag": "health_score_engine.cpp:221-304", "width": 198 },
+    { "id": "rolling-windows", "lane": "health", "col": 4, "type": "backend", "label": "RollingWindow[]", "sublabel": "one history window per MetricId", "tag": "health_score_engine.cpp:206-218", "width": 184, "yOffset": -90 },
+    { "id": "metric-detector", "lane": "health", "col": 4, "type": "backend", "label": "MetricDetector::Evaluate", "sublabel": "threshold + MAD + EWMA votes", "tag": "metric_detector.cpp:32-92", "width": 184, "yOffset": 0 },
+    { "id": "domain-aggregate", "lane": "health", "col": 4, "type": "backend", "label": "Domain aggregation", "sublabel": "5 domain max → weighted anomaly", "tag": "health_score_engine.cpp:503-568", "width": 184, "yOffset": 90 },
+    { "id": "health-result", "lane": "output", "col": 5, "type": "backend", "label": "HealthResult", "sublabel": "health=100×(1-anomaly) · top3 · NAR", "tag": "health_types.h:48-64", "width": 194, "yOffset": -135 },
+    { "id": "feedback", "lane": "output", "col": 5, "type": "external", "label": "MonitorFeedback", "sublabel": "health_valid · anomaly · trigger · version", "tag": "host_manager.cpp:689-700", "width": 194, "yOffset": -45 },
+    { "id": "host-cache", "lane": "output", "col": 5, "type": "backend", "label": "host_scores_", "sublabel": "HostScore{info, resource, health}", "tag": "host_manager.cpp:773-803", "width": 186, "yOffset": 45 },
+    { "id": "evidence-builder", "lane": "diagnostic", "col": 4, "type": "backend", "label": "EvidenceBuilder::Build", "sublabel": "基础指标 + diagnostic + health top signals", "tag": "evidence_builder.cpp:195-430", "width": 198 },
+    { "id": "root-cause", "lane": "diagnostic", "col": 5, "type": "backend", "label": "RootCauseEngine::Evaluate", "sublabel": "CPU / disk / network / memory / lock rules", "tag": "root_cause_engine.cpp:96-220", "width": 202, "yOffset": -45 },
+    { "id": "incident-store", "lane": "diagnostic", "col": 5, "type": "backend", "label": "IncidentStore::Observe", "sublabel": "active episode · recovery history", "tag": "incident_store.cpp:20-75", "width": 190, "yOffset": 45 },
+    { "id": "persistence-task", "lane": "output", "col": 5, "type": "messagebus", "label": "PersistenceTask", "sublabel": "HostScore + rates + optional Incident", "tag": "host_manager.cpp:773-797", "width": 188, "yOffset": 135 }
+  ],
+  "edges": [
+    { "id": "rpc-to-key", "from": "rpc-handler", "to": "host-key", "label": "request", "variant": "emphasis", "role": "main" },
+    { "id": "key-to-submit", "from": "host-key", "to": "submit-tracked", "label": "canonical host", "variant": "emphasis", "role": "main" },
+    { "id": "submit-to-shard", "from": "submit-tracked", "to": "shard-select", "label": "SubmitTracked", "variant": "default", "role": "main" },
+    { "id": "shard-to-queue", "from": "shard-select", "to": "shard-queue", "label": "WorkItem", "variant": "emphasis", "role": "main" },
+    { "id": "queue-to-run", "from": "shard-queue", "to": "run-shard", "label": "Pop", "variant": "default", "role": "main" },
+    { "id": "run-to-validate", "from": "run-shard", "to": "validate-monitor", "label": "ProcessOne", "variant": "emphasis", "role": "main" },
+    { "id": "validate-to-overview", "from": "validate-monitor", "to": "resource-overview", "label": "valid sample", "variant": "default", "role": "main" },
+    { "id": "overview-to-resource", "from": "resource-overview", "to": "resource-score", "label": "overview", "variant": "default", "role": "main" },
+    { "id": "validate-to-health", "from": "validate-monitor", "to": "health-engine", "label": "MonitorInfo + score", "variant": "emphasis", "role": "branch" },
+    { "id": "resource-to-health", "from": "resource-score", "to": "health-engine", "label": "resource_score", "variant": "emphasis", "role": "main" },
+    { "id": "resource-to-rate", "from": "resource-score", "to": "perf-sample", "label": "current score", "variant": "dashed", "role": "branch", "route": "bottom-channel" },
+    { "id": "health-to-window", "from": "health-engine", "to": "rolling-windows", "label": "observations", "variant": "default", "role": "main" },
+    { "id": "window-to-detector", "from": "rolling-windows", "to": "metric-detector", "label": "history + value", "variant": "emphasis", "role": "main" },
+    { "id": "detector-to-domain", "from": "metric-detector", "to": "domain-aggregate", "label": "DetectorResult", "variant": "emphasis", "role": "main" },
+    { "id": "domain-to-health", "from": "domain-aggregate", "to": "health-result", "label": "HealthResult", "variant": "emphasis", "role": "main" },
+    { "id": "health-to-feedback", "from": "health-result", "to": "feedback", "label": "sample-correlated", "variant": "emphasis", "role": "main" },
+    { "id": "health-to-cache", "from": "health-result", "to": "host-cache", "label": "HostScore", "variant": "default", "role": "branch" },
+    { "id": "run-to-evidence", "from": "run-shard", "to": "evidence-builder", "label": "if has_diagnostic", "variant": "dashed", "role": "branch" },
+    { "id": "health-to-evidence", "from": "health-result", "to": "evidence-builder", "label": "health top signals", "variant": "dashed", "role": "branch" },
+    { "id": "evidence-to-rca", "from": "evidence-builder", "to": "root-cause", "label": "vector<Evidence>", "variant": "emphasis", "role": "branch" },
+    { "id": "rca-to-incident", "from": "root-cause", "to": "incident-store", "label": "root_causes", "variant": "emphasis", "role": "branch" },
+    { "id": "incident-to-task", "from": "incident-store", "to": "persistence-task", "label": "optional incident", "variant": "dashed", "role": "async" },
+    { "id": "rate-to-task", "from": "perf-sample", "to": "persistence-task", "label": "rate fields", "variant": "dashed", "role": "async" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "两个 score 不是同一个字段",
+      "items": [
+        "CalcResourceScore 保留兼容的资源余量 score/resource_score：CPU 35%、内存 30%、Load 15%、磁盘 15%、网络 5%，最后乘 100。",
+        "HealthScoreEngine 以每个 MetricId 的 RollingWindow 为历史，MetricDetector 在 cold/warming/ready 阶段组合静态阈值、MAD、EWMA 投票。",
+        "健康结果的 anomaly_score 是可用域分数按权重归一化后的 0~1；health_score=100×(1-anomaly_score)，另产出 confidence、anomaly_rate_5m、model_state 和 TopSignals。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "顺序性和并行性的真实边界",
+      "items": [
+        "gRPC handler 不执行评分、规则诊断或 MySQL，只调用 SubmitWithFeedback；HostShardExecutor 用稳定 host hash 选择 shard。",
+        "同一 shard 一个消费者，因此同一 host 的 PerfSample、HealthScoreEngine 历史窗口和 feedback cache 按 FIFO 更新；不同 shard 可并行。",
+        "EvidenceBuilder、RootCauseEngine、IncidentStore 在 ProcessOne 内顺序执行；IncidentStore 同一 server_name 同时最多维护一个 active episode。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "最终的本轮处理结果",
+      "items": [
+        "HostManager 缓存 HostScore{原始 MonitorInfo, resource score, health result}，并将同一轮的 host/session/sequence/timestamp 写入 feedback cache。",
+        "MonitorFeedback 只在带采样身份且健康计算有效时填充 health_valid、node_anomaly_score、remote_trigger_score、result_version；旧 Worker 保留异步 accepted 语义。",
+        "PersistenceTask 同时携带主性能快照、变化率和可选 Incident，交给后续 PersistenceWorker；ProcessOne 完成不等同于 MySQL 已完成。"
+      ]
+    }
+  ]
+}
