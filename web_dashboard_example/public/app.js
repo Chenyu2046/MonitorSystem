@@ -19,7 +19,7 @@ const theme = createTheme({
         mode: "dark",
         primary: { main: "#e5e7e2", light: "#f4f5f2", dark: "#b9bdb6" },
         secondary: { main: "#8d9bb0" },
-        background: { default: "#111211", paper: "#191a19" },
+        background: { default: "#101110", paper: "#191b1a" },
         success: { main: "#54b99a" },
         warning: { main: "#d8b55a" },
         error: { main: "#dc7474" },
@@ -234,8 +234,8 @@ const TopStats = ({ clusterStats, servers = [], scoringProfile }) => {
             icon: "query_stats",
             value: Number.isFinite(clusterStats.avg_score) ? clusterStats.avg_score.toFixed(1) : "—",
             unit: "/ 100",
-            note: scoringProfile === "HEALTH_SCORE" ? "健康模型评分" : "资源使用评分",
-            tone: "mint"
+            note: scoringProfile === "HEALTH_SCORE" ? "健康模型评分" : "资源余量评分",
+            tone: "neutral"
         },
         {
             label: "在线节点",
@@ -270,7 +270,7 @@ const TopStats = ({ clusterStats, servers = [], scoringProfile }) => {
                     <Card className={`metric-tile metric-tile-${metric.tone}`}>
                         <Box className="metric-heading">
                             <Typography className="metric-label">{metric.label}</Typography>
-                            <span className={`material-icons metric-icon metric-icon-${metric.tone}`} aria-hidden="true">{metric.icon}</span>
+                            
                         </Box>
                         <Box className="metric-value-row">
                             <Typography className="metric-value">{metric.value}</Typography>
@@ -383,7 +383,7 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
                         </Button>
                     )}
                     <Typography variant="subtitle2" color="text.secondary">
-                        {fixedMode ? `节点 ${initialNode} - ${initialMetric.toUpperCase()} 历史趋势` : "自定义趋势分析"}
+                        {fixedMode ? `节点 ${initialNode} - ${initialMetric.toUpperCase()} 历史趋势` : "性能趋势"}
                     </Typography>
                 </Box>
 
@@ -681,7 +681,7 @@ const QueryControlBar = ({
             ))}
         </Select>
 
-        <Typography variant="body2" color="text.secondary">评分体系</Typography>
+        <Typography variant="body2" color="text.secondary">评分</Typography>
         <Select
             size="small"
             value={scoringProfile}
@@ -1396,8 +1396,8 @@ const AppShell = () => {
     }, [view, selectedQueryServer, queryHours, loadQueryViewData]);
 
     const sidebarItems = [
-        { id: "dashboard", label: "总览看板", icon: "space_dashboard" },
-        { id: "endpoints", label: "查询端口", icon: "account_tree" },
+        { id: "dashboard", label: "总览", icon: "space_dashboard" },
+        { id: "endpoints", label: "查询接口", icon: "account_tree" },
         { divider: true },
         { id: "header_query", label: "数据查询" },
         { id: "rank", label: "评分排行", icon: "leaderboard" },
@@ -1409,16 +1409,16 @@ const AppShell = () => {
         { id: "softirq_detail", label: "软中断详情", icon: "bolt" },
         { divider: true },
         { id: "header", label: "主机指标" },
-        { id: "cpu", label: "CPU 负载", icon: "memory_alt" },
-        { id: "mem", label: "内存使用", icon: "developer_board" },
-        { id: "disk", label: "磁盘 IO", icon: "hard_drive" },
-        { id: "net", label: "网络流量", icon: "router" },
+        { id: "cpu", label: "CPU 负载", dot: "amber" },
+        { id: "mem", label: "内存使用", dot: "blue" },
+        { id: "disk", label: "磁盘 I/O", dot: "purple" },
+        { id: "net", label: "网络流量", dot: "pink" },
     ];
     const visibleSidebarItems = sidebarFilter.trim()
         ? sidebarItems.filter((item) => item.id && item.label.toLowerCase().includes(sidebarFilter.trim().toLowerCase()))
         : sidebarItems;
     const activeSidebarItem = sidebarItems.find((item) => item.id === view);
-    const pageTitle = subViewNode ? `${subViewNode} · 性能详情` : (activeSidebarItem?.label || "总览看板");
+    const pageTitle = subViewNode ? `${subViewNode} · 性能详情` : (activeSidebarItem?.label || "总览");
 
     const handleViewChange = (newView) => {
         setView(newView);
@@ -1455,9 +1455,8 @@ const AppShell = () => {
             return (
                 <Box className="dashboard-home" sx={{ minHeight: "100%", display: "flex", flexDirection: "column", p: 3, gap: 2 }}>
                     <Paper className="dashboard-toolbar" sx={{ p: 1.5, display: "flex", alignItems: "center", gap: 2 }}>
-                        <span className="material-icons toolbar-icon" aria-hidden="true">tune</span>
                         <Box className="score-profile-group">
-                            <Typography variant="body2" color="text.secondary">评分体系</Typography>
+                            <Typography variant="body2" color="text.secondary">评分</Typography>
                             <Select
                                 className="score-profile-select"
                                 size="small"
@@ -1470,9 +1469,6 @@ const AppShell = () => {
                                 ))}
                             </Select>
                         </Box>
-                        <Typography variant="caption" color="text.secondary">
-                            直接展示 KernScope 计算的资源评分或健康评分
-                        </Typography>
                     </Paper>
                     <Box>
                         <TopStats clusterStats={data.cluster_stats} servers={data.servers} scoringProfile={scoringProfile} />
@@ -1489,22 +1485,8 @@ const AppShell = () => {
         }
 
         if (["rank", "trend", "anomaly", "net_detail", "disk_detail", "mem_detail", "softirq_detail"].includes(view)) {
-            const queryTitleMap = {
-            rank: "评分排行查询",
-                trend: "趋势聚合查询",
-                anomaly: "异常记录查询",
-                net_detail: "网络详情查询",
-                disk_detail: "磁盘详情查询",
-                mem_detail: "内存详情查询",
-                softirq_detail: "软中断详情查询"
-            };
-
             return (
                 <Box sx={{ p: 4, height: "100%", overflowY: "auto" }}>
-                    <Typography variant="h4" fontWeight="bold" mb={1}>{queryTitleMap[view]}</Typography>
-                    <Typography variant="body2" color="text.secondary" mb={2}>
-                        当前视图调用后端查询接口并展示原始查询结果
-                    </Typography>
 
                     <QueryControlBar
                         servers={data.servers}
@@ -1668,7 +1650,7 @@ const AppShell = () => {
                                         selected={view === item.id && !subViewNode}
                                         onClick={() => handleViewChange(item.id)}
                                     >
-                                        <ListItemIcon className="nav-action-icon"><span className="material-icons nav-icon" aria-hidden="true">{item.icon}</span></ListItemIcon>
+                                        <ListItemIcon className="nav-action-icon">{item.dot ? <span className={`nav-status-dot dot-${item.dot}`} aria-hidden="true" /> : <span className="material-icons nav-icon" aria-hidden="true">{item.icon}</span>}</ListItemIcon>
                                         <ListItemText primary={item.label} />
                                     </ListItemButton>
                                 </ListItem>
@@ -1688,9 +1670,8 @@ const AppShell = () => {
                 <Box component="main" className="dashboard-main">
                     <Box component="header" className="topbar">
                         <Box className="topbar-title">
-                            <span className="material-icons topbar-page-icon" aria-hidden="true">{activeSidebarItem?.icon || "monitoring"}</span>
                             <Box>
-                                <Typography className="topbar-eyebrow">KernScope · 监控中心</Typography>
+                                <Typography className="topbar-eyebrow">实时性能监控</Typography>
                                 <Typography className="topbar-heading">{pageTitle}</Typography>
                             </Box>
                         </Box>

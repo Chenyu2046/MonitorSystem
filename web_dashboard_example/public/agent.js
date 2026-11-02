@@ -48,7 +48,7 @@ const AgentPanel = ({ serverName, servers, onServerChange }) => {
                             例如：这台主机最近 30 分钟是否异常？有没有可以支持的根因证据？
                         </Typography>}
                         {messages.map((m, i) => (
-                            <Paper key={i} sx={{p: 2, bgcolor: m.role === "user" ? "rgba(84,185,154,.16)" : "#191a19",
+                            <Paper key={i} sx={{p: 2, bgcolor: m.role === "user" ? "#292c2a" : "#191a19",
                                 whiteSpace: "pre-wrap", overflowWrap: "anywhere"}}>
                                 <Typography variant="caption" color="text.secondary">
                                     {m.role === "user" ? "提问" : m.role === "error" ? "错误" : "AI 分析"}
