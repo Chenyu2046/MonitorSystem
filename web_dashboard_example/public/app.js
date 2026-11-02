@@ -294,6 +294,10 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
         net: initialMetric ? initialMetric === "net" : false
     }));
 
+    const [chartMode, setChartMode] = React.useState("focus");
+    const [focusMetric, setFocusMetric] = React.useState(initialMetric || "cpu");
+    const [scaleMode, setScaleMode] = React.useState("adaptive");
+
     const [selectedNodes, setSelectedNodes] = React.useState(() => {
         const initial = {};
         if (servers.length > 0) {
@@ -336,32 +340,74 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
         setSelectedNodes(next);
     };
 
-    // Merge samples by actual timestamp instead of positional index.
+    const metricNames = { cpu: "CPU", mem: "内存", disk: "磁盘", net: "网络" };
+    const metricColors = { cpu: "#d7b56d", mem: "#79a7cf", disk: "#a391c9", net: "#cc8fa4" };
+    const visibleMetrics = chartMode === "focus"
+        ? { cpu: focusMetric === "cpu", mem: focusMetric === "mem", disk: focusMetric === "disk", net: focusMetric === "net" }
+        : selectedMetrics;
+
+    // Align samples by actual timestamp, not array position. Do not convert missing values to zero.
     const chartData = React.useMemo(() => {
         const timeline = new Map();
-        servers.forEach(server => {
+        servers.filter(server => selectedNodes[server.server_name]).forEach(server => {
             (nodeHistories[server.server_name] || []).forEach(point => {
                 if (!Number.isFinite(point.timestampMs) || !point.timestampMs) return;
                 const row = timeline.get(point.timestampMs) || { time: point.time, timestampMs: point.timestampMs };
-                if (selectedMetrics.cpu) row[`${server.server_name}_cpu`] = point.cpu;
-                if (selectedMetrics.mem) row[`${server.server_name}_mem`] = point.mem;
-                if (selectedMetrics.disk) row[`${server.server_name}_disk`] = point.disk;
-                if (selectedMetrics.net) {
+                for (const metric of ["cpu", "mem", "disk"]) {
+                    if (!visibleMetrics[metric]) continue;
+                    const value = Number(point[metric]);
+                    row[server.server_name + "_" + metric] =
+                        point[metric] == null || !Number.isFinite(value) ? null : value;
+                }
+                if (visibleMetrics.net) {
                     const rx = Number(point.net_in), tx = Number(point.net_out);
-                    row[`${server.server_name}_net`] =
-                        Number.isFinite(rx) && Number.isFinite(tx) ? (rx + tx) / 1024 : null;
+                    row[server.server_name + "_net"] =
+                        point.net_in != null && point.net_out != null && Number.isFinite(rx) && Number.isFinite(tx)
+                            ? (rx + tx) / 1024 : null;
                 }
                 timeline.set(point.timestampMs, row);
             });
         });
-        return [...timeline.values()].sort((x,y) => x.timestampMs - y.timestampMs).slice(-120);
-    }, [servers, nodeHistories, selectedMetrics]);
+        return [...timeline.values()].sort((x, y) => x.timestampMs - y.timestampMs).slice(-120);
+    }, [servers, nodeHistories, selectedNodes, chartMode, focusMetric, selectedMetrics]);
+
+    const focusDomain = React.useMemo(() => {
+        if (scaleMode === "standard" && focusMetric !== "net") return [0, 100];
+        const chosenHosts = servers.filter(server => selectedNodes[server.server_name]);
+        const values = chartData.flatMap(row => chosenHosts.map(server =>
+            row[server.server_name + "_" + focusMetric]))
+            .filter(v => typeof v === "number" && Number.isFinite(v));
+        if (!values.length) return [0, focusMetric === "net" ? 1 : 5];
+        const min = Math.min(...values), max = Math.max(...values), spread = max - min;
+        if (focusMetric === "net") {
+            const pad = Math.max(spread * 0.2, max * 0.08, 0.005);
+            return [Math.max(0, min - pad), max + pad];
+        }
+        const pad = Math.max(spread * 0.25, 0.35);
+        let low = Math.max(0, Math.floor((min - pad) * 10) / 10);
+        let high = Math.min(100, Math.ceil((max + pad) * 10) / 10);
+        if (high - low < 1) {
+            low = Math.max(0, Math.floor((min - 0.5) * 10) / 10);
+            high = Math.min(100, Math.max(low + 1, Math.ceil((max + 0.5) * 10) / 10));
+        }
+        return [low, high];
+    }, [chartData, servers, selectedNodes, focusMetric, scaleMode]);
+
+    const anySelectedHost = servers.some(server => selectedNodes[server.server_name]);
+    const hasVisibleMetric = Object.values(visibleMetrics).some(Boolean);
+    const showPercentAxis = chartMode === "focus" ? focusMetric !== "net"
+        : visibleMetrics.cpu || visibleMetrics.mem || visibleMetrics.disk;
+    const showNetAxis = chartMode === "focus" ? focusMetric === "net" : visibleMetrics.net;
+    const comparePrimary = selectedMetrics[focusMetric] ? focusMetric :
+        ["cpu", "mem", "disk", "net"].find(metric => selectedMetrics[metric]);
+    const percentAxisPrecision = chartMode === "focus" && focusDomain[1] - focusDomain[0] < 5 ? 1 : 0;
 
     const colors = ["#d7b56d", "#79a7cf", "#a391c9", "#cc8fa4", "#8fb3bb", "#c0a079", "#a5a9b8", "#b5a5cc"];
     const tooltipFormatter = (value, name, item) => {
         const unit = getMetricUnitByDataKey(item?.dataKey || "");
         if (typeof value === "number") {
-            return [`${value.toFixed(2)}${unit ? ` ${unit}` : ""}`, name];
+            const precision = Math.abs(value) < 0.01 ? 4 : Math.abs(value) < 1 ? 3 : 2;
+            return [value.toFixed(precision) + (unit ? " " + unit : ""), name];
         }
         return [value, name];
     };
@@ -388,91 +434,116 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
                 </Box>
 
                 {!fixedMode && (
-                    <Grid container spacing={2} alignItems="center">
-                        <Grid item xs={12} lg={5}>
-                            <Typography variant="caption" color="text.secondary" gutterBottom>1. 监控指标</Typography>
-                            <FormGroup row>
-                                <FormControlLabel control={<Checkbox checked={selectedMetrics.cpu} onChange={() => handleMetricChange("cpu")} size="small" />} label="CPU" />
-                                <FormControlLabel control={<Checkbox checked={selectedMetrics.mem} onChange={() => handleMetricChange("mem")} size="small" />} label="内存" />
-                                <FormControlLabel control={<Checkbox checked={selectedMetrics.disk} onChange={() => handleMetricChange("disk")} size="small" />} label="磁盘" />
-                                <FormControlLabel control={<Checkbox checked={selectedMetrics.net} onChange={() => handleMetricChange("net")} size="small" />} label="网络" />
-                            </FormGroup>
-                        </Grid>
-                        <Grid item xs={12} lg={7}>
-                            <Box display="flex" justifyContent="space-between" alignItems="center">
-                                <Typography variant="caption" color="text.secondary">2. 节点选择</Typography>
-                                <Box>
-                                    <Button size="small" onClick={() => selectAllNodes(true)}>全选</Button>
-                                    <Button size="small" onClick={() => selectAllNodes(false)}>全不选</Button>
-                                </Box>
-                            </Box>
-                            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, maxHeight: 60, overflowY: "auto" }}>
-                                {servers.map((s) => (
-                                    <Chip 
-                                        key={s.server_name}
-                                        label={s.server_name}
-                                        onClick={() => handleNodeChange(s.server_name)}
-                                        color={selectedNodes[s.server_name] ? "primary" : "default"}
-                                        variant={selectedNodes[s.server_name] ? "filled" : "outlined"}
-                                        size="small"
-                                        icon={selectedNodes[s.server_name] ? <span className="material-icons" aria-hidden="true">check</span> : undefined}
-                                    />
+                    <Box className="trend-toolbar">
+                        <Box className="trend-focus-bar">
+                            <Typography variant="caption" className="trend-control-label">主指标</Typography>
+                            <Box className="trend-metric-tabs" role="group" aria-label="选择重点监控指标">
+                                {["cpu", "mem", "disk", "net"].map(metric => (
+                                    <Button key={metric} size="small"
+                                        className={"trend-metric-button " + (chartMode === "focus" && focusMetric === metric ? "is-active" : "")}
+                                        onClick={() => { setFocusMetric(metric); setChartMode("focus"); }}
+                                        aria-pressed={chartMode === "focus" && focusMetric === metric}
+                                        sx={{ "--metric-color": metricColors[metric] }}>
+                                        {metricNames[metric]}
+                                    </Button>
                                 ))}
                             </Box>
-                        </Grid>
-                    </Grid>
+                            <Button size="small" className={"trend-compare-button " + (chartMode === "compare" ? "is-active" : "")}
+                                onClick={() => setChartMode(mode => mode === "compare" ? "focus" : "compare")}
+                                aria-pressed={chartMode === "compare"}>
+                                {chartMode === "compare" ? "返回聚焦" : "多指标对比"}
+                            </Button>
+                            {chartMode === "focus" && focusMetric !== "net" && (
+                                <Box className="trend-scale-switch">
+                                    <Typography variant="caption">Y 轴</Typography>
+                                    <Select size="small" value={scaleMode} onChange={e => setScaleMode(e.target.value)}
+                                        inputProps={{ "aria-label": "纵轴显示范围" }}>
+                                        <MenuItem value="adaptive">自适应放大</MenuItem>
+                                        <MenuItem value="standard">标准 0–100%</MenuItem>
+                                    </Select>
+                                </Box>
+                            )}
+                            {chartMode === "focus" && (scaleMode === "adaptive" || focusMetric === "net") && (
+                                <Typography variant="caption" className="trend-scale-hint">Y 轴局部放大</Typography>
+                            )}
+                        </Box>
+                        {chartMode === "compare" && (
+                            <FormGroup row className="trend-compare-metrics">
+                                {["cpu", "mem", "disk", "net"].map(metric => (
+                                    <FormControlLabel key={metric}
+                                        control={<Checkbox checked={selectedMetrics[metric]}
+                                            onChange={() => handleMetricChange(metric)} size="small" />}
+                                        label={metricNames[metric]} />
+                                ))}
+                            </FormGroup>
+                        )}
+                        <Box className="trend-node-bar">
+                            <Typography variant="caption" className="trend-control-label">节点</Typography>
+                            <Box className="trend-node-list">
+                                {servers.map(server => (
+                                    <Chip key={server.server_name}
+                                        label={server.server_name}
+                                        onClick={() => handleNodeChange(server.server_name)}
+                                        color={selectedNodes[server.server_name] ? "primary" : "default"}
+                                        variant={selectedNodes[server.server_name] ? "filled" : "outlined"}
+                                        size="small"
+                                        icon={selectedNodes[server.server_name] ? <span className="material-icons" aria-hidden="true">check</span> : undefined} />
+                                ))}
+                            </Box>
+                            <Button size="small" onClick={() => selectAllNodes(true)}>全选</Button>
+                            <Button size="small" onClick={() => selectAllNodes(false)}>清空</Button>
+                        </Box>
+                    </Box>
                 )}
             </Box>
 
             {/* Chart Area */}
-            <Box sx={{ flexGrow: 1, p: 2, bgcolor: "transparent" }}>
-                {chartData.length === 0 ? (
+            <Box sx={{ flexGrow: 1, p: 2, minHeight: 300, bgcolor: "transparent" }}>
+                {!anySelectedHost || !hasVisibleMetric || !chartData.length ? (
                     <Box className="chart-empty">
-                        <span className="material-icons" aria-hidden="true">query_stats</span>
                         <Typography variant="body2" color="text.secondary">
-                            {servers.length ? "正在等待第一条实时采样数据" : "暂无在线节点数据"}
+                            {!anySelectedHost ? "请选择至少一个节点" :
+                                !hasVisibleMetric ? "请选择至少一个监控指标" :
+                                "正在等待有效采样数据"}
                         </Typography>
                     </Box>
                 ) : <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#32343a" />
+                        <CartesianGrid vertical={false} strokeDasharray="3 6" stroke="#32343a" />
                         <XAxis dataKey="time" stroke="#878c94" tickLine={false} axisLine={false} minTickGap={48} />
-                        {selectedMetrics.cpu || selectedMetrics.mem || selectedMetrics.disk ? (
-                            <YAxis yAxisId="percent" stroke="#878c94" domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
-                        ) : null}
-                        {selectedMetrics.net ? (
-                            <YAxis yAxisId="net" orientation="right" stroke="#878c94" domain={["auto", "auto"]} />
-                        ) : null}
-                        <Tooltip formatter={tooltipFormatter} contentStyle={{ backgroundColor: "rgba(23,24,27,.97)", border: "1px solid rgba(255,255,255,.075)", borderRadius: 8 }} />
+                        {showPercentAxis && (
+                            <YAxis yAxisId="percent" stroke="#878c94"
+                                domain={chartMode === "focus" ? focusDomain : [0, 100]}
+                                allowDataOverflow={chartMode === "focus"}
+                                tickFormatter={value => Number(value).toFixed(percentAxisPrecision) + "%"} />
+                        )}
+                        {showNetAxis && (
+                            <YAxis yAxisId="net" orientation={chartMode === "focus" ? "left" : "right"}
+                                domain={chartMode === "focus" ? focusDomain : [0, "auto"]}
+                                stroke="#878c94" allowDataOverflow={chartMode === "focus"}
+                                tickFormatter={value => Number(value).toFixed(value < 1 ? 2 : 1)} />
+                        )}
+                        <Tooltip formatter={tooltipFormatter}
+                            contentStyle={{ backgroundColor: "rgba(23,24,27,.97)", border: "1px solid rgba(255,255,255,.075)", borderRadius: 8 }} />
                         <Legend wrapperStyle={{ paddingTop: 10 }} />
-                        {servers.map((s, i) => {
-                            if (!selectedNodes[s.server_name]) return null;
-                            const lines = [];
-                            const metricOrder = ["cpu", "mem", "disk", "net"];
-                            metricOrder.forEach((metric, metricIndex) => {
-                                if (!selectedMetrics[metric]) return;
-                                const suffix = metric === "net" ? "net" : metric;
-                                const label = metric === "net" ? "NET(MB/s)" : `${metric.toUpperCase()}(%)`;
-                                const colorIndex = fixedMode ? 1 : (i * 4 + metricIndex) % colors.length;
-                                const dataKey = `${s.server_name}_${suffix}`;
-                                const yAxisId = metric === "net" ? "net" : "percent";
-                                lines.push(
-                                    <Line
-                                        key={`l_${s.server_name}_${suffix}`}
-                                        type="monotone"
-                                        dataKey={dataKey}
-                                        yAxisId={yAxisId}
-                                        stroke={colors[colorIndex]}
-                                        strokeOpacity={0.98}
-                                        name={`${s.server_name} ${label}`}
-                                        dot={chartData.length === 1 ? { r: 3, strokeWidth: 1 } : false}
-                                        strokeWidth={2}
-                                        activeDot={{ r: 3 }}
-                                        isAnimationActive={false}
-                                    />
-                                );
-                            });
-                            return lines;
+                        {servers.filter(server => selectedNodes[server.server_name]).flatMap((server, i) => {
+                            const multiHostFocus = chartMode === "focus" &&
+                                servers.filter(s => selectedNodes[s.server_name]).length > 1;
+                            return ["cpu", "mem", "disk", "net"].filter(metric => visibleMetrics[metric]).map(metric => (
+                                <Line key={server.server_name + "_" + metric}
+                                    type="monotone"
+                                    dataKey={server.server_name + "_" + metric}
+                                    yAxisId={metric === "net" ? "net" : "percent"}
+                                    stroke={multiHostFocus ? colors[i % colors.length] : metricColors[metric]}
+                                    strokeOpacity={chartMode === "focus" || metric === comparePrimary ? 0.98 : 0.28}
+                                    name={server.server_name + " " + metricNames[metric] +
+                                        (metric === "net" ? "(MB/s)" : "(%)")}
+                                    connectNulls={false}
+                                    dot={chartData.length === 1 ? { r: 3, strokeWidth: 1 } : false}
+                                    strokeWidth={chartMode === "focus" || metric === comparePrimary ? 3 : 1.5}
+                                    activeDot={{ r: 4 }}
+                                    isAnimationActive={false} />
+                            ));
                         })}
                     </LineChart>
                 </ResponsiveContainer>}
