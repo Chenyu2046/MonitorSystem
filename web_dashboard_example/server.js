@@ -4,7 +4,6 @@ const express = require('express');
 const path = require('path');
 const grpc = require('@grpc/grpc-js');
 const protoLoader = require('@grpc/proto-loader');
-const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
 
@@ -44,9 +43,19 @@ const QUERY_ENDPOINTS = [
 ];
 
 // Middleware
-app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
-app.use(express.json());
+app.use(express.json({limit: '32kb'}));
+// Dashboard API is same-origin. Reject foreign browser origins on write endpoints.
+app.use((req,res,next) => {
+    const origin=req.get('origin');
+    if(req.method !== 'GET' && origin) {
+        let originHost='';
+        try {originHost=new URL(origin).host;} catch(_) {}
+        if(originHost !== req.get('host'))
+            return res.status(403).json({error:'跨站请求已拒绝'});
+    }
+    next();
+});
 
 // gRPC Setup
 const PROTO_PATH = path.join(__dirname, '../proto/query_api.proto');
@@ -68,7 +77,7 @@ const queryService = new protoDescriptor.monitor.proto.QueryService(
 // Helper for gRPC calls using Promises
 const promisifyGrpc = (method, params = {}) => {
     return new Promise((resolve, reject) => {
-        queryService[method](params, (err, response) => {
+        queryService[method](params, {deadline: Date.now() + 8000}, (err, response) => {
             if (err) {
                 console.error(`gRPC Error [${method}]:`, err);
                 reject(err);
@@ -79,8 +88,10 @@ const promisifyGrpc = (method, params = {}) => {
     });
 };
 
-// Minimal read-only AI endpoint; key is kept on the server.
-app.post('/api/agent', require('./agent')(promisifyGrpc));
+// The BFF is the only entry to Manager and the LLM key.
+const agent = require('./agent');
+const alerts = require('./alerts')(promisifyGrpc, io, agent.analyzeIncident);
+app.post('/api/agent', agent(promisifyGrpc));
 
 const timestampToMillis = (timestamp) => {
     if (!timestamp) return 0;
@@ -356,6 +367,65 @@ app.get('/api/softirq-detail', async (req, res) => {
     }
 });
 
+
+// Historical Incident query and one-click analysis; all results originate in Manager.
+const clampInt = (raw, def, min, max) => Number.isFinite(Number(raw))
+    ? Math.min(max, Math.max(min, Math.floor(Number(raw)))) : def;
+const validIncidentId = raw => /^\d{1,20}$/.test(String(raw || ""));
+const getIncident = async (id, host) => {
+    const response = await promisifyGrpc('GetIncidentDetail', {incident_id: id});
+    if (!response.incident || (host && response.incident.server_name !== host))
+        throw Object.assign(new Error('未找到指定主机的故障事件'), {status: 404});
+    return response.incident;
+};
+const replyFailure = (res, error) => res.status(error.status || 502).json({error: error.message});
+
+app.get('/api/incidents', async (req, res) => {
+    try {
+        const hours = clampInt(req.query.hours, 24, 1, 168);
+        const page = clampInt(req.query.page, 1, 1, 1000);
+        const pageSize = clampInt(req.query.page_size, 30, 1, 50);
+        const end = Math.floor(Date.now() / 1000);
+        const response = await promisifyGrpc('GetIncidents', {
+            server_name: String(req.query.server_name || '').slice(0, 256),
+            time_range: {start_time: {seconds: end - hours * 3600}, end_time: {seconds: end}},
+            pagination: {page, page_size: pageSize}
+        });
+        res.json({incidents: (response.incidents || []).map(i => ({
+            id: i.id, server_name: i.server_name, severity: i.severity,
+            state: i.state, active: i.active, start_time_ms: i.start_time_ms,
+            end_time_ms: i.end_time_ms, root_causes: i.root_causes,
+            evidence_count: (i.evidence || []).length
+        })), total_count: response.total_count, page, page_size: pageSize});
+    } catch(error){replyFailure(res,error);}
+});
+
+app.get('/api/incidents/:id', async (req, res) => {
+    if(!validIncidentId(req.params.id))return res.status(400).json({error:'无效 Incident ID'});
+    try {
+        const incident=await getIncident(req.params.id,String(req.query.server_name || ''));
+        res.json({incident, report:alerts.report(incident)});
+    }catch(error){replyFailure(res,error);}
+});
+
+app.post('/api/incidents/:id/analyze', async (req, res) => {
+    if(!validIncidentId(req.params.id))return res.status(400).json({error:'无效 Incident ID'});
+    try {
+        const incident=await getIncident(req.params.id,String(req.body?.server_name || ''));
+        const report=await alerts.analyze(incident,req.body?.refresh===true);
+        res.json({report});
+    }catch(error){replyFailure(res,error);}
+});
+
+app.get('/api/alerts', (req, res) => {
+    res.json({alerts: alerts.list(String(req.query.server_name || '')), unread_count: alerts.unread()});
+});
+app.post('/api/alerts/ack', (req, res) => {
+    const key=String(req.body?.key || '');
+    if(!alerts.acknowledge(key))return res.status(404).json({error:'告警不存在或已过期'});
+    res.json({ok:true,unread_count:alerts.unread()});
+});
+
 // Get all exposed query endpoints
 app.get('/api/query-endpoints', (req, res) => {
     res.json({
@@ -375,6 +445,9 @@ setInterval(async () => {
         // Suppress logs for polling errors to avoid spam if manager is down
     }
 }, 2000);
+
+// Begin listening for new incident episodes, emitting deduplicated socket alerts.
+alerts.start();
 
 // Default route
 app.get('*', (req, res) => {

@@ -1,10 +1,23 @@
 // Isolated AI drawer: no new frontend build system required.
-const AgentPanel = ({ serverName, servers, onServerChange }) => {
+const AgentPanel = ({ serverName, servers, onServerChange, seed }) => {
     const [open, setOpen] = React.useState(false);
     const [question, setQuestion] = React.useState("");
     const [messages, setMessages] = React.useState([]);
     const [loading, setLoading] = React.useState(false);
     const { Drawer, Box, Button, Typography, Select, MenuItem, TextField, CircularProgress, Paper } = MaterialUI;
+    const hostRef = React.useRef(serverName);
+    React.useEffect(() => {
+        if (hostRef.current !== serverName) {
+            hostRef.current = serverName;
+            setMessages([]);
+        }
+    }, [serverName]);
+    React.useEffect(() => {
+        if (!seed || seed.host !== serverName) return;
+        setMessages([]);
+        setQuestion(seed.question);
+        setOpen(true);
+    }, [seed]);
 
     const send = async () => {
         const content = question.trim();
@@ -13,10 +26,18 @@ const AgentPanel = ({ serverName, servers, onServerChange }) => {
         setQuestion("");
         setLoading(true);
         try {
-            const response = await axios.post("/api/agent", { question: content, server_name: serverName });
-            setMessages(prev => [...prev, { role: "assistant", text: response.data.answer }]);
+            const history = messages.filter(m => m.role === "user" || m.role === "assistant")
+                .slice(-8).map(m => ({role: m.role, content: m.text}));
+            const sentHost = serverName;
+            const response = await axios.post("/api/agent", {
+                question: content, server_name: sentHost, history
+            });
+            if (hostRef.current !== sentHost) return;
+            setMessages(prev => [...prev, { role: "assistant", text: response.data.answer,
+                tools: response.data.tools_used || [] }]);
         } catch (err) {
-            setMessages(prev => [...prev, { role: "error", text: err.response?.data?.error || err.message || "分析失败" }]);
+            if (hostRef.current === serverName)
+                setMessages(prev => [...prev, { role: "error", text: err.response?.data?.error || err.message || "分析失败" }]);
         } finally {
             setLoading(false);
         }
@@ -53,7 +74,10 @@ const AgentPanel = ({ serverName, servers, onServerChange }) => {
                                 <Typography variant="caption" color="text.secondary">
                                     {m.role === "user" ? "提问" : m.role === "error" ? "错误" : "AI 分析"}
                                 </Typography>
-                                <Typography variant="body2">{m.text}</Typography>
+                                <Typography variant="body2" sx={{whiteSpace:"pre-wrap"}}>{m.text}</Typography>
+                                {m.tools?.length > 0 && <Typography variant="caption" color="text.secondary">
+                                    数据查询：{[...new Set(m.tools)].join(" · ")}
+                                </Typography>}
                             </Paper>
                         ))}
                         {loading && <Box display="flex" gap={1} alignItems="center">

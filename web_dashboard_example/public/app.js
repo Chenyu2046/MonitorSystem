@@ -1347,7 +1347,9 @@ const EndpointView = ({ endpointData }) => {
 // --- Main App Shell ---
 
 const AppShell = () => {
-    const [view, setView] = React.useState("dashboard"); // dashboard | endpoints | rank | trend | anomaly | net_detail | disk_detail | mem_detail | softirq_detail | cpu | mem | disk | net
+    const [view, setView] = React.useState("dashboard");
+    const [focusedIncident, setFocusedIncident] = React.useState(null);
+    const [agentSeed, setAgentSeed] = React.useState(null); // dashboard | endpoints | rank | trend | anomaly | net_detail | disk_detail | mem_detail | softirq_detail | cpu | mem | disk | net
     const [subViewNode, setSubViewNode] = React.useState(null); // If set, shows chart for this node inside the current view
     
     const [data, setData] = React.useState({ servers: [], cluster_stats: {} });
@@ -1568,6 +1570,7 @@ const AppShell = () => {
         { id: "header_query", label: "数据查询" },
         { id: "rank", label: "评分趋势", icon: "show_chart" },
         { id: "trend", label: "趋势聚合", icon: "show_chart" },
+        { id: "diagnosis", label: "智能诊断", icon: "psychology_alt" },
         { id: "anomaly", label: "异常查询", icon: "warning_amber" },
         { id: "net_detail", label: "网络详情", icon: "lan" },
         { id: "disk_detail", label: "磁盘详情", icon: "storage" },
@@ -1617,6 +1620,19 @@ const AppShell = () => {
              );
         }
 
+        if (view === "diagnosis") {
+            return <window.KernDiagnosisCenter
+                servers={data.servers}
+                selectedServer={selectedQueryServer}
+                onServerChange={setSelectedQueryServer}
+                focusedIncident={focusedIncident}
+                onAsk={incident => {
+                    setSelectedQueryServer(incident.server_name);
+                    setAgentSeed({id: String(incident.id), host: incident.server_name,
+                        question: "请结合 Incident #" + incident.id + " 的实际证据进一步解释根因和排查步骤。"});
+                }}
+            />;
+        }
         if (view === "dashboard") {
             return (
                 <Box className="dashboard-home" sx={{ minHeight: "100%", display: "flex", flexDirection: "column", p: 3, gap: 2 }}>
@@ -1855,6 +1871,12 @@ const AppShell = () => {
                             </Box>
                         </Box>
                         <Box className="topbar-meta">
+                            <window.KernAlertBell onOpen={record => {
+                                setSelectedQueryServer(record.server_name);
+                                setFocusedIncident({id: String(record.incident_id), nonce: Date.now()});
+                                setSubViewNode(null);
+                                setView("diagnosis");
+                            }} />
                             <span className={`live-indicator ${socketConnected ? "is-connected" : ""}`} />
                             <Typography className="live-label">{socketConnected ? "实时同步" : "连接中断"}</Typography>
                             <Typography className="topbar-date">{new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" })}</Typography>
@@ -1863,7 +1885,7 @@ const AppShell = () => {
                     <Box component="section" className="page-stage">{renderContent()}</Box>
                 </Box>
             </Box>
-            <window.AgentPanel serverName={selectedQueryServer}
+            <window.AgentPanel serverName={selectedQueryServer} seed={agentSeed}
                 servers={data.servers} onServerChange={setSelectedQueryServer} />
         </ThemeProvider>
     );
