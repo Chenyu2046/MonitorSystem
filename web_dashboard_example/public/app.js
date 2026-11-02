@@ -4,7 +4,7 @@
 const {
     createTheme, ThemeProvider, CssBaseline, AppBar, Toolbar, Typography, Container, Grid, Paper, Box,
     Card, CardContent, Chip, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
-    IconButton, LinearProgress, CircularProgress, Button, Dialog, DialogTitle, DialogContent, DialogActions,
+    IconButton, LinearProgress, Button, Dialog, DialogTitle, DialogContent, DialogActions,
     List, ListItem, ListItemButton, ListItemIcon, ListItemText, Divider, Drawer, Checkbox, FormControlLabel, FormGroup,
     MenuItem, Select, TextField, InputAdornment
 } = MaterialUI;
@@ -653,96 +653,102 @@ const QueryTableView = ({ title, subtitle, rows, loading, error, emptyText }) =>
 };
 
 
-// Context beneath a short ranking table: reuse existing QueryTrend and latest score data.
-const RankContextPanel = ({ selectedServer, servers, rankRows, trendRows, loading, error, scoringProfile, hours }) => {
-    const host = (rankRows || []).find(row => row.server_name === selectedServer)
-        || (servers || []).find(row => row.server_name === selectedServer);
-    const points = React.useMemo(() => (trendRows || []).map(record => {
-        const ms = Number(record.timestamp?.seconds || 0) * 1000;
-        const resource = Number(record.resource_score ?? record.score);
-        const health = Number(record.health_score);
-        return {
-            ms,
-            time: ms ? new Date(ms).toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" }) : "",
-            resource: Number.isFinite(resource) ? resource : null,
-            health: record.health_valid && Number.isFinite(health) ? health : null
-        };
-    }).filter(p => p.ms > 0).sort((a, b) => a.ms - b.ms), [trendRows]);
-
-    const fmt = (value, suffix = "") => {
-        if (value === null || value === undefined || value === "") return "—";
-        const n = Number(value);
-        return Number.isFinite(n) ? n.toFixed(1) + suffix : "—";
+// Full-width score trend with node selection built into the chart header.
+const ScoreTrendView = ({ servers, selectedServer, onServerChange, hours, onHoursChange, rows, loading, error, onRefresh }) => {
+    const formatTick = (time) => {
+        const date = new Date(Number(time));
+        return hours >= 24
+            ? date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
+            : date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
     };
-    const signals = Array.isArray(host?.top_signals) ? host.top_signals : [];
-    const isOnline = host && (host.status === "ONLINE" || host.status === 0 || host.status === "0");
-    const scoreLabel = scoringProfile === "HEALTH_SCORE" ? "当前健康分" : "当前资源分";
-    const currentScore = scoringProfile === "HEALTH_SCORE"
-        ? (host?.health_valid ? host.health_score : null)
-        : (host?.resource_score ?? host?.score);
-
-    if (!selectedServer || !host) {
-        return <Box className="rank-context-empty">选择一台主机后，可以查看它的评分趋势与诊断信号。</Box>;
-    }
+    const points = React.useMemo(() => (rows || [])
+        .map(record => {
+            const seconds = Number(record.timestamp?.seconds);
+            if (!Number.isFinite(seconds) || seconds <= 0) return null;
+            const resource = Number(record.resource_score ?? record.score);
+            const health = Number(record.health_score);
+            return {
+                timestampMs: seconds * 1000,
+                resource: Number.isFinite(resource) ? resource : null,
+                health: record.health_valid && Number.isFinite(health) ? health : null
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.timestampMs - b.timestampMs), [rows]);
 
     return (
-        <Box className="rank-context">
-            <Box className="rank-context-heading">
-                <Typography variant="subtitle1">节点详情</Typography>
-                <Typography variant="caption" color="text.secondary">{selectedServer} · 排行按最新快照，趋势按所选时间窗口</Typography>
-            </Box>
-            <Box className="rank-context-grid">
-                <Paper className="rank-context-chart">
-                    <Box className="rank-panel-head">
-                        <Typography variant="subtitle2">评分趋势</Typography>
-                        <Typography variant="caption" color="text.secondary">最近 {hours} 小时</Typography>
+        <Box className="score-trend-page">
+            <Card className="score-trend-main">
+                <Box className="score-trend-header">
+                    <Box className="score-trend-heading">
+                        <Typography variant="h6">资源与健康评分</Typography>
+                        <Typography variant="body2">0–100 分 · {hours} 小时历史趋势</Typography>
                     </Box>
-                    {loading ? (
-                        <Box className="rank-panel-placeholder"><CircularProgress size={22} /> 正在读取历史评分</Box>
+                    <Box className="score-trend-controls">
+                        <Box className="score-trend-field">
+                            <Typography component="label" variant="caption">节点</Typography>
+                            <Select size="small" value={selectedServer || ""} displayEmpty
+                                onChange={event => onServerChange(event.target.value)}
+                                inputProps={{ "aria-label": "选择监控节点" }}>
+                                {!selectedServer && <MenuItem value="" disabled>请选择节点</MenuItem>}
+                                {servers.map(server =>
+                                    <MenuItem value={server.server_name} key={server.server_name}>
+                                        {server.server_name}
+                                    </MenuItem>
+                                )}
+                            </Select>
+                        </Box>
+                        <Box className="score-trend-field score-trend-range">
+                            <Typography component="label" variant="caption">时间</Typography>
+                            <Select size="small" value={hours} onChange={event => onHoursChange(Number(event.target.value))}
+                                inputProps={{ "aria-label": "选择历史时间窗口" }}>
+                                <MenuItem value={1}>1 小时</MenuItem>
+                                <MenuItem value={6}>6 小时</MenuItem>
+                                <MenuItem value={24}>24 小时</MenuItem>
+                                <MenuItem value={72}>72 小时</MenuItem>
+                            </Select>
+                        </Box>
+                        <Button variant="outlined" size="small" disabled={!selectedServer || loading}
+                            onClick={onRefresh} className="score-trend-refresh">刷新</Button>
+                    </Box>
+                </Box>
+                <Box className="score-trend-body">
+                    {loading && <LinearProgress className="score-trend-progress" />}
+                    {!selectedServer ? (
+                        <Box className="score-trend-empty">选择节点后查看历史评分。</Box>
+                    ) : loading ? (
+                        <Box className="score-trend-empty">正在读取所选节点的历史评分…</Box>
                     ) : error ? (
-                        <Box className="rank-panel-placeholder">趋势读取失败：{error}</Box>
-                    ) : points.length ? (
-                        <Box className="rank-chart-canvas">
+                        <Box className="score-trend-empty">趋势查询失败：{error}</Box>
+                    ) : !points.length ? (
+                        <Box className="score-trend-empty">当前时间窗口没有历史评分数据。</Box>
+                    ) : (
+                        <Box className="score-trend-canvas">
                             <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={points}>
-                                    <CartesianGrid vertical={false} stroke="rgba(255,255,255,.055)" strokeDasharray="3 5" />
-                                    <XAxis dataKey="time" stroke="#858994" tickLine={false} axisLine={false} minTickGap={36} />
-                                    <YAxis domain={[0, 100]} stroke="#858994" tickLine={false} axisLine={false} width={34} />
-                                    <Tooltip contentStyle={{ backgroundColor: "#202227", border: "1px solid rgba(255,255,255,.09)", borderRadius: 8 }} formatter={(v, name) => [fmt(v, " 分"), name]} />
-                                    <Legend verticalAlign="bottom" wrapperStyle={{ fontSize: 12 }} />
-                                    <Line type="linear" name="资源评分" dataKey="resource" connectNulls={false} stroke="#d7b56d" strokeWidth={2} dot={false} isAnimationActive={false} />
-                                    <Line type="linear" name="健康评分" dataKey="health" connectNulls={false} stroke="#79a7cf" strokeWidth={2} dot={false} isAnimationActive={false} />
+                                <LineChart data={points} margin={{ top: 16, right: 28, left: 2, bottom: 14 }}>
+                                    <CartesianGrid vertical={false} stroke="rgba(255,255,255,.06)" strokeDasharray="3 6" />
+                                    <XAxis type="number" dataKey="timestampMs" domain={["dataMin", "dataMax"]}
+                                        tickFormatter={formatTick} tickLine={false} axisLine={false}
+                                        stroke="#9397a1" fontSize={12} minTickGap={45} />
+                                    <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]}
+                                        tickLine={false} axisLine={false} stroke="#9397a1"
+                                        fontSize={12} width={38} />
+                                    <Tooltip labelFormatter={formatTick}
+                                        formatter={(value, name) => [Number(value).toFixed(1) + " 分", name]}
+                                        contentStyle={{ backgroundColor: "#202227", border: "1px solid rgba(255,255,255,.08)", borderRadius: 9 }} />
+                                    <Legend verticalAlign="bottom" height={40} iconType="plainline" wrapperStyle={{ fontSize: 13, paddingTop: 12 }} />
+                                    <Line name="资源评分" type="linear" dataKey="resource" connectNulls={false}
+                                        stroke="#d7b56d" strokeWidth={3} dot={false}
+                                        activeDot={{ r: 5, strokeWidth: 0 }} isAnimationActive={false} />
+                                    <Line name="健康评分" type="linear" dataKey="health" connectNulls={false}
+                                        stroke="#79a7cf" strokeWidth={3} dot={false}
+                                        activeDot={{ r: 5, strokeWidth: 0 }} isAnimationActive={false} />
                                 </LineChart>
                             </ResponsiveContainer>
                         </Box>
-                    ) : (
-                        <Box className="rank-panel-placeholder">当前时间窗口暂无历史评分记录，可调整时间窗口后刷新。</Box>
                     )}
-                </Paper>
-                <Paper className="rank-context-summary">
-                    <Box className="rank-panel-head">
-                        <Typography variant="subtitle2">当前快照</Typography>
-                        <Typography variant="caption" className={isOnline ? "rank-online" : "rank-offline"}>{isOnline ? "在线" : "离线"}</Typography>
-                    </Box>
-                    <Box className="rank-primary-score">
-                        <Typography variant="h4">{fmt(currentScore)}</Typography>
-                        <Typography variant="caption">{scoreLabel} / 100</Typography>
-                    </Box>
-                    <Box className="rank-metrics">
-                        <Box><span>CPU</span><strong>{fmt(host.cpu_percent, "%")}</strong></Box>
-                        <Box><span>内存</span><strong>{fmt(host.mem_used_percent, "%")}</strong></Box>
-                        <Box><span>磁盘</span><strong>{fmt(host.disk_util_percent, "%")}</strong></Box>
-                    </Box>
-                    <Box className="rank-signals">
-                        <Typography variant="caption" color="text.secondary">近期诊断信号</Typography>
-                        {signals.length ? (
-                            <Box className="rank-signal-content"><SignalDetails value={signals} /></Box>
-                        ) : (
-                            <Typography variant="body2" color="text.secondary">当前快照暂无诊断信号</Typography>
-                        )}
-                    </Box>
-                </Paper>
-            </Box>
+                </Box>
+            </Card>
         </Box>
     );
 };
@@ -1385,14 +1391,6 @@ const AppShell = () => {
         setQueryError(prev => ({ ...prev, [targetView]: "" }));
 
         try {
-            if (targetView === "rank") {
-                const res = await axios.get("/api/rank", {
-                    params: { page: 1, page_size: 50, order: "DESC", scoring_profile: scoringProfile }
-                });
-                setQueryRows(prev => ({ ...prev, rank: res.data.servers || [] }));
-                return;
-            }
-
             if (targetView === "trend") {
                 const res = await axios.get(`/api/trend/${encodeURIComponent(selectedQueryServer)}`, {
                     params: {
@@ -1476,12 +1474,11 @@ const AppShell = () => {
     }, [queryHours, selectedQueryServer]);
 
     React.useEffect(() => {
-        const queryViews = ["rank", "trend", "anomaly", "net_detail", "disk_detail", "mem_detail", "softirq_detail"];
-        if (queryViews.includes(view)) {
-            loadQueryViewData(view);
-        }
+        const queryViews = ["trend", "anomaly", "net_detail", "disk_detail", "mem_detail", "softirq_detail"];
         if (view === "rank" && selectedQueryServer) {
             loadQueryViewData("trend");
+        } else if (queryViews.includes(view)) {
+            loadQueryViewData(view);
         }
     }, [view, selectedQueryServer, loadQueryViewData]);
 
@@ -1498,7 +1495,7 @@ const AppShell = () => {
         { id: "endpoints", label: "查询接口", icon: "account_tree" },
         { divider: true },
         { id: "header_query", label: "数据查询" },
-        { id: "rank", label: "评分排行", icon: "leaderboard" },
+        { id: "rank", label: "评分趋势", icon: "show_chart" },
         { id: "trend", label: "趋势聚合", icon: "show_chart" },
         { id: "anomaly", label: "异常查询", icon: "warning_amber" },
         { id: "net_detail", label: "网络详情", icon: "lan" },
@@ -1582,10 +1579,25 @@ const AppShell = () => {
             return <EndpointView endpointData={queryEndpointData} />;
         }
 
-        if (["rank", "trend", "anomaly", "net_detail", "disk_detail", "mem_detail", "softirq_detail"].includes(view)) {
+        if (view === "rank") {
+            return (
+                <ScoreTrendView
+                    servers={data.servers}
+                    selectedServer={selectedQueryServer}
+                    onServerChange={setSelectedQueryServer}
+                    hours={queryHours}
+                    onHoursChange={setQueryHours}
+                    rows={queryRows.trend}
+                    loading={!!queryLoading.trend}
+                    error={queryError.trend}
+                    onRefresh={() => loadQueryViewData("trend")}
+                />
+            );
+        }
+
+        if (["trend", "anomaly", "net_detail", "disk_detail", "mem_detail", "softirq_detail"].includes(view)) {
             return (
                 <Box sx={{ p: 4, height: "100%", overflowY: "auto" }}>
-
                     <QueryControlBar
                         servers={data.servers}
                         selectedServer={selectedQueryServer}
@@ -1602,8 +1614,7 @@ const AppShell = () => {
                         onAnomalyThresholdChange={handleAnomalyThresholdChange}
                         onRefresh={() => loadQueryViewData(view)}
                     />
-
-                    <Box className={view === "rank" ? "rank-table-wrap" : "query-table-wrap"}>
+                    <Box className="query-table-wrap">
                         <QueryTableView
                             title=""
                             rows={queryRows[view] || []}
@@ -1612,18 +1623,6 @@ const AppShell = () => {
                             emptyText="该条件下暂无返回记录"
                         />
                     </Box>
-                    {view === "rank" && (queryRows.rank || []).length > 0 && (
-                        <RankContextPanel
-                            selectedServer={selectedQueryServer}
-                            servers={data.servers}
-                            rankRows={queryRows.rank}
-                            trendRows={queryRows.trend}
-                            loading={!!queryLoading.trend}
-                            error={queryError.trend}
-                            scoringProfile={scoringProfile}
-                            hours={queryHours}
-                        />
-                    )}
                 </Box>
             );
         }

@@ -264,49 +264,127 @@ button, input, textarea, select { font: inherit; }
   *,*::before,*::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
 
-
-/* Ranking page: use remaining workspace for context, not filler cards. */
-.rank-table-wrap > .MuiBox-root { padding: 0 !important; height: auto !important; overflow: visible !important; }
-.rank-context { margin-top: 28px; }
-.rank-context-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; margin: 0 0 14px; }
-.rank-context-heading .MuiTypography-subtitle1 { color: var(--text); font-size: 15px; font-weight: 600; }
-.rank-context-heading .MuiTypography-caption { color: var(--quiet); font-size: 11px; }
-.rank-context-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, 1fr); align-items: stretch; gap: 16px; }
-.rank-context-chart.MuiPaper-root,
-.rank-context-summary.MuiPaper-root {
-  min-width: 0; padding: 20px; border: 1px solid rgba(255,255,255,.032);
-  border-radius: 11px; background: linear-gradient(145deg, rgba(255,255,255,.032), rgba(255,255,255,.005) 70%), rgba(23,24,27,.91);
+/* Score trend: one dominant data visual, with integrated node/time controls. */
+.score-trend-page.MuiBox-root {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  padding: 26px 32px 32px;
 }
-.rank-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
-.rank-panel-head .MuiTypography-subtitle2 { font-size: 13px; font-weight: 600; color: var(--text); }
-.rank-panel-head .MuiTypography-caption { font-size: 11px; color: var(--quiet); }
-.rank-chart-canvas { width: 100%; height: 235px; }
-.rank-panel-placeholder,
-.rank-context-empty {
-  display: flex; align-items: center; justify-content: center; gap: 10px;
-  min-height: 220px; padding: 26px; text-align: center; color: var(--muted); font-size: 12px;
+.score-trend-main.MuiCard-root {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: clamp(550px, calc(100dvh - 135px), 1000px);
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.035);
+  border-radius: 13px;
+  background: linear-gradient(155deg, rgba(255,255,255,.035), rgba(255,255,255,.003) 72%), rgba(23,24,27,.93);
 }
-.rank-context-empty { min-height: 120px; border-top: 1px solid var(--line-soft); }
-.rank-primary-score { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 22px 0; }
-.rank-primary-score .MuiTypography-h4 { font-variant-numeric: tabular-nums; color: var(--text); font-size: 31px; font-weight: 600; }
-.rank-primary-score .MuiTypography-caption { color: var(--muted); font-size: 11px; }
-.rank-metrics { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; padding: 16px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
-.rank-metrics > .MuiBox-root { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-.rank-metrics span { color: var(--quiet); font-size: 11px; }
-.rank-metrics strong { font-size: 17px; font-weight: 500; color: var(--text); font-variant-numeric: tabular-nums; }
-.rank-signals { margin-top: 17px; }
-.rank-signals > .MuiTypography-root { display: block; margin-bottom: 9px; }
-.rank-signal-content .signal-details { min-width: 0; max-width: 100%; }
-.rank-signal-content .signal-details summary { border-color: var(--line); color: var(--muted); }
-.rank-online { color: #70bd91 !important; }
-.rank-offline { color: var(--quiet) !important; }
-
-@media (max-width: 1120px) {
-  .rank-context-grid { grid-template-columns: minmax(0,1fr); }
+.score-trend-header.MuiBox-root {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 22px;
+  padding: 24px 27px 22px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.score-trend-heading .MuiTypography-h6 {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.score-trend-heading .MuiTypography-body2 {
+  color: var(--quiet);
+  font-size: 12px;
+  margin-top: 5px;
+}
+.score-trend-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+}
+.score-trend-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.score-trend-field .MuiTypography-caption {
+  color: var(--quiet);
+  font-size: 11px;
+  line-height: 1.2;
+}
+.score-trend-field .MuiOutlinedInput-root {
+  background: rgba(255,255,255,.018);
+  border-radius: 9px;
+  color: var(--text);
+  min-height: 38px;
+}
+.score-trend-field .MuiSelect-select {
+  padding: 8px 36px 8px 12px !important;
+  min-width: 210px;
+  max-width: 350px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.score-trend-range .MuiSelect-select { min-width: 86px; }
+.score-trend-refresh.MuiButton-root {
+  min-height: 38px;
+  padding: 6px 17px;
+  color: #cbd0d9;
+  font-size: 12px;
+}
+.score-trend-body.MuiBox-root {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  padding: 22px 22px 16px;
+}
+.score-trend-progress.MuiLinearProgress-root {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+}
+.score-trend-canvas.MuiBox-root {
+  flex: 1 1 auto;
+  width: 100%;
+  height: clamp(455px, calc(100dvh - 300px), 820px);
+  min-height: 455px;
+}
+.score-trend-empty.MuiBox-root {
+  display: grid;
+  place-items: center;
+  flex: 1 1 auto;
+  min-height: 440px;
+  padding: 30px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 13px;
+}
+@media (max-width: 1050px) {
+  .score-trend-page.MuiBox-root { padding: 20px; }
+  .score-trend-header.MuiBox-root { padding: 20px; align-items: flex-start; }
+  .score-trend-controls { width: 100%; }
+  .score-trend-canvas.MuiBox-root { height: clamp(390px, calc(100dvh - 355px), 700px); min-height: 390px; }
 }
 @media (max-width: 720px) {
-  .rank-context { margin-top: 20px; }
-  .rank-context-chart.MuiPaper-root, .rank-context-summary.MuiPaper-root { padding: 14px; }
-  .rank-chart-canvas { height: 200px; }
-  .rank-metrics { gap: 8px; }
+  .score-trend-page.MuiBox-root { padding: 14px; }
+  .score-trend-header.MuiBox-root { padding: 18px 14px; gap: 17px; }
+  .score-trend-body.MuiBox-root { padding: 16px 8px; }
+  .score-trend-controls { gap: 10px; }
+  .score-trend-field:first-child { flex: 1 1 170px; }
+  .score-trend-field .MuiSelect-select { min-width: 0; }
+  .score-trend-range .MuiSelect-select { min-width: 75px; }
+  .score-trend-canvas.MuiBox-root { height: 415px; min-height: 415px; }
+  .score-trend-main.MuiCard-root { min-height: 570px; }
 }
