@@ -5,7 +5,7 @@ const {
     createTheme, ThemeProvider, CssBaseline, AppBar, Toolbar, Typography, Container, Grid, Paper, Box,
     Card, CardContent, Chip, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
     IconButton, LinearProgress, Button, Dialog, DialogTitle, DialogContent, DialogActions,
-    List, ListItem, ListItemIcon, ListItemText, Divider, Drawer, Checkbox, FormControlLabel, FormGroup,
+    List, ListItem, ListItemButton, ListItemIcon, ListItemText, Divider, Drawer, Checkbox, FormControlLabel, FormGroup,
     MenuItem, Select, TextField, InputAdornment
 } = MaterialUI;
 
@@ -336,36 +336,25 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
         setSelectedNodes(next);
     };
 
-    // Construct Chart Data
+    // Merge samples by actual timestamp instead of positional index.
     const chartData = React.useMemo(() => {
-        if (!servers.length) return [];
-        let maxLen = 0;
-        let baseNode = "";
-        servers.forEach(s => {
-            const h = nodeHistories[s.server_name] || [];
-            if (h.length > maxLen) { maxLen = h.length; baseNode = s.server_name; }
-        });
-        
-        if (!baseNode) return [];
-        const baseHistory = nodeHistories[baseNode] || [];
-        
-        return baseHistory.map((point, idx) => {
-            const row = { time: point.time };
-            servers.forEach(s => {
-                const sHist = nodeHistories[s.server_name];
-                if (sHist) {
-                    const sIdx = sHist.length - (baseHistory.length - idx);
-                    if (sIdx >= 0) {
-                        const sPoint = sHist[sIdx];
-                        if (selectedMetrics.cpu) row[`${s.server_name}_cpu`] = sPoint.cpu;
-                        if (selectedMetrics.mem) row[`${s.server_name}_mem`] = sPoint.mem;
-                        if (selectedMetrics.disk) row[`${s.server_name}_disk`] = sPoint.disk;
-                        if (selectedMetrics.net) row[`${s.server_name}_net`] = (sPoint.net_in + sPoint.net_out) / 1024; 
-                    }
+        const timeline = new Map();
+        servers.forEach(server => {
+            (nodeHistories[server.server_name] || []).forEach(point => {
+                if (!Number.isFinite(point.timestampMs) || !point.timestampMs) return;
+                const row = timeline.get(point.timestampMs) || { time: point.time, timestampMs: point.timestampMs };
+                if (selectedMetrics.cpu) row[`${server.server_name}_cpu`] = point.cpu;
+                if (selectedMetrics.mem) row[`${server.server_name}_mem`] = point.mem;
+                if (selectedMetrics.disk) row[`${server.server_name}_disk`] = point.disk;
+                if (selectedMetrics.net) {
+                    const rx = Number(point.net_in), tx = Number(point.net_out);
+                    row[`${server.server_name}_net`] =
+                        Number.isFinite(rx) && Number.isFinite(tx) ? (rx + tx) / 1024 : null;
                 }
+                timeline.set(point.timestampMs, row);
             });
-            return row;
         });
+        return [...timeline.values()].sort((x,y) => x.timestampMs - y.timestampMs).slice(-120);
     }, [servers, nodeHistories, selectedMetrics]);
 
     const colors = ["#d8b55a", "#54b99a", "#7299d1", "#d17fab", "#9b83c8", "#79b8c2", "#d18d65", "#a6bc69"];
@@ -447,7 +436,7 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
                 ) : <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#303330" />
-                        <XAxis dataKey="time" stroke="#777d76" />
+                        <XAxis dataKey="time" stroke="#777d76" tickLine={false} axisLine={false} minTickGap={48} />
                         {selectedMetrics.cpu || selectedMetrics.mem || selectedMetrics.disk ? (
                             <YAxis yAxisId="percent" stroke="#777d76" domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
                         ) : null}
@@ -469,28 +458,12 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
                                 const yAxisId = metric === "net" ? "net" : "percent";
                                 lines.push(
                                     <Line
-                                        key={`glow_${s.server_name}_${suffix}`}
-                                        type="monotone"
-                                        dataKey={dataKey}
-                                        yAxisId={yAxisId}
-                                        stroke={colors[colorIndex]}
-                                        strokeOpacity={0.13}
-                                        strokeWidth={7}
-                                        legendType="none"
-                                        dot={false}
-                                        activeDot={false}
-                                        isAnimationActive={false}
-                                    />
-                                );
-                                lines.push(
-                                    <Line
                                         key={`l_${s.server_name}_${suffix}`}
                                         type="monotone"
                                         dataKey={dataKey}
                                         yAxisId={yAxisId}
                                         stroke={colors[colorIndex]}
-                                        strokeOpacity={0.82}
-                                        style={{ filter: `drop-shadow(0 0 7px ${colors[colorIndex]}99)` }}
+                                        strokeOpacity={0.98}
                                         name={`${s.server_name} ${label}`}
                                         dot={chartData.length === 1 ? { r: 3, strokeWidth: 1 } : false}
                                         strokeWidth={2}
@@ -510,7 +483,7 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
 
 // --- Detail Page ---
 
-const DetailView = ({ title, metric, servers, onNodeClick }) => {
+const DetailView = ({ title, metric, servers, onNodeClick, onRefresh }) => {
     // Sort logic
     const [sort, setSort] = React.useState("desc");
     
@@ -528,7 +501,7 @@ const DetailView = ({ title, metric, servers, onNodeClick }) => {
                 <Typography variant="h4" fontWeight="bold">
                 <span className="material-icons detail-title-icon" aria-hidden="true">{metric.icon}</span> {title} 监控详情
                 </Typography>
-                <Button variant="outlined" startIcon={<span className="material-icons" aria-hidden="true">refresh</span>}>刷新数据</Button>
+                <Button variant="outlined" onClick={onRefresh} startIcon={<span className="material-icons" aria-hidden="true">refresh</span>}>刷新数据</Button>
             </Box>
 
             <TableContainer component={Paper} sx={{ mb: 4 }}>
@@ -611,15 +584,35 @@ const formatCellValue = (value, unit = "") => {
     return unit ? `${String(value)} ${unit}` : String(value);
 };
 
+const SignalDetails = ({ value }) => {
+    let signals = value;
+    if (typeof signals === "string") {
+        try { signals = JSON.parse(signals); } catch (_) { return <span>信号数据格式异常</span>; }
+    }
+    if (!Array.isArray(signals) || !signals.length) return <span>暂无诊断信号</span>;
+    return (
+        <details className="signal-details">
+            <summary>{signals.length} 项诊断信号 <span className="material-icons">expand_more</span></summary>
+            <div className="signal-list">
+                {signals.map((entry, i) => <div key={i} className="signal-row">
+                    <span className="signal-name">{entry.metric || "未知指标"}</span>
+                    <span>{Number.isFinite(Number(entry.value)) ? Number(entry.value).toFixed(2) : "—"}</span>
+                    <span className={entry.anomalous ? "signal-alert" : "signal-normal"}>{entry.anomalous ? "异常" : "正常"}</span>
+                </div>)}
+            </div>
+        </details>
+    );
+};
+
 const QueryTableView = ({ title, subtitle, rows, loading, error, emptyText }) => {
     const columns = React.useMemo(() => {
         if (!rows || rows.length === 0) return [];
-        return Object.keys(rows[0]);
+        return [...new Set(rows.flatMap(row => Object.keys(row || {})))];
     }, [rows]);
 
     return (
         <Box sx={{ p: 4, height: "100%", overflowY: "auto" }}>
-            <Typography variant="h4" fontWeight="bold" mb={1}>{title}</Typography>
+            {title && <Typography variant="h4" mb={1}>{title}</Typography>}
             {subtitle ? <Typography variant="body2" color="text.secondary" mb={2}>{subtitle}</Typography> : null}
 
             {loading && <LinearProgress sx={{ mb: 2 }} />}
@@ -646,7 +639,7 @@ const QueryTableView = ({ title, subtitle, rows, loading, error, emptyText }) =>
                                     <TableCell>{idx + 1}</TableCell>
                                     {columns.map((c) => (
                                         <TableCell key={`${idx}_${c}`} sx={{ fontFamily: c.includes("rate") || c.includes("percent") ? "monospace" : "inherit" }}>
-                                            {formatCellValue(row[c], getUnitByField(c))}
+                                            {c === "top_signals" ? <SignalDetails value={row[c]} /> : formatCellValue(row[c], getUnitByField(c))}
                                         </TableCell>
                                     ))}
                                 </TableRow>
@@ -1191,6 +1184,7 @@ const AppShell = () => {
     const [queryEndpointData, setQueryEndpointData] = React.useState({ endpoints: [] });
     const [selectedQueryServer, setSelectedQueryServer] = React.useState("");
     const [sidebarFilter, setSidebarFilter] = React.useState("");
+    const [socketConnected, setSocketConnected] = React.useState(false);
     const [queryHours, setQueryHours] = React.useState(24);
     const [trendIntervalSeconds, setTrendIntervalSeconds] = React.useState(300);
     const [queryRows, setQueryRows] = React.useState({ rank: [], trend: [], anomaly: [], net_detail: [], disk_detail: [], mem_detail: [], softirq_detail: [] });
@@ -1255,6 +1249,8 @@ const AppShell = () => {
         axios.get("/api/query-endpoints").then(res => setQueryEndpointData(res.data)).catch(console.error);
 
         const socket = io();
+        socket.on("connect", () => setSocketConnected(true));
+        socket.on("disconnect", () => setSocketConnected(false));
         socket.on("overview_update", (newData) => {
             const activeProfile = scoringProfileRef.current;
             setData(applyScoringProfileToOverview(newData, activeProfile));
@@ -1431,6 +1427,11 @@ const AppShell = () => {
 
     const handleNodeClick = (nodeName) => {
         setSubViewNode(nodeName);
+    };
+
+    const refreshOverview = async () => {
+        const response = await axios.get("/api/overview", { params: { scoring_profile: scoringProfile } });
+        setData(applyScoringProfileToOverview(response.data, scoringProfile));
     };
 
     const renderContent = () => {
@@ -1614,6 +1615,7 @@ const AppShell = () => {
                     metric={m} 
                     servers={data.servers} 
                     onNodeClick={handleNodeClick}
+                    onRefresh={refreshOverview}
                 />
             );
         }
@@ -1636,7 +1638,7 @@ const AppShell = () => {
                     <Box className="brand-lockup">
                         <span className="brand-mark material-icons" aria-hidden="true">monitor_heart</span>
                         <Box>
-                            <Typography className="brand-name">Dashboard</Typography>
+                            <Typography className="brand-name">KernScope</Typography>
                         </Box>
                     </Box>
                     <TextField
@@ -1657,30 +1659,27 @@ const AppShell = () => {
                             if (item.id === "header" || item.id === "header_query") return <Typography key={i} variant="caption" sx={{ px: 3, color: "text.secondary", mt: 1, display: "block" }}>{item.label}</Typography>;
                             
                             return (
-                                <ListItem 
-                                    button 
-                                    key={item.id} 
-                                    aria-label={item.label}
-                                    title={item.label}
-                                    selected={view === item.id && !subViewNode} 
-                                    onClick={() => handleViewChange(item.id)}
-                                    sx={{ 
-                                        mx: 1, my: 0.25, borderRadius: 2,
-                                        "&.Mui-selected": { bgcolor: "rgba(84,185,154,0.14)", color: "#dcebe5", "&:hover": { bgcolor: "rgba(84,185,154,0.2)" } },
-                                        "&.Mui-selected .MuiListItemIcon-root": { color: "#73c7a8" }
-                                    }}
-                                >
-                                    <ListItemIcon sx={{ minWidth: 38, color: "text.secondary" }}><span className="material-icons nav-icon" aria-hidden="true">{item.icon}</span></ListItemIcon>
-                                    <ListItemText primary={item.label} />
+                                <ListItem key={item.id} disablePadding className="nav-row">
+                                    <ListItemButton
+                                        className="nav-action"
+                                        aria-label={item.label}
+                                        aria-current={view === item.id && !subViewNode ? "page" : undefined}
+                                        title={item.label}
+                                        selected={view === item.id && !subViewNode}
+                                        onClick={() => handleViewChange(item.id)}
+                                    >
+                                        <ListItemIcon className="nav-action-icon"><span className="material-icons nav-icon" aria-hidden="true">{item.icon}</span></ListItemIcon>
+                                        <ListItemText primary={item.label} />
+                                    </ListItemButton>
                                 </ListItem>
                             );
                         })}
                         {visibleSidebarItems.length === 0 && <Typography variant="caption" sx={{ px: 2, py: 1.5, color: "text.secondary" }}>未找到匹配功能</Typography>}
                     </List>
                     <Box className="sidebar-footer">
-                        <Box className={`connection-dot ${data.servers.length ? "is-connected" : ""}`} />
+                        <Box className={`connection-dot ${socketConnected ? "is-connected" : ""}`} />
                         <Box>
-                            <Typography className="connection-label">{data.servers.length ? "采集链路正常" : "等待节点连接"}</Typography>
+                            <Typography className="connection-label">{socketConnected ? (data.servers.length ? "监控链路已连接" : "等待采集节点") : "实时连接已断开"}</Typography>
                             <Typography className="connection-detail">{data.cluster_stats.online_servers || 0} / {data.cluster_stats.total_servers || 0} 节点在线</Typography>
                         </Box>
                     </Box>
@@ -1696,8 +1695,8 @@ const AppShell = () => {
                             </Box>
                         </Box>
                         <Box className="topbar-meta">
-                            <span className={`live-indicator ${data.servers.length ? "is-connected" : ""}`} />
-                            <Typography className="live-label">实时更新</Typography>
+                            <span className={`live-indicator ${socketConnected ? "is-connected" : ""}`} />
+                            <Typography className="live-label">{socketConnected ? "实时同步" : "连接中断"}</Typography>
                             <Typography className="topbar-date">{new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" })}</Typography>
                         </Box>
                     </Box>
