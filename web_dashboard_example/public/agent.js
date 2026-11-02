@@ -29,7 +29,7 @@ const AgentPanel = ({ serverName, servers, onServerChange }) => {
                 AI 分析
             </Button>
             <Drawer className="agent-drawer-root" anchor="right" open={open} onClose={() => setOpen(false)} PaperProps={{ className: "agent-drawer" }}>
-                <Box className="agent-panel" sx={{width: {xs: "100vw", sm: 420}, height: "100%", bgcolor: "#111211", color: "white",
+                <Box className="agent-panel" sx={{width: {xs: "100vw", sm: 420}, height: "100%", bgcolor: "#0b0c0e", color: "white",
                     display: "flex", flexDirection: "column", p: 2, gap: 2}}>
                     <Box display="flex" justifyContent="space-between" alignItems="center">
                         <Typography variant="h6">KernScope · AI 分析</Typography>
@@ -48,7 +48,7 @@ const AgentPanel = ({ serverName, servers, onServerChange }) => {
                             例如：这台主机最近 30 分钟是否异常？有没有可以支持的根因证据？
                         </Typography>}
                         {messages.map((m, i) => (
-                            <Paper key={i} sx={{p: 2, bgcolor: m.role === "user" ? "#292c2a" : "#191a19",
+                            <Paper key={i} sx={{p: 2, bgcolor: m.role === "user" ? "#292b30" : "#1e2023",
                                 whiteSpace: "pre-wrap", overflowWrap: "anywhere"}}>
                                 <Typography variant="caption" color="text.secondary">
                                     {m.role === "user" ? "提问" : m.role === "error" ? "错误" : "AI 分析"}

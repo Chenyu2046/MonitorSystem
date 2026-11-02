@@ -17,18 +17,18 @@ const {
 const theme = createTheme({
     palette: {
         mode: "dark",
-        primary: { main: "#e5e7e2", light: "#f4f5f2", dark: "#b9bdb6" },
-        secondary: { main: "#8d9bb0" },
-        background: { default: "#101110", paper: "#191b1a" },
-        success: { main: "#54b99a" },
-        warning: { main: "#d8b55a" },
-        error: { main: "#dc7474" },
-        text: { primary: "#e9eae7", secondary: "#92958f" },
-        divider: "#2b2d2b"
+        primary: { main: "#e0e1e5", light: "#f4f4f6", dark: "#b7b9c0" },
+        secondary: { main: "#979ca8" },
+        background: { default: "#18191c", paper: "#1e2023" },
+        success: { main: "#70bd91" },
+        warning: { main: "#d7b56d" },
+        error: { main: "#d57474" },
+        text: { primary: "#e9eaed", secondary: "#a9acb3" },
+        divider: "rgba(255,255,255,.055)"
     },
     components: {
-        MuiCard: { styleOverrides: { root: { backgroundImage: "none", backgroundColor: "#191a19", border: "1px solid #2b2d2b", borderRadius: 13, boxShadow: "none" } } },
-        MuiPaper: { styleOverrides: { root: { backgroundImage: "none", backgroundColor: "#191a19", border: "1px solid #2b2d2b", borderRadius: 12 } } },
+        MuiCard: { styleOverrides: { root: { backgroundImage: "none", backgroundColor: "#1e2023", border: "1px solid rgba(255,255,255,.038)", borderRadius: 11, boxShadow: "none" } } },
+        MuiPaper: { styleOverrides: { root: { backgroundImage: "none", backgroundColor: "#1e2023", border: "1px solid rgba(255,255,255,.038)", borderRadius: 10 } } },
         MuiButton: { styleOverrides: { root: { textTransform: "none", borderRadius: 8, fontWeight: 600 } } },
         MuiOutlinedInput: { styleOverrides: { root: { borderRadius: 8 } } }
     }
@@ -357,7 +357,7 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
         return [...timeline.values()].sort((x,y) => x.timestampMs - y.timestampMs).slice(-120);
     }, [servers, nodeHistories, selectedMetrics]);
 
-    const colors = ["#d8b55a", "#54b99a", "#7299d1", "#d17fab", "#9b83c8", "#79b8c2", "#d18d65", "#a6bc69"];
+    const colors = ["#d7b56d", "#79a7cf", "#a391c9", "#cc8fa4", "#8fb3bb", "#c0a079", "#a5a9b8", "#b5a5cc"];
     const tooltipFormatter = (value, name, item) => {
         const unit = getMetricUnitByDataKey(item?.dataKey || "");
         if (typeof value === "number") {
@@ -425,7 +425,7 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
             </Box>
 
             {/* Chart Area */}
-            <Box sx={{ flexGrow: 1, p: 2, bgcolor: "#0e1621" }}>
+            <Box sx={{ flexGrow: 1, p: 2, bgcolor: "#1e2023" }}>
                 {chartData.length === 0 ? (
                     <Box className="chart-empty">
                         <span className="material-icons" aria-hidden="true">query_stats</span>
@@ -435,15 +435,15 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
                     </Box>
                 ) : <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#303330" />
-                        <XAxis dataKey="time" stroke="#777d76" tickLine={false} axisLine={false} minTickGap={48} />
+                        <CartesianGrid strokeDasharray="3 3" stroke="#32343a" />
+                        <XAxis dataKey="time" stroke="#878c94" tickLine={false} axisLine={false} minTickGap={48} />
                         {selectedMetrics.cpu || selectedMetrics.mem || selectedMetrics.disk ? (
-                            <YAxis yAxisId="percent" stroke="#777d76" domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
+                            <YAxis yAxisId="percent" stroke="#878c94" domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
                         ) : null}
                         {selectedMetrics.net ? (
-                            <YAxis yAxisId="net" orientation="right" stroke="#777d76" domain={["auto", "auto"]} />
+                            <YAxis yAxisId="net" orientation="right" stroke="#878c94" domain={["auto", "auto"]} />
                         ) : null}
-                        <Tooltip formatter={tooltipFormatter} contentStyle={{ backgroundColor: "rgba(25, 26, 25, 0.98)", border: "1px solid #363936", borderRadius: 8 }} />
+                        <Tooltip formatter={tooltipFormatter} contentStyle={{ backgroundColor: "rgba(30,32,35,.98)", border: "1px solid rgba(255,255,255,.075)", borderRadius: 8 }} />
                         <Legend wrapperStyle={{ paddingTop: 10 }} />
                         {servers.map((s, i) => {
                             if (!selectedNodes[s.server_name]) return null;
@@ -835,9 +835,9 @@ const FlowTripleMonitorView = ({
         : "展示读流量、写流量、总流量（聚合所有磁盘）";
 
     const sections = [
-        { key: "input", title: mode === "net" ? "输入流量趋势" : "读流量趋势", color: "#7299d1" },
-        { key: "output", title: mode === "net" ? "输出流量趋势" : "写流量趋势", color: "#d17fab" },
-        { key: "total", title: "总流量趋势", color: "#54b99a" }
+        { key: "input", title: mode === "net" ? "输入流量趋势" : "读流量趋势", color: "#79a7cf" },
+        { key: "output", title: mode === "net" ? "输出流量趋势" : "写流量趋势", color: "#cc8fa4" },
+        { key: "total", title: "总流量趋势", color: "#a391c9" }
     ];
 
     const getSeverity = React.useCallback((sectionKey, value) => {
@@ -888,10 +888,10 @@ const FlowTripleMonitorView = ({
                             <Box sx={{ height: 260, mb: 2 }}>
                                 <ResponsiveContainer width="100%" height="100%">
                                     <LineChart data={aggregated}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="#303330" />
-                                        <XAxis dataKey="time" stroke="#777d76" />
-                                        <YAxis stroke="#777d76" />
-                                        <Tooltip formatter={(v) => [`${Number(v || 0).toFixed(3)} MB/s`, section.title]} contentStyle={{ backgroundColor: "rgba(25, 26, 25, 0.98)", border: "1px solid #363936", borderRadius: 8 }} />
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#32343a" />
+                                        <XAxis dataKey="time" stroke="#878c94" />
+                                        <YAxis stroke="#878c94" />
+                                        <Tooltip formatter={(v) => [`${Number(v || 0).toFixed(3)} MB/s`, section.title]} contentStyle={{ backgroundColor: "rgba(30,32,35,.98)", border: "1px solid rgba(255,255,255,.075)", borderRadius: 8 }} />
                                         <Legend />
                                         <ReferenceLine y={thresholds[section.key].warn} stroke="#d8b55a" strokeDasharray="5 5" label={{ value: "P90", position: "right", fill: "#d8b55a" }} />
                                         <ReferenceLine y={thresholds[section.key].critical} stroke="#dc7474" strokeDasharray="5 5" label={{ value: "P98", position: "right", fill: "#dc7474" }} />
@@ -1111,10 +1111,10 @@ const CpuCoreBarsView = ({
                 <Box sx={{ height: 320 }}>
                     <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={historyData}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#303330" />
-                            <XAxis dataKey="time" stroke="#777d76" />
-                            <YAxis stroke="#777d76" domain={[0, 100]} />
-                            <Tooltip formatter={(v) => [`${Number(v || 0).toFixed(2)} %`, "CPU"]} contentStyle={{ backgroundColor: "rgba(25, 26, 25, 0.98)", border: "1px solid #363936", borderRadius: 8 }} />
+                            <CartesianGrid strokeDasharray="3 3" stroke="#32343a" />
+                            <XAxis dataKey="time" stroke="#878c94" />
+                            <YAxis stroke="#878c94" domain={[0, 100]} />
+                            <Tooltip formatter={(v) => [`${Number(v || 0).toFixed(2)} %`, "CPU"]} contentStyle={{ backgroundColor: "rgba(30,32,35,.98)", border: "1px solid rgba(255,255,255,.075)", borderRadius: 8 }} />
                             <Legend />
                             <Area type="monotone" dataKey="cpu" name={`${selectedServer || "节点"} 总CPU(%)`} stroke="#7299d1" fill="#7299d1" fillOpacity={0.14} />
                         </AreaChart>
@@ -1611,10 +1611,7 @@ const AppShell = () => {
                 <Drawer
                      className="sidebar-shell"
                      variant="permanent"
-                     sx={{
-                         width: 280, flexShrink: 0,
-                         [`& .MuiDrawer-paper`]: { width: 280, boxSizing: "border-box", borderRight: "1px solid #292b29", bgcolor: "#141514" },
-                     }}
+                     sx={{ flexShrink: 0 }}
                 >
                     <Box className="sidebar-inner">
                     <Box className="brand-lockup">
