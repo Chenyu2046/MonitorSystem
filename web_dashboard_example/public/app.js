@@ -19,7 +19,7 @@ const theme = createTheme({
         mode: "dark",
         primary: { main: "#e0e1e5", light: "#f4f4f6", dark: "#b7b9c0" },
         secondary: { main: "#979ca8" },
-        background: { default: "#18191c", paper: "#1e2023" },
+        background: { default: "#131417", paper: "#191b1e" },
         success: { main: "#70bd91" },
         warning: { main: "#d7b56d" },
         error: { main: "#d57474" },
@@ -27,8 +27,8 @@ const theme = createTheme({
         divider: "rgba(255,255,255,.055)"
     },
     components: {
-        MuiCard: { styleOverrides: { root: { backgroundImage: "none", backgroundColor: "#1e2023", border: "1px solid rgba(255,255,255,.038)", borderRadius: 11, boxShadow: "none" } } },
-        MuiPaper: { styleOverrides: { root: { backgroundImage: "none", backgroundColor: "#1e2023", border: "1px solid rgba(255,255,255,.038)", borderRadius: 10 } } },
+        MuiCard: { styleOverrides: { root: { backgroundImage: "none", backgroundColor: "#191b1e", border: "1px solid rgba(255,255,255,.032)", borderRadius: 11, boxShadow: "none" } } },
+        MuiPaper: { styleOverrides: { root: { backgroundImage: "none", backgroundColor: "#191b1e", border: "1px solid rgba(255,255,255,.032)", borderRadius: 10 } } },
         MuiButton: { styleOverrides: { root: { textTransform: "none", borderRadius: 8, fontWeight: 600 } } },
         MuiOutlinedInput: { styleOverrides: { root: { borderRadius: 8 } } }
     }
@@ -425,7 +425,7 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
             </Box>
 
             {/* Chart Area */}
-            <Box sx={{ flexGrow: 1, p: 2, bgcolor: "#1e2023" }}>
+            <Box sx={{ flexGrow: 1, p: 2, bgcolor: "transparent" }}>
                 {chartData.length === 0 ? (
                     <Box className="chart-empty">
                         <span className="material-icons" aria-hidden="true">query_stats</span>
@@ -443,7 +443,7 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
                         {selectedMetrics.net ? (
                             <YAxis yAxisId="net" orientation="right" stroke="#878c94" domain={["auto", "auto"]} />
                         ) : null}
-                        <Tooltip formatter={tooltipFormatter} contentStyle={{ backgroundColor: "rgba(30,32,35,.98)", border: "1px solid rgba(255,255,255,.075)", borderRadius: 8 }} />
+                        <Tooltip formatter={tooltipFormatter} contentStyle={{ backgroundColor: "rgba(23,24,27,.97)", border: "1px solid rgba(255,255,255,.075)", borderRadius: 8 }} />
                         <Legend wrapperStyle={{ paddingTop: 10 }} />
                         {servers.map((s, i) => {
                             if (!selectedNodes[s.server_name]) return null;
@@ -891,7 +891,7 @@ const FlowTripleMonitorView = ({
                                         <CartesianGrid strokeDasharray="3 3" stroke="#32343a" />
                                         <XAxis dataKey="time" stroke="#878c94" />
                                         <YAxis stroke="#878c94" />
-                                        <Tooltip formatter={(v) => [`${Number(v || 0).toFixed(3)} MB/s`, section.title]} contentStyle={{ backgroundColor: "rgba(30,32,35,.98)", border: "1px solid rgba(255,255,255,.075)", borderRadius: 8 }} />
+                                        <Tooltip formatter={(v) => [`${Number(v || 0).toFixed(3)} MB/s`, section.title]} contentStyle={{ backgroundColor: "rgba(23,24,27,.97)", border: "1px solid rgba(255,255,255,.075)", borderRadius: 8 }} />
                                         <Legend />
                                         <ReferenceLine y={thresholds[section.key].warn} stroke="#d8b55a" strokeDasharray="5 5" label={{ value: "P90", position: "right", fill: "#d8b55a" }} />
                                         <ReferenceLine y={thresholds[section.key].critical} stroke="#dc7474" strokeDasharray="5 5" label={{ value: "P98", position: "right", fill: "#dc7474" }} />
@@ -1114,7 +1114,7 @@ const CpuCoreBarsView = ({
                             <CartesianGrid strokeDasharray="3 3" stroke="#32343a" />
                             <XAxis dataKey="time" stroke="#878c94" />
                             <YAxis stroke="#878c94" domain={[0, 100]} />
-                            <Tooltip formatter={(v) => [`${Number(v || 0).toFixed(2)} %`, "CPU"]} contentStyle={{ backgroundColor: "rgba(30,32,35,.98)", border: "1px solid rgba(255,255,255,.075)", borderRadius: 8 }} />
+                            <Tooltip formatter={(v) => [`${Number(v || 0).toFixed(2)} %`, "CPU"]} contentStyle={{ backgroundColor: "rgba(23,24,27,.97)", border: "1px solid rgba(255,255,255,.075)", borderRadius: 8 }} />
                             <Legend />
                             <Area type="monotone" dataKey="cpu" name={`${selectedServer || "节点"} 总CPU(%)`} stroke="#7299d1" fill="#7299d1" fillOpacity={0.14} />
                         </AreaChart>
