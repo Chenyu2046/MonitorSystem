@@ -6,7 +6,7 @@ const {
     Card, CardContent, Chip, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
     IconButton, LinearProgress, Button, Dialog, DialogTitle, DialogContent, DialogActions,
     List, ListItem, ListItemIcon, ListItemText, Divider, Drawer, Checkbox, FormControlLabel, FormGroup,
-    MenuItem, Select, TextField
+    MenuItem, Select, TextField, InputAdornment
 } = MaterialUI;
 
 const {
@@ -17,16 +17,20 @@ const {
 const theme = createTheme({
     palette: {
         mode: "dark",
-        primary: { main: "#2196f3" },
-        secondary: { main: "#f50057" },
-        background: { default: "#0a1929", paper: "#132f4c" },
-        success: { main: "#00e676" },
-        warning: { main: "#ffea00" },
-        error: { main: "#ff1744" },
+        primary: { main: "#e5e7e2", light: "#f4f5f2", dark: "#b9bdb6" },
+        secondary: { main: "#8d9bb0" },
+        background: { default: "#111211", paper: "#191a19" },
+        success: { main: "#54b99a" },
+        warning: { main: "#d8b55a" },
+        error: { main: "#dc7474" },
+        text: { primary: "#e9eae7", secondary: "#92958f" },
+        divider: "#2b2d2b"
     },
     components: {
-        MuiCard: { styleOverrides: { root: { backgroundImage: "none", backgroundColor: "#1e1e1e", borderRadius: 12 } } },
-        MuiPaper: { styleOverrides: { root: { backgroundImage: "none", backgroundColor: "#132f4c" } } }
+        MuiCard: { styleOverrides: { root: { backgroundImage: "none", backgroundColor: "#191a19", border: "1px solid #2b2d2b", borderRadius: 13, boxShadow: "none" } } },
+        MuiPaper: { styleOverrides: { root: { backgroundImage: "none", backgroundColor: "#191a19", border: "1px solid #2b2d2b", borderRadius: 12 } } },
+        MuiButton: { styleOverrides: { root: { textTransform: "none", borderRadius: 8, fontWeight: 600 } } },
+        MuiOutlinedInput: { styleOverrides: { root: { borderRadius: 8 } } }
     }
 });
 
@@ -202,59 +206,91 @@ const applyScoringProfileToOverview = (overviewData, profile) => {
     };
 };
 
+const toHistoryPoint = (server, time) => {
+    const timestampMs = Number(server.timestamp?.seconds || server.last_update?.seconds || 0) * 1000 || Date.now();
+    return {
+        time: time || new Date(timestampMs).toLocaleTimeString("zh-CN", { hour12: false }),
+        timestampMs,
+        cpu: server.cpu_percent,
+        mem: server.mem_used_percent,
+        disk: server.disk_util_percent,
+        net_in: server.rcv_rate,
+        net_out: server.send_rate
+    };
+};
+
 // --- Dashboard Components ---
 
-const TopStats = ({ clusterStats }) => (
-    <Grid container spacing={3} sx={{ height: "100%" }}>
-        {/* Cluster Health */}
-        <Grid item xs={12} md={6} sx={{ height: "100%" }}>
-            <Card sx={{ height: "100%", display: "flex", flexDirection: "column", justifyContent: "center", p: 4, background: "linear-gradient(135deg, rgba(33, 150, 243, 0.1) 0%, rgba(0,0,0,0) 100%)", border: "1px solid rgba(33, 150, 243, 0.3)" }}>
-                <Box display="flex" alignItems="center" mb={2}>
-                    <Box sx={{ mr: 2, color: "primary.main", fontSize: 40 }}>❤️</Box>
-                    <Typography variant="h5" color="text.secondary">集群评分</Typography>
-                </Box>
-                <Box display="flex" alignItems="baseline">
-                    <Typography variant="h1" fontWeight="bold" sx={{ mr: 2 }}>{Number.isFinite(clusterStats.avg_score) ? clusterStats.avg_score.toFixed(1) : "—"}</Typography>
-                    <Typography variant="h6" color="text.secondary">/ 100</Typography>
-                </Box>
-                <LinearProgress 
-                    variant="determinate" 
-                    value={Number.isFinite(clusterStats.avg_score) ? clusterStats.avg_score : 0} 
-                    color={clusterStats.avg_score > 80 ? "primary" : "warning"}
-                    sx={{ width: "100%", mt: 3, height: 12, borderRadius: 6 }} 
-                />
-            </Card>
+const TopStats = ({ clusterStats, servers = [], scoringProfile }) => {
+    const averageOf = (field) => {
+        const values = servers.map((server) => Number(server[field])).filter(Number.isFinite);
+        return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+    };
+    const cpuAverage = averageOf("cpu_percent");
+    const memoryAverage = averageOf("mem_used_percent");
+    const metrics = [
+        {
+            label: scoringProfile === "HEALTH_SCORE" ? "集群健康评分" : "集群资源评分",
+            icon: "query_stats",
+            value: Number.isFinite(clusterStats.avg_score) ? clusterStats.avg_score.toFixed(1) : "—",
+            unit: "/ 100",
+            note: scoringProfile === "HEALTH_SCORE" ? "健康模型评分" : "资源使用评分",
+            tone: "mint"
+        },
+        {
+            label: "在线节点",
+            icon: "dns",
+            value: `${clusterStats.online_servers || 0}`,
+            unit: `/ ${clusterStats.total_servers || 0}`,
+            note: `${clusterStats.offline_servers || 0} 台离线`,
+            tone: "neutral"
+        },
+        {
+            label: "平均 CPU 使用率",
+            icon: "memory",
+            value: cpuAverage === null ? "—" : cpuAverage.toFixed(1),
+            unit: "%",
+            note: "当前节点采样均值",
+            tone: "neutral"
+        },
+        {
+            label: "平均内存使用率",
+            icon: "developer_board",
+            value: memoryAverage === null ? "—" : memoryAverage.toFixed(1),
+            unit: "%",
+            note: "当前节点采样均值",
+            tone: "neutral"
+        }
+    ];
+
+    return (
+        <Grid container spacing={1.5} className="metric-grid">
+            {metrics.map((metric) => (
+                <Grid item xs={6} lg={3} key={metric.label}>
+                    <Card className={`metric-tile metric-tile-${metric.tone}`}>
+                        <Box className="metric-heading">
+                            <Typography className="metric-label">{metric.label}</Typography>
+                            <span className={`material-icons metric-icon metric-icon-${metric.tone}`} aria-hidden="true">{metric.icon}</span>
+                        </Box>
+                        <Box className="metric-value-row">
+                            <Typography className="metric-value">{metric.value}</Typography>
+                            <Typography className="metric-unit">{metric.unit}</Typography>
+                        </Box>
+                        <Typography className="metric-note">{metric.note}</Typography>
+                    </Card>
+                </Grid>
+            ))}
         </Grid>
-        
-        {/* Total Nodes */}
-        <Grid item xs={12} md={6} sx={{ height: "100%" }}>
-            <Card sx={{ height: "100%", display: "flex", flexDirection: "column", justifyContent: "center", p: 4, background: "linear-gradient(135deg, rgba(0, 230, 118, 0.1) 0%, rgba(0,0,0,0) 100%)", border: "1px solid rgba(0, 230, 118, 0.3)" }}>
-                <Box display="flex" alignItems="center" mb={2}>
-                    <Box sx={{ mr: 2, color: "success.main", fontSize: 40 }}>🖥️</Box>
-                    <Typography variant="h5" color="text.secondary">总节点数监控</Typography>
-                </Box>
-                <Box display="flex" alignItems="baseline">
-                    <Typography variant="h1" fontWeight="bold" sx={{ mr: 2 }}>
-                        {clusterStats.total_servers || 0}
-                    </Typography>
-                    <Typography variant="h5" color="success.light">个节点</Typography>
-                </Box>
-                <Box mt={2}>
-                     <Chip label={`${clusterStats.online_servers || 0} 在线`} color="success" sx={{ mr: 1, fontWeight: "bold" }} />
-                     <Chip label={`${(clusterStats.total_servers || 0) - (clusterStats.online_servers || 0)} 离线`} color="error" variant="outlined" />
-                </Box>
-            </Card>
-        </Grid>
-    </Grid>
-);
+    );
+};
 
 const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBack, fixedMode }) => {
     // If fixedMode is true, user cannot change selection
     
     const [selectedMetrics, setSelectedMetrics] = React.useState(() => ({
         cpu: initialMetric ? initialMetric === "cpu" : true,
-        mem: initialMetric ? initialMetric === "mem" : false,
-        disk: initialMetric ? initialMetric === "disk" : false,
+        mem: initialMetric ? initialMetric === "mem" : true,
+        disk: initialMetric ? initialMetric === "disk" : true,
         net: initialMetric ? initialMetric === "net" : false
     }));
 
@@ -332,7 +368,7 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
         });
     }, [servers, nodeHistories, selectedMetrics]);
 
-    const colors = ["#2196f3", "#f50057", "#00e676", "#ffea00", "#ff9100", "#d500f9", "#00b0ff", "#651fff"];
+    const colors = ["#d8b55a", "#54b99a", "#7299d1", "#d17fab", "#9b83c8", "#79b8c2", "#d18d65", "#a6bc69"];
     const tooltipFormatter = (value, name, item) => {
         const unit = getMetricUnitByDataKey(item?.dataKey || "");
         if (typeof value === "number") {
@@ -342,14 +378,14 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
     };
 
     return (
-        <Card sx={{ height: "100%", display: "flex", flexDirection: "column", p: 0, overflow: "hidden" }}>
+        <Card className="trend-card" sx={{ height: "100%", display: "flex", flexDirection: "column", p: 0, overflow: "hidden" }}>
              {/* Toolbar */}
             <Box sx={{ p: 2, borderBottom: "1px solid rgba(255,255,255,0.05)", bgcolor: "rgba(0,0,0,0.2)" }}>
                 <Box display="flex" alignItems="center" mb={1}>
                     {onBack && (
                         <Button 
                             onClick={onBack} 
-                            startIcon={<span>🔙</span>} 
+                            startIcon={<span className="material-icons" aria-hidden="true">arrow_back</span>}
                             sx={{ mr: 2, color: "white", borderColor: "rgba(255,255,255,0.3)" }} 
                             variant="outlined" 
                             size="small"
@@ -390,7 +426,7 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
                                         color={selectedNodes[s.server_name] ? "primary" : "default"}
                                         variant={selectedNodes[s.server_name] ? "filled" : "outlined"}
                                         size="small"
-                                        icon={selectedNodes[s.server_name] ? <span>✔️</span> : undefined}
+                                        icon={selectedNodes[s.server_name] ? <span className="material-icons" aria-hidden="true">check</span> : undefined}
                                     />
                                 ))}
                             </Box>
@@ -401,27 +437,72 @@ const ChartSection = ({ servers, nodeHistories, initialNode, initialMetric, onBa
 
             {/* Chart Area */}
             <Box sx={{ flexGrow: 1, p: 2, bgcolor: "#0e1621" }}>
-                <ResponsiveContainer width="100%" height="100%">
+                {chartData.length === 0 ? (
+                    <Box className="chart-empty">
+                        <span className="material-icons" aria-hidden="true">query_stats</span>
+                        <Typography variant="body2" color="text.secondary">
+                            {servers.length ? "正在等待第一条实时采样数据" : "暂无在线节点数据"}
+                        </Typography>
+                    </Box>
+                ) : <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#2c3e50" />
-                        <XAxis dataKey="time" stroke="#546e7a" />
-                        <YAxis stroke="#546e7a" />
-                        <Tooltip formatter={tooltipFormatter} contentStyle={{ backgroundColor: "rgba(20, 30, 40, 0.9)", border: "1px solid #333" }} />
+                        <CartesianGrid strokeDasharray="3 3" stroke="#303330" />
+                        <XAxis dataKey="time" stroke="#777d76" />
+                        {selectedMetrics.cpu || selectedMetrics.mem || selectedMetrics.disk ? (
+                            <YAxis yAxisId="percent" stroke="#777d76" domain={[0, 100]} tickFormatter={(value) => `${value}%`} />
+                        ) : null}
+                        {selectedMetrics.net ? (
+                            <YAxis yAxisId="net" orientation="right" stroke="#777d76" domain={["auto", "auto"]} />
+                        ) : null}
+                        <Tooltip formatter={tooltipFormatter} contentStyle={{ backgroundColor: "rgba(25, 26, 25, 0.98)", border: "1px solid #363936", borderRadius: 8 }} />
                         <Legend wrapperStyle={{ paddingTop: 10 }} />
                         {servers.map((s, i) => {
                             if (!selectedNodes[s.server_name]) return null;
-                            // In fixed mode, force the color to always be primary
-                            const color = fixedMode ? theme.palette.primary.main : colors[i % colors.length];
-                            
                             const lines = [];
-                            if (selectedMetrics.cpu) lines.push(<Line key={`l_${s.server_name}_cpu`} type="monotone" dataKey={`${s.server_name}_cpu`} stroke={color} name={`${s.server_name} CPU(%)`} dot={false} strokeWidth={2} />);
-                            if (selectedMetrics.mem) lines.push(<Line key={`l_${s.server_name}_mem`} type="monotone" dataKey={`${s.server_name}_mem`} stroke={color}  name={`${s.server_name} MEM(%)`} dot={false} strokeWidth={2} />);
-                            if (selectedMetrics.disk) lines.push(<Line key={`l_${s.server_name}_disk`} type="monotone" dataKey={`${s.server_name}_disk`} stroke={color}  name={`${s.server_name} DISK(%)`} dot={false} strokeWidth={2} />);
-                            if (selectedMetrics.net) lines.push(<Line key={`l_${s.server_name}_net`} type="monotone" dataKey={`${s.server_name}_net`} stroke={color} strokeWidth={2} name={`${s.server_name} NET(MB/s)`} dot={false} />);
+                            const metricOrder = ["cpu", "mem", "disk", "net"];
+                            metricOrder.forEach((metric, metricIndex) => {
+                                if (!selectedMetrics[metric]) return;
+                                const suffix = metric === "net" ? "net" : metric;
+                                const label = metric === "net" ? "NET(MB/s)" : `${metric.toUpperCase()}(%)`;
+                                const colorIndex = fixedMode ? 1 : (i * 4 + metricIndex) % colors.length;
+                                const dataKey = `${s.server_name}_${suffix}`;
+                                const yAxisId = metric === "net" ? "net" : "percent";
+                                lines.push(
+                                    <Line
+                                        key={`glow_${s.server_name}_${suffix}`}
+                                        type="monotone"
+                                        dataKey={dataKey}
+                                        yAxisId={yAxisId}
+                                        stroke={colors[colorIndex]}
+                                        strokeOpacity={0.13}
+                                        strokeWidth={7}
+                                        legendType="none"
+                                        dot={false}
+                                        activeDot={false}
+                                        isAnimationActive={false}
+                                    />
+                                );
+                                lines.push(
+                                    <Line
+                                        key={`l_${s.server_name}_${suffix}`}
+                                        type="monotone"
+                                        dataKey={dataKey}
+                                        yAxisId={yAxisId}
+                                        stroke={colors[colorIndex]}
+                                        strokeOpacity={0.82}
+                                        style={{ filter: `drop-shadow(0 0 7px ${colors[colorIndex]}99)` }}
+                                        name={`${s.server_name} ${label}`}
+                                        dot={chartData.length === 1 ? { r: 3, strokeWidth: 1 } : false}
+                                        strokeWidth={2}
+                                        activeDot={{ r: 3 }}
+                                        isAnimationActive={false}
+                                    />
+                                );
+                            });
                             return lines;
                         })}
                     </LineChart>
-                </ResponsiveContainer>
+                </ResponsiveContainer>}
             </Box>
         </Card>
     );
@@ -445,9 +526,9 @@ const DetailView = ({ title, metric, servers, onNodeClick }) => {
         <Box sx={{ p: 4, height: "100%", overflowY: "auto" }}>
             <Box display="flex" justifyContent="space-between" alignItems="center" mb={4}>
                 <Typography variant="h4" fontWeight="bold">
-                    <span style={{ marginRight: 10 }}>{metric.icon}</span> {title} 监控详情
+                <span className="material-icons detail-title-icon" aria-hidden="true">{metric.icon}</span> {title} 监控详情
                 </Typography>
-                <Button variant="outlined" startIcon={<span>🔃</span>}>刷新数据</Button>
+                <Button variant="outlined" startIcon={<span className="material-icons" aria-hidden="true">refresh</span>}>刷新数据</Button>
             </Box>
 
             <TableContainer component={Paper} sx={{ mb: 4 }}>
@@ -755,15 +836,15 @@ const FlowTripleMonitorView = ({
         };
     }, [aggregated]);
 
-    const title = mode === "net" ? "🌐 网络流量监控详情" : "💿 磁盘IO监控详情";
+    const title = mode === "net" ? "网络流量监控详情" : "磁盘 IO 监控详情";
     const subtitle = mode === "net"
         ? "展示输入流量、输出流量、总流量（聚合所有网卡）"
         : "展示读流量、写流量、总流量（聚合所有磁盘）";
 
     const sections = [
-        { key: "input", title: mode === "net" ? "输入流量趋势" : "读流量趋势", color: "#2196f3" },
-        { key: "output", title: mode === "net" ? "输出流量趋势" : "写流量趋势", color: "#f50057" },
-        { key: "total", title: "总流量趋势", color: "#00e676" }
+        { key: "input", title: mode === "net" ? "输入流量趋势" : "读流量趋势", color: "#7299d1" },
+        { key: "output", title: mode === "net" ? "输出流量趋势" : "写流量趋势", color: "#d17fab" },
+        { key: "total", title: "总流量趋势", color: "#54b99a" }
     ];
 
     const getSeverity = React.useCallback((sectionKey, value) => {
@@ -814,14 +895,14 @@ const FlowTripleMonitorView = ({
                             <Box sx={{ height: 260, mb: 2 }}>
                                 <ResponsiveContainer width="100%" height="100%">
                                     <LineChart data={aggregated}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="#2c3e50" />
-                                        <XAxis dataKey="time" stroke="#546e7a" />
-                                        <YAxis stroke="#546e7a" />
-                                        <Tooltip formatter={(v) => [`${Number(v || 0).toFixed(3)} MB/s`, section.title]} contentStyle={{ backgroundColor: "rgba(20, 30, 40, 0.9)", border: "1px solid #333" }} />
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#303330" />
+                                        <XAxis dataKey="time" stroke="#777d76" />
+                                        <YAxis stroke="#777d76" />
+                                        <Tooltip formatter={(v) => [`${Number(v || 0).toFixed(3)} MB/s`, section.title]} contentStyle={{ backgroundColor: "rgba(25, 26, 25, 0.98)", border: "1px solid #363936", borderRadius: 8 }} />
                                         <Legend />
-                                        <ReferenceLine y={thresholds[section.key].warn} stroke="#ffea00" strokeDasharray="5 5" label={{ value: "P90", position: "right", fill: "#ffea00" }} />
-                                        <ReferenceLine y={thresholds[section.key].critical} stroke="#ff1744" strokeDasharray="5 5" label={{ value: "P98", position: "right", fill: "#ff1744" }} />
-                                        <Line type="monotone" dataKey={section.key} stroke={section.color} dot={false} strokeWidth={2} name={section.title} />
+                                        <ReferenceLine y={thresholds[section.key].warn} stroke="#d8b55a" strokeDasharray="5 5" label={{ value: "P90", position: "right", fill: "#d8b55a" }} />
+                                        <ReferenceLine y={thresholds[section.key].critical} stroke="#dc7474" strokeDasharray="5 5" label={{ value: "P98", position: "right", fill: "#dc7474" }} />
+                                        <Line type="monotone" dataKey={section.key} stroke={section.color} strokeOpacity={0.82} style={{ filter: `drop-shadow(0 0 6px ${section.color}88)` }} dot={false} strokeWidth={2} name={section.title} />
                                     </LineChart>
                                 </ResponsiveContainer>
                             </Box>
@@ -926,7 +1007,7 @@ const CpuCoreBarsView = ({
 
     return (
         <Box sx={{ p: 4, height: "100%", overflowY: "auto" }}>
-            <Typography variant="h4" fontWeight="bold" mb={1}>⚡ CPU 负载监控详情</Typography>
+            <Typography variant="h4" fontWeight="bold" mb={1}>CPU 负载监控详情</Typography>
             <Typography variant="body2" color="text.secondary" mb={2}>
                 上方展示每个 CPU 核心当前负载（柱状），下方展示节点总 CPU 负载曲线
             </Typography>
@@ -1037,12 +1118,12 @@ const CpuCoreBarsView = ({
                 <Box sx={{ height: 320 }}>
                     <ResponsiveContainer width="100%" height="100%">
                         <AreaChart data={historyData}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#2c3e50" />
-                            <XAxis dataKey="time" stroke="#546e7a" />
-                            <YAxis stroke="#546e7a" domain={[0, 100]} />
-                            <Tooltip formatter={(v) => [`${Number(v || 0).toFixed(2)} %`, "CPU"]} contentStyle={{ backgroundColor: "rgba(20, 30, 40, 0.9)", border: "1px solid #333" }} />
+                            <CartesianGrid strokeDasharray="3 3" stroke="#303330" />
+                            <XAxis dataKey="time" stroke="#777d76" />
+                            <YAxis stroke="#777d76" domain={[0, 100]} />
+                            <Tooltip formatter={(v) => [`${Number(v || 0).toFixed(2)} %`, "CPU"]} contentStyle={{ backgroundColor: "rgba(25, 26, 25, 0.98)", border: "1px solid #363936", borderRadius: 8 }} />
                             <Legend />
-                            <Area type="monotone" dataKey="cpu" name={`${selectedServer || "节点"} 总CPU(%)`} stroke="#2196f3" fill="#2196f3" fillOpacity={0.25} />
+                            <Area type="monotone" dataKey="cpu" name={`${selectedServer || "节点"} 总CPU(%)`} stroke="#7299d1" fill="#7299d1" fillOpacity={0.14} />
                         </AreaChart>
                     </ResponsiveContainer>
                 </Box>
@@ -1056,7 +1137,7 @@ const EndpointView = ({ endpointData }) => {
 
     return (
         <Box sx={{ p: 4, height: "100%", overflowY: "auto" }}>
-            <Typography variant="h4" fontWeight="bold" mb={1}>🔌 查询端口总览</Typography>
+            <Typography variant="h4" fontWeight="bold" mb={1}>查询端口总览</Typography>
             <Typography variant="body2" color="text.secondary" mb={3}>
                 Manager 地址：{endpointData?.manager_address || "-"} ｜ Dashboard 地址：{endpointData?.dashboard_address || "-"}
             </Typography>
@@ -1109,6 +1190,7 @@ const AppShell = () => {
     const [histories, setHistories] = React.useState({});
     const [queryEndpointData, setQueryEndpointData] = React.useState({ endpoints: [] });
     const [selectedQueryServer, setSelectedQueryServer] = React.useState("");
+    const [sidebarFilter, setSidebarFilter] = React.useState("");
     const [queryHours, setQueryHours] = React.useState(24);
     const [trendIntervalSeconds, setTrendIntervalSeconds] = React.useState(300);
     const [queryRows, setQueryRows] = React.useState({ rank: [], trend: [], anomaly: [], net_detail: [], disk_detail: [], mem_detail: [], softirq_detail: [] });
@@ -1132,7 +1214,43 @@ const AppShell = () => {
     React.useEffect(() => {
         // Init fetch
         axios.get("/api/overview", { params: { scoring_profile: scoringProfileRef.current } })
-            .then(res => setData(applyScoringProfileToOverview(res.data, scoringProfileRef.current)))
+            .then(res => {
+                const overview = applyScoringProfileToOverview(res.data, scoringProfileRef.current);
+                setData(overview);
+                const initialTime = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+                setHistories((prev) => {
+                    const next = { ...prev };
+                    overview.servers.forEach((server) => {
+                        if (!(next[server.server_name] || []).length) {
+                            next[server.server_name] = [toHistoryPoint(server, initialTime)];
+                        }
+                    });
+                    return next;
+                });
+                Promise.all(overview.servers.map(async (server) => {
+                    try {
+                        const historyResponse = await axios.get(`/api/performance/${encodeURIComponent(server.server_name)}`, { params: { hours: 1 } });
+                        const records = (historyResponse.data.records || [])
+                            .map((record) => toHistoryPoint(record))
+                            .sort((a, b) => a.timestampMs - b.timestampMs)
+                            .slice(-60);
+                        return [server.server_name, records];
+                    } catch (error) {
+                        return [server.server_name, []];
+                    }
+                })).then((historyEntries) => {
+                    setHistories((prev) => {
+                        const next = { ...prev };
+                        historyEntries.forEach(([serverName, historicalPoints]) => {
+                            if (!historicalPoints.length) return;
+                            const latestHistoryTime = historicalPoints[historicalPoints.length - 1].timestampMs;
+                            const newerLivePoints = (next[serverName] || []).filter((point) => point.timestampMs > latestHistoryTime);
+                            next[serverName] = [...historicalPoints, ...newerLivePoints].slice(-60);
+                        });
+                        return next;
+                    });
+                });
+            })
             .catch(console.error);
         axios.get("/api/query-endpoints").then(res => setQueryEndpointData(res.data)).catch(console.error);
 
@@ -1141,21 +1259,14 @@ const AppShell = () => {
             const activeProfile = scoringProfileRef.current;
             setData(applyScoringProfileToOverview(newData, activeProfile));
             // Append history
-            const now = new Date().toLocaleTimeString("zh-CN", {hour12: false});
             setHistories(prev => {
                 const next = { ...prev };
                 newData.servers.forEach(s => {
                     const h = next[s.server_name] || [];
-                    const p = {
-                        time: now,
-                        cpu: s.cpu_percent,
-                        mem: s.mem_used_percent,
-                        disk: s.disk_util_percent,
-                        net_in: s.rcv_rate,
-                        net_out: s.send_rate
-                    };
-                    // Keep last 60 points
-                    next[s.server_name] = [...h, p].slice(-60);
+                            const p = toHistoryPoint(s);
+                            if (!h.length || p.timestampMs > h[h.length - 1].timestampMs) {
+                                next[s.server_name] = [...h, p].slice(-60);
+                            }
                 });
                 return next;
             });
@@ -1289,24 +1400,29 @@ const AppShell = () => {
     }, [view, selectedQueryServer, queryHours, loadQueryViewData]);
 
     const sidebarItems = [
-        { id: "dashboard", label: "总览看板", icon: "📊" },
-        { id: "endpoints", label: "查询端口", icon: "🔌" },
+        { id: "dashboard", label: "总览看板", icon: "space_dashboard" },
+        { id: "endpoints", label: "查询端口", icon: "account_tree" },
         { divider: true },
-        { id: "header_query", label: "查询功能项" },
-        { id: "rank", label: "评分排行", icon: "🏆" },
-        { id: "trend", label: "趋势聚合", icon: "📈" },
-        { id: "anomaly", label: "异常查询", icon: "🚨" },
-        { id: "net_detail", label: "网络详情", icon: "🛰️" },
-        { id: "disk_detail", label: "磁盘详情", icon: "📀" },
-        { id: "mem_detail", label: "内存详情", icon: "🧠" },
-        { id: "softirq_detail", label: "软中断详情", icon: "🧩" },
+        { id: "header_query", label: "数据查询" },
+        { id: "rank", label: "评分排行", icon: "leaderboard" },
+        { id: "trend", label: "趋势聚合", icon: "show_chart" },
+        { id: "anomaly", label: "异常查询", icon: "warning_amber" },
+        { id: "net_detail", label: "网络详情", icon: "lan" },
+        { id: "disk_detail", label: "磁盘详情", icon: "storage" },
+        { id: "mem_detail", label: "内存详情", icon: "memory" },
+        { id: "softirq_detail", label: "软中断详情", icon: "bolt" },
         { divider: true },
-        { id: "header", label: "细分监控项" },
-        { id: "cpu", label: "CPU 负载", icon: "⚡" },
-        { id: "mem", label: "内存使用", icon: "💾" },
-        { id: "disk", label: "磁盘 IO", icon: "💿" },
-        { id: "net", label: "网络流量", icon: "🌐" },
+        { id: "header", label: "主机指标" },
+        { id: "cpu", label: "CPU 负载", icon: "memory_alt" },
+        { id: "mem", label: "内存使用", icon: "developer_board" },
+        { id: "disk", label: "磁盘 IO", icon: "hard_drive" },
+        { id: "net", label: "网络流量", icon: "router" },
     ];
+    const visibleSidebarItems = sidebarFilter.trim()
+        ? sidebarItems.filter((item) => item.id && item.label.toLowerCase().includes(sidebarFilter.trim().toLowerCase()))
+        : sidebarItems;
+    const activeSidebarItem = sidebarItems.find((item) => item.id === view);
+    const pageTitle = subViewNode ? `${subViewNode} · 性能详情` : (activeSidebarItem?.label || "总览看板");
 
     const handleViewChange = (newView) => {
         setView(newView);
@@ -1336,27 +1452,31 @@ const AppShell = () => {
 
         if (view === "dashboard") {
             return (
-                <Box sx={{ height: "100%", display: "flex", flexDirection: "column", p: 3, gap: 3 }}>
-                    <Paper sx={{ p: 2, display: "flex", alignItems: "center", gap: 2 }}>
-                        <Typography variant="body2" color="text.secondary">评分体系</Typography>
-                        <Select
-                            size="small"
-                            value={scoringProfile}
-                            onChange={(e) => setScoringProfile(e.target.value)}
-                            sx={{ minWidth: 180 }}
-                        >
-                            {SCORING_PROFILES.map((p) => (
-                                <MenuItem key={p.value} value={p.value}>{p.label}</MenuItem>
-                            ))}
-                        </Select>
+                <Box className="dashboard-home" sx={{ minHeight: "100%", display: "flex", flexDirection: "column", p: 3, gap: 2 }}>
+                    <Paper className="dashboard-toolbar" sx={{ p: 1.5, display: "flex", alignItems: "center", gap: 2 }}>
+                        <span className="material-icons toolbar-icon" aria-hidden="true">tune</span>
+                        <Box className="score-profile-group">
+                            <Typography variant="body2" color="text.secondary">评分体系</Typography>
+                            <Select
+                                className="score-profile-select"
+                                size="small"
+                                value={scoringProfile}
+                                onChange={(e) => setScoringProfile(e.target.value)}
+                                sx={{ minWidth: 180 }}
+                            >
+                                {SCORING_PROFILES.map((p) => (
+                                    <MenuItem key={p.value} value={p.value}>{p.label}</MenuItem>
+                                ))}
+                            </Select>
+                        </Box>
                         <Typography variant="caption" color="text.secondary">
                             直接展示 KernScope 计算的资源评分或健康评分
                         </Typography>
                     </Paper>
-                    <Box sx={{ height: "30%", minHeight: 200 }}>
-                        <TopStats clusterStats={data.cluster_stats} />
+                    <Box>
+                        <TopStats clusterStats={data.cluster_stats} servers={data.servers} scoringProfile={scoringProfile} />
                     </Box>
-                    <Box sx={{ flexGrow: 1, minHeight: 400 }}>
+                    <Box sx={{ flexGrow: 1, minHeight: 390 }}>
                         <ChartSection servers={data.servers} nodeHistories={histories} />
                     </Box>
                 </Box>
@@ -1369,13 +1489,13 @@ const AppShell = () => {
 
         if (["rank", "trend", "anomaly", "net_detail", "disk_detail", "mem_detail", "softirq_detail"].includes(view)) {
             const queryTitleMap = {
-                rank: "🏆 评分排行查询",
-                trend: "📈 趋势聚合查询",
-                anomaly: "🚨 异常记录查询",
-                net_detail: "🛰️ 网络详情查询",
-                disk_detail: "📀 磁盘详情查询",
-                mem_detail: "🧠 内存详情查询",
-                softirq_detail: "🧩 软中断详情查询"
+            rank: "评分排行查询",
+                trend: "趋势聚合查询",
+                anomaly: "异常记录查询",
+                net_detail: "网络详情查询",
+                disk_detail: "磁盘详情查询",
+                mem_detail: "内存详情查询",
+                softirq_detail: "软中断详情查询"
             };
 
             return (
@@ -1415,10 +1535,10 @@ const AppShell = () => {
 
         // Detail Views
         const metrics = {
-            cpu: { key: "cpu_percent", icon: "⚡", unit: "%", getValue: s => s.cpu_percent, format: v => `${v.toFixed(1)}%` },
-            mem: { key: "mem_used_percent", icon: "💾", unit: "%", getValue: s => s.mem_used_percent, format: v => `${v.toFixed(1)}%` },
-            disk: { key: "disk_util_percent", icon: "💿", unit: "%", getValue: s => s.disk_util_percent, format: v => `${v.toFixed(1)}%` },
-            net: { key: "net", icon: "🌐", unit: "MB/s", getValue: s => (s.rcv_rate + s.send_rate)/1024, format: v => `${v.toFixed(1)} MB/s`, normalize: v => Math.min(v/10 * 100, 100) } // Mock normalization
+            cpu: { key: "cpu_percent", icon: "memory_alt", unit: "%", getValue: s => s.cpu_percent, format: v => `${v.toFixed(1)}%` },
+            mem: { key: "mem_used_percent", icon: "developer_board", unit: "%", getValue: s => s.mem_used_percent, format: v => `${v.toFixed(1)}%` },
+            disk: { key: "disk_util_percent", icon: "hard_drive", unit: "%", getValue: s => s.disk_util_percent, format: v => `${v.toFixed(1)}%` },
+            net: { key: "net", icon: "router", unit: "MB/s", getValue: s => (s.rcv_rate + s.send_rate)/1024, format: v => `${v.toFixed(1)} MB/s`, normalize: v => Math.min(v/10 * 100, 100) } // Mock normalization
         };
 
         const m = metrics[view];
@@ -1503,19 +1623,36 @@ const AppShell = () => {
     return (
         <ThemeProvider theme={theme}>
             <CssBaseline />
-            <Box sx={{ display: "flex", height: "100vh", overflow: "hidden" }}>
+            <Box className="app-shell" sx={{ display: "flex", height: "100dvh", overflow: "hidden" }}>
                 <Drawer
+                     className="sidebar-shell"
                      variant="permanent"
                      sx={{
-                         width: 250, flexShrink: 0,
-                         [`& .MuiDrawer-paper`]: { width: 250, boxSizing: "border-box", borderRight: "1px solid rgba(255,255,255,0.05)", bgcolor: "#05101a" },
+                         width: 280, flexShrink: 0,
+                         [`& .MuiDrawer-paper`]: { width: 280, boxSizing: "border-box", borderRight: "1px solid #292b29", bgcolor: "#141514" },
                      }}
                 >
-                    <Box sx={{ p: 3, display: "flex", alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
-                        <Typography variant="h5" color="primary" fontWeight="900" letterSpacing={1}>🛡️ LMS</Typography>
+                    <Box className="sidebar-inner">
+                    <Box className="brand-lockup">
+                        <span className="brand-mark material-icons" aria-hidden="true">monitor_heart</span>
+                        <Box>
+                            <Typography className="brand-name">Dashboard</Typography>
+                        </Box>
                     </Box>
-                    <List sx={{ pt: 2 }}>
-                        {sidebarItems.map((item, i) => {
+                    <TextField
+                        className="sidebar-search"
+                        size="small"
+                        placeholder="搜索功能"
+                        value={sidebarFilter}
+                        onChange={(event) => setSidebarFilter(event.target.value)}
+                        inputProps={{ "aria-label": "搜索导航功能" }}
+                        InputProps={{
+                            startAdornment: <InputAdornment position="start"><span className="material-icons" aria-hidden="true">search</span></InputAdornment>,
+                            endAdornment: sidebarFilter ? <InputAdornment position="end"><IconButton size="small" aria-label="清空搜索" onClick={() => setSidebarFilter("")}><span className="material-icons">close</span></IconButton></InputAdornment> : null
+                        }}
+                    />
+                    <List className="nav-list">
+                        {visibleSidebarItems.map((item, i) => {
                             if (item.divider) return <Divider key={i} sx={{ my: 2, borderColor: "rgba(255,255,255,0.1)" }} />;
                             if (item.id === "header" || item.id === "header_query") return <Typography key={i} variant="caption" sx={{ px: 3, color: "text.secondary", mt: 1, display: "block" }}>{item.label}</Typography>;
                             
@@ -1523,23 +1660,48 @@ const AppShell = () => {
                                 <ListItem 
                                     button 
                                     key={item.id} 
+                                    aria-label={item.label}
+                                    title={item.label}
                                     selected={view === item.id && !subViewNode} 
                                     onClick={() => handleViewChange(item.id)}
                                     sx={{ 
-                                        mx: 1, my: 0.5, borderRadius: 2, 
-                                        "&.Mui-selected": { bgcolor: "primary.main", color: "white", "&:hover": { bgcolor: "primary.dark" } },
-                                        "&.Mui-selected .MuiListItemIcon-root": { color: "white" }
+                                        mx: 1, my: 0.25, borderRadius: 2,
+                                        "&.Mui-selected": { bgcolor: "rgba(84,185,154,0.14)", color: "#dcebe5", "&:hover": { bgcolor: "rgba(84,185,154,0.2)" } },
+                                        "&.Mui-selected .MuiListItemIcon-root": { color: "#73c7a8" }
                                     }}
                                 >
-                                    <ListItemIcon sx={{ minWidth: 40, color: "text.secondary" }}>{item.icon}</ListItemIcon>
+                                    <ListItemIcon sx={{ minWidth: 38, color: "text.secondary" }}><span className="material-icons nav-icon" aria-hidden="true">{item.icon}</span></ListItemIcon>
                                     <ListItemText primary={item.label} />
                                 </ListItem>
                             );
                         })}
+                        {visibleSidebarItems.length === 0 && <Typography variant="caption" sx={{ px: 2, py: 1.5, color: "text.secondary" }}>未找到匹配功能</Typography>}
                     </List>
+                    <Box className="sidebar-footer">
+                        <Box className={`connection-dot ${data.servers.length ? "is-connected" : ""}`} />
+                        <Box>
+                            <Typography className="connection-label">{data.servers.length ? "采集链路正常" : "等待节点连接"}</Typography>
+                            <Typography className="connection-detail">{data.cluster_stats.online_servers || 0} / {data.cluster_stats.total_servers || 0} 节点在线</Typography>
+                        </Box>
+                    </Box>
+                    </Box>
                 </Drawer>
-                <Box component="main" sx={{ flexGrow: 1, height: "100vh", overflow: "hidden", bgcolor: "#0a1929" }}>
-                     {renderContent()}
+                <Box component="main" className="dashboard-main">
+                    <Box component="header" className="topbar">
+                        <Box className="topbar-title">
+                            <span className="material-icons topbar-page-icon" aria-hidden="true">{activeSidebarItem?.icon || "monitoring"}</span>
+                            <Box>
+                                <Typography className="topbar-eyebrow">KernScope · 监控中心</Typography>
+                                <Typography className="topbar-heading">{pageTitle}</Typography>
+                            </Box>
+                        </Box>
+                        <Box className="topbar-meta">
+                            <span className={`live-indicator ${data.servers.length ? "is-connected" : ""}`} />
+                            <Typography className="live-label">实时更新</Typography>
+                            <Typography className="topbar-date">{new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" })}</Typography>
+                        </Box>
+                    </Box>
+                    <Box component="section" className="page-stage">{renderContent()}</Box>
                 </Box>
             </Box>
             <window.AgentPanel serverName={selectedQueryServer}
