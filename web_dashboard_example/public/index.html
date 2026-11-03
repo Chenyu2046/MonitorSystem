@@ -1,0 +1,72 @@
+<!-- Modified for KernScope: load the Agent sidebar. Upstream: superlxh02/linux_monitor_system (Apache-2.0). -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KernScope · 主机监控</title>
+    <link rel="stylesheet" href="/styles.css" />
+    
+    <!-- React & Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Material UI -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <script crossorigin src="https://unpkg.com/@mui/material@5.15.11/umd/material-ui.development.js"></script>
+    <script crossorigin src="https://unpkg.com/@emotion/react@11.11.3/umd/emotion-react.umd.min.js"></script>
+    <script crossorigin src="https://unpkg.com/@emotion/styled@11.11.0/umd/emotion-styled.umd.min.js"></script>
+
+    <!-- Prop-Types (Recharts peer dependency) -->
+    <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+
+    <!-- Recharts (pinned version for stability) -->
+    <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
+
+    <!-- Socket.io -->
+    <script src="/socket.io/socket.io.js"></script>
+    
+    <!-- Axios -->
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+
+</head>
+<body>
+    <div id="error-display"></div>
+    <div id="root">
+        <div class="app-loading">
+            <span class="material-icons" aria-hidden="true">monitor_heart</span>
+            <span>正在连接监控数据…</span>
+        </div>
+    </div>
+    
+    <script>
+        window.onerror = function(msg, url, lineNo, columnNo, error) {
+            var string = msg.toLowerCase();
+            var substring = "script error";
+            if (string.indexOf(substring) > -1){
+                alert('Script Error: See Browser Console for Detail');
+            } else {
+                var message = [
+                    'Message: ' + msg,
+                    'URL: ' + url,
+                    'Line: ' + lineNo,
+                    'Column: ' + columnNo,
+                    'Error object: ' + JSON.stringify(error)
+                ].join(' - ');
+                console.error(message);
+                var el = document.getElementById('error-display');
+                if(el) {
+                    el.style.display = 'block';
+                    el.innerText = "JavaScript Error:\n" + message;
+                }
+            }
+            return false;
+        };
+    </script>
+    <script type="text/babel" src="diagnosis.js"></script>
+    <script type="text/babel" src="agent.js"></script>
+    <script type="text/babel" src="settings.js"></script>
+    <script type="text/babel" src="app.js"></script>
+</body>
+</html>

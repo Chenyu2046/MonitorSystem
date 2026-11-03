@@ -61,3 +61,7 @@ __pycache__/
 
 # Local test binaries
 /worker/src/ebpf/test_net_ebpf
+
+# Local Web Dashboard dependencies and secrets
+web_dashboard_example/node_modules/
+web_dashboard_example/.env
