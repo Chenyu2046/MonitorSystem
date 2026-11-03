@@ -13,6 +13,8 @@ const io = new Server(server);
 
 const PORT = Number(process.env.PORT || 3000);
 const MANAGER_ADDRESS = process.env.MANAGER_ADDRESS || '127.0.0.1:50051';
+const deepseekConfig = require('./deepseek-config');
+deepseekConfig.load();
 
 const QUERY_ENDPOINTS = [
     // gRPC QueryService APIs
@@ -55,6 +57,36 @@ app.use((req,res,next) => {
             return res.status(403).json({error:'跨站请求已拒绝'});
     }
     next();
+});
+
+const requireLoopback = (req, res, next) => {
+    const remoteAddress = String(req.socket?.remoteAddress || '').toLowerCase().replace(/^::ffff:/, '');
+    if (remoteAddress !== '127.0.0.1' && remoteAddress !== '::1')
+        return res.status(403).json({error: 'API 配置只允许本机访问。'});
+    next();
+};
+
+app.get('/api/settings/deepseek', requireLoopback, (req, res) => {
+    res.json(deepseekConfig.status());
+});
+app.put('/api/settings/deepseek', requireLoopback, (req, res) => {
+    const apiKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
+    if (!apiKey || apiKey.length > 512 || /[\u0000-\u001f\u007f]/.test(apiKey))
+        return res.status(400).json({error: '请输入有效的 API Key（最多 512 个字符）。'});
+    try {
+        deepseekConfig.save(apiKey);
+        res.json(deepseekConfig.status());
+    } catch (_) {
+        res.status(500).json({error: '无法保存 API Key，请检查本机配置目录的写入权限。'});
+    }
+});
+app.delete('/api/settings/deepseek', requireLoopback, (req, res) => {
+    try {
+        deepseekConfig.clear();
+        res.json(deepseekConfig.status());
+    } catch (_) {
+        res.status(500).json({error: '无法删除本机保存的 API Key。'});
+    }
 });
 
 // gRPC Setup

@@ -1,5 +1,5 @@
 // Read-only incident investigation and proactive alerts. Matches the existing Dark Glass UI.
-const KernDiagnosisCenter = ({servers, selectedServer, onServerChange, focusedIncident, onAsk}) => {
+const KernDiagnosisCenter = ({servers, selectedServer, onServerChange, focusedIncident, onAsk, onSettings}) => {
     const {Box, Paper, Typography, Button, Chip, Select, MenuItem, CircularProgress} = MaterialUI;
     const [hours,setHours] = React.useState(24);
     const [records,setRecords] = React.useState([]);
@@ -150,10 +150,15 @@ const KernDiagnosisCenter = ({servers, selectedServer, onServerChange, focusedIn
                                     <Typography className="diagnosis-muted">暂无原始诊断证据，不能确认具体根因。</Typography>}
                                 <Typography className="diagnosis-section-title">AI 诊断</Typography>
                                 {!report && <Typography className="diagnosis-muted">尚未生成 AI 报告，点击右上角「AI 分析」。</Typography>}
-                                {report && report.ai_status!=="ready" && <Typography className="diagnosis-muted">
-                                    {report.ai_status==="unavailable"?"未配置 OPENAI_API_KEY；仍可查看规则与原始证据。":
-                                        "AI 分析失败："+(report.error||"可重新尝试")}
-                                </Typography>}
+                                {report && report.ai_status!=="ready" && <Box className="diagnosis-ai-state">
+                                    <Typography className="diagnosis-muted">
+                                        {report.ai_status==="unavailable"?"未配置 DeepSeek API Key；仍可查看规则与原始证据。":
+                                            "AI 分析失败："+(report.error||"可重新尝试")}
+                                    </Typography>
+                                    {report.ai_status==="unavailable" && <Button size="small" variant="outlined" onClick={onSettings}>
+                                        配置 API Key
+                                    </Button>}
+                                </Box>}
                                 {report?.ai_status==="ready" && <>
                                     <Typography className="diagnosis-ai-summary">{report.summary}</Typography>
                                     <Typography variant="body2" className="diagnosis-ai-analysis">{report.analysis}</Typography>

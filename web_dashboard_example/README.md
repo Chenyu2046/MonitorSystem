@@ -14,13 +14,15 @@ MANAGER_ADDRESS=127.0.0.1:50051 npm start
 
 访问 http://127.0.0.1:3000。
 
-AI 功能需要**服务端环境变量**（不要把 Key 放在浏览器或提交到 Git）：
+AI 功能可在 Dashboard 侧栏的「系统设置 → API 配置」中填写 DeepSeek API Key。Key 仅提交给本机服务端，不会回传到页面；配置保存在当前用户目录，不会写入仓库。也可以继续通过服务端环境变量配置：
 
 ```bash
 DEEPSEEK_API_KEY=你的密钥 DEEPSEEK_MODEL=deepseek-flash npm start
 ```
 
 Agent 的问答与自动 Incident 分析**只调用 DeepSeek**：`POST https://api.deepseek.com/chat/completions`。默认模型 `deepseek-flash`，可通过 `DEEPSEEK_MODEL=deepseek-v4-pro` 切换；不再读取 `OPENAI_API_KEY` / `OPENAI_MODEL`。为兼容首次强制 Tool Calling，显式设置 `thinking.type=disabled`；自动分析使用 `response_format=json_object`。请仅在服务端配置 Key。
+
+UI 保存的 Key 位于 Windows `%APPDATA%\KernScope\deepseek-api-key.json`，继承当前用户 AppData 目录权限；Linux/macOS 位于 `~/.config/KernScope/deepseek-api-key.json`，文件权限设为仅当前用户可读。UI 保存的本机配置优先于服务启动环境变量；移除本机配置后，若启动环境仍提供 Key，则继续使用环境变量。
 
 默认 Dashboard 只监听 127.0.0.1。Codespaces 需要端口转发时可显式设置 `HOST=0.0.0.0`，并将转发端口设为 Private。Manager 的 gRPC 目前未启用 TLS，请不要直接开放公网访问。
 

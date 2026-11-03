@@ -1347,7 +1347,7 @@ const EndpointView = ({ endpointData }) => {
 // --- Main App Shell ---
 
 const AppShell = () => {
-    const [view, setView] = React.useState("dashboard");
+    const [view, setView] = React.useState(window.location.pathname.replace(/\/+$/, "") === "/settings" ? "settings" : "dashboard");
     const [focusedIncident, setFocusedIncident] = React.useState(null);
     const [agentSeed, setAgentSeed] = React.useState(null); // dashboard | endpoints | rank | trend | anomaly | net_detail | disk_detail | mem_detail | softirq_detail | cpu | mem | disk | net
     const [subViewNode, setSubViewNode] = React.useState(null); // If set, shows chart for this node inside the current view
@@ -1582,6 +1582,9 @@ const AppShell = () => {
         { id: "mem", label: "内存使用", dot: "blue" },
         { id: "disk", label: "磁盘 I/O", dot: "purple" },
         { id: "net", label: "网络流量", dot: "pink" },
+        { divider: true },
+        { id: "header_settings", label: "系统设置" },
+        { id: "settings", label: "API 配置", icon: "key" },
     ];
     const visibleSidebarItems = sidebarFilter.trim()
         ? sidebarItems.filter((item) => item.id && item.label.toLowerCase().includes(sidebarFilter.trim().toLowerCase()))
@@ -1591,6 +1594,8 @@ const AppShell = () => {
 
     const handleViewChange = (newView) => {
         setView(newView);
+        const nextPath = newView === "settings" ? "/settings" : "/";
+        if (window.location.pathname !== nextPath) window.history.replaceState(null, "", nextPath);
         setSubViewNode(null); // Reset sub-view on main nav change
     };
 
@@ -1626,12 +1631,16 @@ const AppShell = () => {
                 selectedServer={selectedQueryServer}
                 onServerChange={setSelectedQueryServer}
                 focusedIncident={focusedIncident}
+                onSettings={() => handleViewChange("settings")}
                 onAsk={incident => {
                     setSelectedQueryServer(incident.server_name);
                     setAgentSeed({id: String(incident.id), host: incident.server_name,
                         question: "请结合 Incident #" + incident.id + " 的实际证据进一步解释根因和排查步骤。"});
                 }}
             />;
+        }
+        if (view === "settings") {
+            return <window.KernSettingsPanel />;
         }
         if (view === "dashboard") {
             return (
@@ -1833,7 +1842,7 @@ const AppShell = () => {
                     <List className="nav-list">
                         {visibleSidebarItems.map((item, i) => {
                             if (item.divider) return <Divider key={i} sx={{ my: 2, borderColor: "rgba(255,255,255,0.1)" }} />;
-                            if (item.id === "header" || item.id === "header_query") return <Typography key={i} variant="caption" sx={{ px: 3, color: "text.secondary", mt: 1, display: "block" }}>{item.label}</Typography>;
+                            if (item.id === "header" || item.id === "header_query" || item.id === "header_settings") return <Typography key={i} variant="caption" sx={{ px: 3, color: "text.secondary", mt: 1, display: "block" }}>{item.label}</Typography>;
                             
                             return (
                                 <ListItem key={item.id} disablePadding className="nav-row">
@@ -1875,7 +1884,7 @@ const AppShell = () => {
                                 setSelectedQueryServer(record.server_name);
                                 setFocusedIncident({id: String(record.incident_id), nonce: Date.now()});
                                 setSubViewNode(null);
-                                setView("diagnosis");
+                                handleViewChange("diagnosis");
                             }} />
                             <span className={`live-indicator ${socketConnected ? "is-connected" : ""}`} />
                             <Typography className="live-label">{socketConnected ? "实时同步" : "连接中断"}</Typography>
