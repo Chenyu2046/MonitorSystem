@@ -17,8 +17,10 @@ MANAGER_ADDRESS=127.0.0.1:50051 npm start
 AI 功能需要**服务端环境变量**（不要把 Key 放在浏览器或提交到 Git）：
 
 ```bash
-OPENAI_API_KEY=... OPENAI_MODEL=gpt-4.1-mini npm start
+DEEPSEEK_API_KEY=你的密钥 DEEPSEEK_MODEL=deepseek-flash npm start
 ```
+
+Agent 的问答与自动 Incident 分析**只调用 DeepSeek**：`POST https://api.deepseek.com/chat/completions`。默认模型 `deepseek-flash`，可通过 `DEEPSEEK_MODEL=deepseek-v4-pro` 切换；不再读取 `OPENAI_API_KEY` / `OPENAI_MODEL`。为兼容首次强制 Tool Calling，显式设置 `thinking.type=disabled`；自动分析使用 `response_format=json_object`。请仅在服务端配置 Key。
 
 默认 Dashboard 只监听 127.0.0.1。Codespaces 需要端口转发时可显式设置 `HOST=0.0.0.0`，并将转发端口设为 Private。Manager 的 gRPC 目前未启用 TLS，请不要直接开放公网访问。
 
@@ -34,7 +36,7 @@ OPENAI_API_KEY=... OPENAI_MODEL=gpt-4.1-mini npm start
 ## 当前限制
 
 - 无真实数据时页面为空；本分支未在完整 eBPF + MySQL 环境完成端到端验证。
-- 未配置 `OPENAI_API_KEY` 时监控页面仍可使用，AI 请求返回 503 配置提示。
+- 未配置 `DEEPSEEK_API_KEY` 时监控页面仍可使用，AI 请求返回 503 配置提示。
 - AI 只读、不执行命令；模型回答并不等同于已证实的根因。
 - 默认采用浏览器 CDN 加载 React/MUI/Recharts，断网无法完成页面初始化。
 - 修改基于原仓库 `main` @ `6f5099e8743521e08d380fb68d9ada8ba41982ec`。
@@ -47,7 +49,7 @@ node --check agent.js
 npm ci && npm start
 ```
 
-启动 KernScope Manager 后，在 Dashboard 中核对评分、时间戳、CPU/网络单位，再配置 Key 用「AI 分析」验证事件与 Evidence 查询。
+启动 KernScope Manager 后，在 Dashboard 中核对评分、时间戳、CPU/网络单位，再配置 DeepSeek Key 后用「AI 分析」验证事件与 Evidence 查询。
 
 ## 智能诊断与主动告警
 
@@ -57,7 +59,7 @@ npm ci && npm start
 - **历史故障**：`GET /api/incidents?server_name=...&hours=24&page=1&page_size=30` 与 `GET /api/incidents/:id?server_name=...`。
 - **手动报告**：`POST /api/incidents/:id/analyze`，请求体 `{ "server_name": "...", "refresh": true }` 可重新分析；报告保留原始 Evidence 和规则根因。
 - **主动告警**：BFF 每 20 秒查询活跃事件及最近 10 分钟历史事件，按 `server_name + incident_id + start_time_ms` 去重；新事件或严重级别升级推送 Socket.IO 通知。
-- **自动诊断**：配置 `OPENAI_API_KEY` 后，新增 Incident 进入有界串行分析队列（最多 50 个等待任务）；未配置时只显示规则根因与证据，不冒充 AI 报告。
+- **自动诊断**：配置 `DEEPSEEK_API_KEY` 后，新增 Incident 进入有界串行分析队列（最多 50 个等待任务）；未配置时只显示规则根因与证据，不冒充 AI 报告。
 - **告警确认**：`GET /api/alerts`、`POST /api/alerts/ack`。告警及确认状态存 Node.js 内存；历史记录仍以 Manager Incident 为准。
 
 安全边界：Dashboard API 同源，拒绝外部浏览器 Origin 的写请求；API Key 仅在服务端；诊断只读，不运行 Linux 命令，不自动修复。不要公开无认证的 BFF 或明文 Manager gRPC。

@@ -41,7 +41,7 @@ module.exports = function createAlerts(rpc, io, analyzeIncident) {
       key,incident_id:String(incident.id),server_name:incident.server_name,
       severity:incident.severity,state:incident.state,active:!!incident.active,
       start_time_ms:incident.start_time_ms,acknowledged:initial,
-      ai_status:process.env.OPENAI_API_KEY ? "pending" : "unavailable",summary:""
+      ai_status:process.env.DEEPSEEK_API_KEY ? "pending" : "unavailable",summary:""
     };
     alerts.set(key,entry);
     // Bounded history in memory; persistent Incident history stays in Manager.
@@ -56,7 +56,7 @@ module.exports = function createAlerts(rpc, io, analyzeIncident) {
     if (running.has(key)) return running.get(key);
     if (!force && entry.report?.ai_status === "ready") return entry.report;
     const task=(async()=>{
-      entry.ai_status=process.env.OPENAI_API_KEY ? "analyzing" : "unavailable";
+      entry.ai_status=process.env.DEEPSEEK_API_KEY ? "analyzing" : "unavailable";
       emit("diagnosis_updated",entry);
       let report;
       try {
@@ -124,7 +124,7 @@ module.exports = function createAlerts(rpc, io, analyzeIncident) {
       }
       initialized=true;
       // Every episode gets a notification. Bounded queue limits the number of LLM calls.
-      if (process.env.OPENAI_API_KEY) {
+      if (process.env.DEEPSEEK_API_KEY) {
         for (const incident of fresh) {
           if (pending.length < 50) pending.push(incident);
         }

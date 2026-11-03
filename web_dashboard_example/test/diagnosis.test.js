@@ -48,8 +48,8 @@ test("closed incident between polls is detected through historical query",async(
   alerts.stop();
 });
 test("without an API key, diagnosis never invents AI findings",async()=>{
-  const saved=process.env.OPENAI_API_KEY;
-  delete process.env.OPENAI_API_KEY;
+  const saved=process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
   try{
     const report=await createAgent.analyzeIncident(rpcMock({}),incident(3));
     assert.equal(report.ai_status,"unavailable");
@@ -57,16 +57,21 @@ test("without an API key, diagnosis never invents AI findings",async()=>{
     assert.equal(report.root_causes[0].confidence,.8);
     assert.deepEqual(report.recommendations,[]);
   }finally{
-    if(saved===undefined)delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY=saved;
+    if(saved===undefined)delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY=saved;
   }
 });
 test("tool requests are restricted to the selected host and retain history",async()=>{
-  const previousFetch=global.fetch,oldKey=process.env.OPENAI_API_KEY;
-  process.env.OPENAI_API_KEY="mock-key";
+  const previousFetch=global.fetch,oldKey=process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY="mock-key";
   let turn=0,chatBodies=[];
-  global.fetch=async(_url,options)=>{
-    chatBodies.push(JSON.parse(options.body));
+  global.fetch=async(url,options)=>{
+    assert.equal(url,"https://api.deepseek.com/chat/completions");
+    assert.equal(options.headers.Authorization,"Bearer mock-key");
+    const body=JSON.parse(options.body);
+    assert.equal(body.model,"deepseek-flash");
+    assert.deepEqual(body.thinking,{type:"disabled"});
+    chatBodies.push(body);
     turn++;
     return {ok:true,json:async()=>({choices:[{message:turn===1
       ? {role:"assistant",content:null,tool_calls:[{id:"c1",type:"function",function:{
@@ -89,20 +94,22 @@ test("tool requests are restricted to the selected host and retain history",asyn
     assert.deepEqual(res.body.tools_used,["get_incidents"]);
     assert.equal(calls[0].params.server_name,"host-A");
     assert.ok(chatBodies[0].messages.some(m=>m.content==="之前的 CPU 问题"));
+    assert.equal(chatBodies[0].tool_choice,"required");
+    assert.equal(chatBodies[1].tool_choice,"auto");
     const tool=chatBodies[1].messages.find(m=>m.role==="tool");
     assert.ok(tool.content.includes("host-A"));
     assert.ok(!tool.content.includes("host-B"));
   }finally{
     global.fetch=previousFetch;
-    if(oldKey===undefined)delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY=oldKey;
+    if(oldKey===undefined)delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY=oldKey;
   }
 });
 
 
 test("AI refuses a direct answer with no successful tool evidence",async()=>{
-  const oldKey=process.env.OPENAI_API_KEY,oldFetch=global.fetch;
-  process.env.OPENAI_API_KEY="mock-key";
+  const oldKey=process.env.DEEPSEEK_API_KEY,oldFetch=global.fetch;
+  process.env.DEEPSEEK_API_KEY="mock-key";
   global.fetch=async()=>({ok:true,json:async()=>({choices:[{message:{role:"assistant",content:"猜测 CPU 异常"}}]})});
   const res={code:200,status(n){this.code=n;return this;},json(v){this.body=v;return this;}};
   try{
@@ -113,7 +120,58 @@ test("AI refuses a direct answer with no successful tool evidence",async()=>{
     assert.match(res.body.error,/证据/);
   }finally{
     global.fetch=oldFetch;
-    if(oldKey===undefined)delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY=oldKey;
+    if(oldKey===undefined)delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY=oldKey;
+  }
+});
+
+
+test("automatic diagnosis uses DeepSeek JSON mode and retains source evidence",async()=>{
+  const oldKey=process.env.DEEPSEEK_API_KEY,oldModel=process.env.DEEPSEEK_MODEL,oldFetch=global.fetch;
+  process.env.DEEPSEEK_API_KEY="fake-deepseek-key";
+  process.env.DEEPSEEK_MODEL="deepseek-v4-pro";
+  let requests=0;
+  global.fetch=async(url,options)=>{
+    requests++;
+    assert.equal(url,"https://api.deepseek.com/chat/completions");
+    assert.equal(options.headers.Authorization,"Bearer fake-deepseek-key");
+    const payload=JSON.parse(options.body);
+    assert.equal(payload.model,"deepseek-v4-pro");
+    assert.deepEqual(payload.thinking,{type:"disabled"});
+    assert.deepEqual(payload.response_format,{type:"json_object"});
+    assert.equal(payload.tools,undefined);
+    return {ok:true,json:async()=>({choices:[{message:{role:"assistant",
+      content:JSON.stringify({summary:"CPU 使用率异常",analysis:"Evidence E1 指示 CPU 高负载，仍需确认热点线程。",
+        recommendations:["只读检查 CPU 使用率和调度延迟"]})}}]})};
+  };
+  try{
+    const report=await createAgent.analyzeIncident(rpcMock({}),incident(6));
+    assert.equal(report.ai_status,"ready");
+    assert.equal(report.summary,"CPU 使用率异常");
+    assert.equal(report.evidence[0].id,"E1");
+    assert.equal(report.root_causes[0].confidence,.8);
+    assert.equal(requests,1);
+  }finally{
+    global.fetch=oldFetch;
+    if(oldKey===undefined)delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY=oldKey;
+    if(oldModel===undefined)delete process.env.DEEPSEEK_MODEL;
+    else process.env.DEEPSEEK_MODEL=oldModel;
+  }
+});
+test("DeepSeek model selection rejects providers outside the supported models",async()=>{
+  const oldKey=process.env.DEEPSEEK_API_KEY,oldModel=process.env.DEEPSEEK_MODEL;
+  process.env.DEEPSEEK_API_KEY="fake-key";
+  process.env.DEEPSEEK_MODEL="gpt-4.1-mini";
+  const res={statusCode:200,status(n){this.statusCode=n;return this;},json(v){this.body=v;return this;}};
+  try {
+    await createAgent(async()=>({}))({body:{server_name:"host-A",question:"查询性能"}},res);
+    assert.equal(res.statusCode,502);
+    assert.match(res.body.error,/DEEPSEEK_MODEL/);
+  }finally {
+    if(oldKey===undefined)delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY=oldKey;
+    if(oldModel===undefined)delete process.env.DEEPSEEK_MODEL;
+    else process.env.DEEPSEEK_MODEL=oldModel;
   }
 });
